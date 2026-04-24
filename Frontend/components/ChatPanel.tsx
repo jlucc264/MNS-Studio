@@ -12,6 +12,7 @@ type Message = {
 type CommandResult = {
   reply: string
   candidates?: CandidateImage[]
+  note?: string
 }
 
 type Props = {
@@ -40,11 +41,12 @@ export default function ChatPanel({
       id: 'welcome',
       role: 'assistant',
       text:
-        'Ask me to search the web, import an image URL, upload a file, change preview settings, or edit the current preview.',
+        'Ask me to search the web, import an image, change settings, edit the preview, or type `help` for guided commands.',
     },
   ])
   const [input, setInput] = useState('')
   const [candidateImages, setCandidateImages] = useState<CandidateImage[]>([])
+  const [candidateNote, setCandidateNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [dragActive, setDragActive] = useState(false)
 
@@ -70,12 +72,15 @@ export default function ChatPanel({
         { id: crypto.randomUUID(), role: 'assistant', text: result.reply },
       ])
       setCandidateImages(result.candidates ?? [])
+      setCandidateNote(result.note ?? null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Command failed'
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: message },
       ])
+      setCandidateImages([])
+      setCandidateNote(null)
     } finally {
       setBusy(false)
     }
@@ -95,12 +100,14 @@ export default function ChatPanel({
         { id: crypto.randomUUID(), role: 'assistant', text: reply },
       ])
       setCandidateImages([])
+      setCandidateNote(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Upload failed'
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: message },
       ])
+      setCandidateNote(null)
     } finally {
       setBusy(false)
     }
@@ -134,12 +141,14 @@ export default function ChatPanel({
         { id: crypto.randomUUID(), role: 'assistant', text: reply },
       ])
       setCandidateImages([])
+      setCandidateNote(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to use that image'
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: message },
       ])
+      setCandidateNote(null)
     } finally {
       setBusy(false)
     }
@@ -208,7 +217,23 @@ export default function ChatPanel({
 
         {candidateImages.length > 0 && (
           <div style={{ display: 'grid', gap: 8, paddingTop: 4 }}>
-            <strong style={{ fontSize: 13 }}>Web image options</strong>
+            <div style={{ display: 'grid', gap: 4 }}>
+              <strong style={{ fontSize: 13 }}>Web image options</strong>
+              {candidateNote && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#556',
+                    background: '#f4f7fb',
+                    border: '1px solid #dde6f2',
+                    borderRadius: 8,
+                    padding: '6px 8px',
+                  }}
+                >
+                  {candidateNote}
+                </div>
+              )}
+            </div>
             <div style={{ display: 'grid', gap: 8, maxHeight: 220, overflow: 'auto' }}>
               {candidateImages.map((image) => (
                 <button
@@ -233,7 +258,48 @@ export default function ChatPanel({
                     alt={image.title ?? 'candidate image'}
                     style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6 }}
                   />
-                  <div style={{ fontSize: 13 }}>{image.title ?? image.url}</div>
+                  <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {image.title ?? 'Untitled image'}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      {image.provider && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: '#355',
+                            background: '#eef4f7',
+                            border: '1px solid #d9e4ea',
+                            borderRadius: 999,
+                            padding: '2px 6px',
+                            lineHeight: 1.2,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {image.provider}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: '#666',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {image.url}
+                      </span>
+                    </div>
+                  </div>
                 </button>
               ))}
             </div>

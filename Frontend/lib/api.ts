@@ -29,6 +29,16 @@ export type CandidateImage = {
   id: string
   url: string
   title?: string | null
+  provider?: string | null
+}
+
+export type ChatResponse = {
+  action: string
+  message: string
+  active_image_url?: string | null
+  stitch_preview_url?: string | null
+  candidate_images?: CandidateImage[]
+  metadata?: Record<string, unknown>
 }
 
 export type VisualizeResponse = {
@@ -117,6 +127,25 @@ export async function searchWebImages(query: string): Promise<CandidateImage[]> 
 
   const data: { candidates: CandidateImage[] } = await res.json()
   return data.candidates
+}
+
+export async function chatAssistant(message: string): Promise<ChatResponse> {
+  const res = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+
+  if (!res.ok) {
+    let errorMessage = 'Assistant request failed'
+    try {
+      const data = await res.json()
+      errorMessage = data.detail ?? errorMessage
+    } catch {}
+    throw new Error(errorMessage)
+  }
+
+  return res.json()
 }
 
 export function assetUrl(path: string | null) {

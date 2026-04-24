@@ -6,6 +6,7 @@ class CandidateImage(BaseModel):
     id: str
     url: str
     title: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class ChatRequest(BaseModel):

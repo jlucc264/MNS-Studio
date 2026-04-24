@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import ChatPanel from '../components/ChatPanel'
 import GridEditor, { type DesignSelectionRect } from '../components/GridEditor'
 import ImagePanel from '../components/ImagePanel'
@@ -9,12 +9,12 @@ import PreviewControls, { PreviewSettings } from '../components/PreviewControls'
 import {
   assetUrl,
   CandidateImage,
+  chatAssistant,
   createPreview,
   fetchDmcColors,
   finalizePreview,
   importImageFromUrl,
   PaletteColor,
-  searchWebImages,
   uploadImage,
 } from '../lib/api'
 
@@ -24,6 +24,13 @@ type ColorEditSnapshot = {
   previewPalette: PaletteColor[]
   activePaintColor: string | null
   removalMode: 'fill' | 'blank'
+  manualCellOverrides: Record<string, string>
+}
+
+type CommandResult = {
+  reply: string
+  candidates?: CandidateImage[]
+  note?: string
 }
 
 function hexToRgb(hex: string) {
@@ -56,6 +63,65 @@ function countCellsByHex(source: string[][]) {
     })
   })
   return counts
+}
+
+function makeCellKey(row: number, col: number) {
+  return `${row}:${col}`
+}
+
+type EyeDropperResult = {
+  sRGBHex: string
+}
+
+type EyeDropperConstructor = new () => {
+  open: () => Promise<EyeDropperResult>
+}
+
+function applyManualOverrides(sourceCells: string[][], manualCellOverrides: Record<string, string>) {
+  const entries = Object.entries(manualCellOverrides)
+  if (!entries.length) return sourceCells
+
+  const nextCells = cloneCells(sourceCells)
+  entries.forEach(([key, hex]) => {
+    const [rowText, colText] = key.split(':')
+    const row = Number(rowText)
+    const col = Number(colText)
+    if (!Number.isInteger(row) || !Number.isInteger(col)) return
+    if (row < 0 || row >= nextCells.length || col < 0 || col >= nextCells[row].length) return
+    nextCells[row][col] = hex
+  })
+
+  return nextCells
+}
+
+function applyPaletteStateToCells(
+  sourceCells: string[][],
+  sourcePalette: PaletteColor[],
+  nextEnabledColorHexes: string[],
+  nextRemovalMode: 'fill' | 'blank'
+) {
+  const enabledSet = new Set(nextEnabledColorHexes)
+  const enabledPalette = sourcePalette.filter((color) => enabledSet.has(color.hex))
+  const enabledHexes = enabledPalette.map((color) => color.hex)
+  const nextCells = cloneCells(sourceCells).map((row) =>
+    row.map((cell) => {
+      if (enabledSet.has(cell)) return cell
+      if (nextRemovalMode === 'blank') return '#FFFFFF'
+      if (!enabledHexes.length) return '#FFFFFF'
+
+      return enabledHexes.reduce((closest, candidate) =>
+        colorDistance(cell, candidate) < colorDistance(cell, closest) ? candidate : closest
+      )
+    })
+  )
+
+  const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== '#FFFFFF'))
+  const nextPreviewPalette = sourcePalette.filter((color) => usedHexes.has(color.hex))
+
+  return {
+    nextCells,
+    nextPreviewPalette,
+  }
 }
 
 function collapsePaletteShades(
@@ -175,8 +241,9 @@ function extractSearchQuery(text: string) {
   const normalized = normalizeCommandText(text)
 
   const directPatterns = [
-    /^(?:find|search|look up|scope|show me|get|grab)\s+(.+)$/,
-    /^(?:i want|help me find)\s+(.+)$/,
+    /^(?:find|search|look up|scope|show me|get|grab|look for|browse)\s+(.+)$/,
+    /^(?:i want|help me find|help me look for)\s+(.+)$/,
+    /^(?:search (?:the )?web for|find me|find me a|find me an|show me a|show me an)\s+(.+)$/,
   ]
 
   for (const pattern of directPatterns) {
@@ -212,6 +279,28 @@ function extractSearchQuery(text: string) {
   }
 
   return null
+}
+
+function buildSearchResultNote(candidates: CandidateImage[]) {
+  if (!candidates.length) return undefined
+
+  const providers = Array.from(
+    new Set(candidates.map((candidate) => candidate.provider).filter((provider): provider is string => Boolean(provider)))
+  )
+
+  if (providers.length === 1 && providers[0] === 'Openverse') {
+    return 'Openverse is usually best for broader reference photos and creative-source images.'
+  }
+
+  if (providers.length === 1 && providers[0] === 'Wikimedia Commons') {
+    return 'Wikimedia Commons is often strongest for public-domain artwork, graphics, and archival-style sources.'
+  }
+
+  if (providers.length > 1) {
+    return 'These results are blended from multiple sources, so it can be worth scanning a few cards before importing.'
+  }
+
+  return undefined
 }
 
 const DEFAULT_SETTINGS: PreviewSettings = {
@@ -250,6 +339,7 @@ export default function HomePage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [previewImagePath, setPreviewImagePath] = useState<string | null>(null)
   const [originalPreviewImagePath, setOriginalPreviewImagePath] = useState<string | null>(null)
+  const [lastVisibleImageUrl, setLastVisibleImageUrl] = useState<string | null>(null)
   const [allPalette, setAllPalette] = useState<PaletteColor[]>([])
   const [allDmcColors, setAllDmcColors] = useState<PaletteColor[]>([])
   const [previewPalette, setPreviewPalette] = useState<PaletteColor[]>([])
@@ -264,6 +354,7 @@ export default function HomePage() {
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [highlightSelection, setHighlightSelection] = useState(false)
   const [selectedRegion, setSelectedRegion] = useState<DesignSelectionRect | null>(null)
+  const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
@@ -272,6 +363,7 @@ export default function HomePage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
+  const latestApplyRequestIdRef = useRef(0)
 
   const displayedImage = useMemo(() => {
     if (viewMode === 'stitch' && previewImagePath) {
@@ -279,6 +371,12 @@ export default function HomePage() {
     }
     return assetUrl(activeImagePath)
   }, [viewMode, previewImagePath, activeImagePath])
+
+  useEffect(() => {
+    if (displayedImage) {
+      setLastVisibleImageUrl(displayedImage)
+    }
+  }, [displayedImage])
 
   const shouldShowStitchGrid = viewMode === 'stitch' && cells.length > 0
 
@@ -368,20 +466,29 @@ export default function HomePage() {
       .slice(0, 6)
   }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegion])
   const selectionOtherColors = useMemo(() => {
+    const preferredHexOrder = ['#FFFFFF', '#000000']
     const suggestionHexes = new Set(selectionMergeSuggestions.map((color) => color.hex))
-    return allDmcColors
+    const availableColors = allDmcColors
       .filter((color, index, source) => {
         if (color.hex === activePaintColor || suggestionHexes.has(color.hex)) return false
         return source.findIndex((candidate) => candidate.hex === color.hex) === index
       })
+    const preferredColors = preferredHexOrder
+      .map((hex) => availableColors.find((color) => color.hex === hex))
+      .filter((color): color is PaletteColor => Boolean(color))
+    const preferredSet = new Set(preferredColors.map((color) => color.hex))
+
+    return [...preferredColors, ...availableColors.filter((color) => !preferredSet.has(color.hex))]
   }, [activePaintColor, allDmcColors, selectionMergeSuggestions])
 
   const applyImportedImage = useCallback((url: string) => {
+    latestApplyRequestIdRef.current += 1
     setUploadError(null)
     setActiveImagePath(url)
     setImportedAspectRatio(null)
     setPreviewImagePath(null)
     setOriginalPreviewImagePath(null)
+    setLastVisibleImageUrl(assetUrl(url))
     setAllPalette([])
     setPreviewPalette([])
     setOriginalCells([])
@@ -389,6 +496,7 @@ export default function HomePage() {
     setCells([])
     setActivePaintColor(null)
     setRemovalMode('fill')
+    setManualCellOverrides({})
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
@@ -436,6 +544,16 @@ export default function HomePage() {
     })
   }
 
+  function buildEffectiveSourceState(overrideState = manualCellOverrides) {
+    const sourceCells = applyManualOverrides(originalCells, overrideState)
+    const sourcePalette = buildPaletteForCells(sourceCells)
+
+    return {
+      sourceCells,
+      sourcePalette,
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -459,34 +577,6 @@ export default function HomePage() {
     }
   }, [])
 
-  const buildPreviewFromOriginal = useCallback(
-    (nextEnabledColorHexes: string[], nextRemovalMode: 'fill' | 'blank') => {
-      const enabledSet = new Set(nextEnabledColorHexes)
-      const enabledPalette = allPalette.filter((color) => enabledSet.has(color.hex))
-      const enabledHexes = enabledPalette.map((color) => color.hex)
-      const nextCells = cloneCells(originalCells).map((row) =>
-        row.map((cell) => {
-          if (enabledSet.has(cell)) return cell
-          if (nextRemovalMode === 'blank') return '#FFFFFF'
-          if (!enabledHexes.length) return '#FFFFFF'
-
-          return enabledHexes.reduce((closest, candidate) =>
-            colorDistance(cell, candidate) < colorDistance(cell, closest) ? candidate : closest
-          )
-        })
-      )
-
-      const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== '#FFFFFF'))
-      const nextPreviewPalette = allPalette.filter((color) => usedHexes.has(color.hex))
-
-      return {
-        nextCells,
-        nextPreviewPalette,
-      }
-    },
-    [allPalette, originalCells]
-  )
-
   function pushUndoSnapshot() {
     setUndoStack((current) => [
       ...current,
@@ -496,6 +586,7 @@ export default function HomePage() {
         previewPalette: [...previewPalette],
         activePaintColor,
         removalMode,
+        manualCellOverrides: { ...manualCellOverrides },
       },
     ])
     setRedoStack([])
@@ -503,9 +594,35 @@ export default function HomePage() {
 
   async function handleApply(settings: PreviewSettings) {
     if (!activeImagePath) return
+    const requestId = latestApplyRequestIdRef.current + 1
+    latestApplyRequestIdRef.current = requestId
+
+    const previousEnabledColorHexes = [...enabledColorHexes]
+    const previousRemovalMode = removalMode
+    const previousActivePaintColor = activePaintColor
+    const previousViewMode = viewMode
+    const previousManualCellOverrides = manualCellOverrides
+    const previousEffectiveSourcePaletteHexes = buildEffectiveSourceState(previousManualCellOverrides).sourcePalette.map(
+      (color) => color.hex
+    )
+    const previousHadFilteredPalette =
+      previousRemovalMode !== 'fill' ||
+      previousEnabledColorHexes.length !== previousEffectiveSourcePaletteHexes.length ||
+      previousEffectiveSourcePaletteHexes.some((hex) => !previousEnabledColorHexes.includes(hex))
+    const shouldPreservePaletteState =
+      hasGeneratedPreview &&
+      lastSettings !== null &&
+      settings.color_count === lastSettings.color_count &&
+      previousHadFilteredPalette
 
     const stitchWidth = Math.max(1, Math.round(settings.width_inches * settings.mesh_count))
     const stitchHeight = Math.max(1, Math.round(settings.height_inches * settings.mesh_count))
+    const sameGeometryAsLastSettings = Boolean(
+      lastSettings &&
+        settings.width_inches === lastSettings.width_inches &&
+        settings.height_inches === lastSettings.height_inches &&
+        settings.mesh_count === lastSettings.mesh_count
+    )
 
     setLoading(true)
     try {
@@ -520,25 +637,82 @@ export default function HomePage() {
         source_type: settings.source_type,
       })
       const collapsed = collapsePaletteShades(result.cells, result.palette)
+      const nextAllPalette = collapsed.palette
+      const nextOriginalCells = collapsed.cells
+      const nextFullPaletteHexes = nextAllPalette.map((color) => color.hex)
+      const nextEnabledColorHexes = shouldPreservePaletteState
+        ? nextFullPaletteHexes.filter((hex) => previousEnabledColorHexes.includes(hex))
+        : nextFullPaletteHexes
+      const shouldReapplyPaletteState =
+        shouldPreservePaletteState &&
+        nextEnabledColorHexes.length > 0 &&
+        (previousRemovalMode !== 'fill' ||
+          nextEnabledColorHexes.length !== nextFullPaletteHexes.length)
+      const rebuiltFromPaletteState = shouldReapplyPaletteState
+        ? applyPaletteStateToCells(
+            nextOriginalCells,
+            nextAllPalette,
+            nextEnabledColorHexes,
+            previousRemovalMode
+          )
+        : null
+      const nextCells = rebuiltFromPaletteState ? rebuiltFromPaletteState.nextCells : nextOriginalCells
+      const nextPreviewPalette = rebuiltFromPaletteState
+        ? rebuiltFromPaletteState.nextPreviewPalette
+        : nextAllPalette
+      const shouldReapplyManualOverrides =
+        sameGeometryAsLastSettings && Object.keys(previousManualCellOverrides).length > 0
+      const finalCells = shouldReapplyManualOverrides
+        ? applyManualOverrides(nextCells, previousManualCellOverrides)
+        : nextCells
+      const finalPreviewPalette = shouldReapplyManualOverrides
+        ? buildPaletteForCells(finalCells)
+        : nextPreviewPalette
+      const nextActivePaintColor =
+        previousActivePaintColor && previousActivePaintColor !== '#FFFFFF'
+          ? (finalPreviewPalette.find((color) => color.hex === previousActivePaintColor)?.hex ??
+            nextAllPalette.find((color) => color.hex === previousActivePaintColor)?.hex ??
+            finalPreviewPalette[0]?.hex ??
+            '#FFFFFF')
+          : previousActivePaintColor ?? finalPreviewPalette[0]?.hex ?? '#FFFFFF'
+
+      if (requestId !== latestApplyRequestIdRef.current) {
+        return
+      }
 
       setPreviewImagePath(result.stitch_preview_url)
       setOriginalPreviewImagePath(result.stitch_preview_url)
-      setAllPalette(collapsed.palette)
-      setPreviewPalette(collapsed.palette)
-      setEnabledColorHexes(collapsed.palette.map((color) => color.hex))
-      setOriginalCells(collapsed.cells)
-      setCells(collapsed.cells)
-      setActivePaintColor(collapsed.palette[0]?.hex ?? '#FFFFFF')
-      setRemovalMode('fill')
+      setAllPalette(nextAllPalette)
+      setPreviewPalette(finalPreviewPalette)
+      setEnabledColorHexes(
+        shouldReapplyManualOverrides
+          ? Array.from(
+              new Set([
+                ...(shouldReapplyPaletteState ? nextEnabledColorHexes : nextFullPaletteHexes),
+                ...finalPreviewPalette.map((color) => color.hex),
+              ])
+            )
+          : shouldReapplyPaletteState
+            ? nextEnabledColorHexes
+            : nextFullPaletteHexes
+      )
+      setOriginalCells(nextOriginalCells)
+      setCells(finalCells)
+      setActivePaintColor(nextActivePaintColor)
+      setRemovalMode(shouldReapplyPaletteState ? previousRemovalMode : 'fill')
+      setManualCellOverrides(shouldReapplyManualOverrides ? previousManualCellOverrides : {})
       setUndoStack([])
       setRedoStack([])
       setLastSettings(settings)
       setDraftSettings(settings)
       setFinalPdfPath(null)
       setHasGeneratedPreview(true)
-      setViewMode('stitch')
+      setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
+      setSelectedRegion(null)
     } finally {
-      setLoading(false)
+      if (requestId === latestApplyRequestIdRef.current) {
+        setLoading(false)
+      }
     }
   }
 
@@ -577,28 +751,31 @@ export default function HomePage() {
   }
 
   function applyEnabledPalette(nextEnabledColorHexes: string[], nextRemovalMode = removalMode) {
-    const fullPaletteHexes = allPalette.map((color) => color.hex)
+    const { sourceCells, sourcePalette } = buildEffectiveSourceState()
+    const fullPaletteHexes = sourcePalette.map((color) => color.hex)
     const hasFullPaletteEnabled =
       nextEnabledColorHexes.length === fullPaletteHexes.length &&
       fullPaletteHexes.every((hex) => nextEnabledColorHexes.includes(hex))
 
     if (hasFullPaletteEnabled) {
       setPreviewImagePath(originalPreviewImagePath)
-      setPreviewPalette(allPalette)
+      setPreviewPalette(sourcePalette)
       setEnabledColorHexes(fullPaletteHexes)
-      setCells(originalCells)
+      setCells(sourceCells)
       setRemovalMode(nextRemovalMode)
       setActivePaintColor((current) => {
-        if (!current) return allPalette[0]?.hex ?? '#FFFFFF'
+        if (!current) return sourcePalette[0]?.hex ?? '#FFFFFF'
         if (current === '#FFFFFF') return current
-        return fullPaletteHexes.includes(current) ? current : allPalette[0]?.hex ?? '#FFFFFF'
+        return fullPaletteHexes.includes(current) ? current : sourcePalette[0]?.hex ?? '#FFFFFF'
       })
       setViewMode('stitch')
       setFinalPdfPath(null)
       return
     }
 
-    const { nextCells, nextPreviewPalette } = buildPreviewFromOriginal(
+    const { nextCells, nextPreviewPalette } = applyPaletteStateToCells(
+      sourceCells,
+      sourcePalette,
       nextEnabledColorHexes,
       nextRemovalMode
     )
@@ -680,6 +857,14 @@ export default function HomePage() {
 
     if (nextCells) {
       refreshPreviewPalette(nextCells)
+      setManualCellOverrides((current) => {
+        const nextOverrides = { ...current }
+        coords.forEach(([row, col]) => {
+          if (row < 0 || row >= nextCells!.length || col < 0 || col >= nextCells![row].length) return
+          nextOverrides[makeCellKey(row, col)] = activePaintColor
+        })
+        return nextOverrides
+      })
     }
 
     setFinalPdfPath(null)
@@ -708,6 +893,16 @@ export default function HomePage() {
     pushUndoSnapshot()
     setCells(nextCells)
     refreshPreviewPalette(nextCells)
+    setManualCellOverrides((current) => {
+      const nextOverrides = { ...current }
+      for (let row = top; row <= bottom; row += 1) {
+        for (let col = left; col <= right; col += 1) {
+          if (cells[row]?.[col] !== activePaintColor) continue
+          nextOverrides[makeCellKey(row, col)] = targetHex
+        }
+      }
+      return nextOverrides
+    })
     setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
     setActivePaintColor(targetHex)
     setSelectedRegion(selectedRegion)
@@ -732,6 +927,7 @@ export default function HomePage() {
           previewPalette: [...previewPalette],
           activePaintColor,
           removalMode,
+          manualCellOverrides: { ...manualCellOverrides },
         },
       ])
       setCells(previous.cells)
@@ -739,6 +935,7 @@ export default function HomePage() {
       setPreviewPalette(previous.previewPalette)
       setActivePaintColor(previous.activePaintColor)
       setRemovalMode(previous.removalMode)
+      setManualCellOverrides(previous.manualCellOverrides)
       setFinalPdfPath(null)
 
       return current.slice(0, -1)
@@ -758,6 +955,7 @@ export default function HomePage() {
           previewPalette: [...previewPalette],
           activePaintColor,
           removalMode,
+          manualCellOverrides: { ...manualCellOverrides },
         },
       ])
       setCells(next.cells)
@@ -765,11 +963,45 @@ export default function HomePage() {
       setPreviewPalette(next.previewPalette)
       setActivePaintColor(next.activePaintColor)
       setRemovalMode(next.removalMode)
+      setManualCellOverrides(next.manualCellOverrides)
       setFinalPdfPath(null)
 
       return current.slice(0, -1)
     })
   }
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTypingTarget = Boolean(
+        target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.tagName === 'SELECT' ||
+            target.isContentEditable)
+      )
+
+      if (isTypingTarget) return
+      if (!event.ctrlKey && !event.metaKey) return
+      if (event.key.toLowerCase() !== 'z') return
+
+      event.preventDefault()
+
+      if (event.shiftKey) {
+        if (redoStack.length) {
+          handleRedoColorChange()
+        }
+        return
+      }
+
+      if (undoStack.length) {
+        handleUndoColorChange()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [redoStack.length, undoStack.length])
 
   function handleRemovalModeChange(nextRemovalMode: 'fill' | 'blank') {
     if (nextRemovalMode === removalMode) return
@@ -791,6 +1023,7 @@ export default function HomePage() {
     setCells(cloneCells(originalCells))
     setActivePaintColor(allPalette[0]?.hex ?? '#FFFFFF')
     setRemovalMode('fill')
+    setManualCellOverrides({})
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
@@ -816,6 +1049,16 @@ export default function HomePage() {
     pushUndoSnapshot()
     setCells(nextCells)
     refreshPreviewPalette(nextCells)
+    setManualCellOverrides((current) => {
+      const nextOverrides = { ...current }
+      nextCells.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (!normalizedSources.includes(cells[rowIndex][colIndex])) return
+          nextOverrides[makeCellKey(rowIndex, colIndex)] = targetHex
+        })
+      })
+      return nextOverrides
+    })
 
     setEnabledColorHexes((current) =>
       Array.from(new Set(current.filter((hex) => !normalizedSources.includes(hex)).concat(targetHex)))
@@ -853,6 +1096,41 @@ export default function HomePage() {
     return `Top palette colors: ${lines.join(', ')}.`
   }
 
+  async function handleEyedropperSelection() {
+    if (!selectedRegion) return
+
+    const EyeDropperApi = (window as typeof window & { EyeDropper?: EyeDropperConstructor }).EyeDropper
+    if (!EyeDropperApi) {
+      setUploadError('Eyedropper is not supported in this browser.')
+      return
+    }
+
+    try {
+      const eyeDropper = new EyeDropperApi()
+      const result = await eyeDropper.open()
+      const nearestColor = allDmcColors.reduce<PaletteColor | null>((closest, candidate) => {
+        if (!closest) return candidate
+        return colorDistance(result.sRGBHex, candidate.hex) < colorDistance(result.sRGBHex, closest.hex)
+          ? candidate
+          : closest
+      }, null)
+
+      if (!nearestColor) {
+        setUploadError('Could not match the sampled color to a DMC color.')
+        return
+      }
+
+      handleApplyColorToSelection(nearestColor.hex)
+      setActivePaintColor(nearestColor.hex)
+      setUploadError(null)
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
+      }
+      setUploadError('Could not sample a color from the screen.')
+    }
+  }
+
   function recolorOutsideBorder(targetHex: string) {
     if (!cells.length) return 0
 
@@ -872,6 +1150,13 @@ export default function HomePage() {
     pushUndoSnapshot()
     setCells(nextCells)
     refreshPreviewPalette(nextCells)
+    setManualCellOverrides((current) => {
+      const nextOverrides = { ...current }
+      borderCoords.forEach(([row, col]) => {
+        nextOverrides[makeCellKey(row, col)] = targetHex
+      })
+      return nextOverrides
+    })
     setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
     setActivePaintColor((current) => current ?? targetHex)
     setFinalPdfPath(null)
@@ -880,9 +1165,51 @@ export default function HomePage() {
     return changed
   }
 
-  async function handleChatMessage(message: string) {
+  async function handleChatMessage(message: string): Promise<CommandResult> {
     const trimmed = message.trim()
     const lowered = normalizeCommandText(trimmed)
+
+    if (
+      lowered === 'help' ||
+      lowered === 'commands' ||
+      lowered === 'what can you do' ||
+      lowered === 'what can i do here'
+    ) {
+      const response = await chatAssistant(trimmed)
+      return {
+        reply: response.message,
+        candidates: response.candidate_images ?? [],
+        note: buildSearchResultNote(response.candidate_images ?? []),
+      }
+    }
+
+    const helpMatch = lowered.match(/^(?:help|guide|how do i use)\s+(.+)$/)
+    if (helpMatch) {
+      const response = await chatAssistant(trimmed)
+      return {
+        reply: response.message,
+        candidates: response.candidate_images ?? [],
+        note: buildSearchResultNote(response.candidate_images ?? []),
+      }
+    }
+
+    if (
+      lowered === 'use stitched photo' ||
+      lowered === 'switch to stitched photo' ||
+      lowered === 'set source to stitched photo'
+    ) {
+      setDraftSettings((current) => applySourceTypeDefaults(current, 'stitched_photo'))
+      return { reply: 'Switched the source mode to stitched photo.' }
+    }
+
+    if (
+      lowered === 'use photo' ||
+      lowered === 'switch to photo' ||
+      lowered === 'set source to photo'
+    ) {
+      setDraftSettings((current) => applySourceTypeDefaults(current, 'photo'))
+      return { reply: 'Switched the source mode to photo.' }
+    }
 
     const urlMatch = trimmed.match(/https?:\/\/\S+/i)
     if (urlMatch && (lowered.startsWith('import ') || lowered.includes('use url') || lowered.includes('image url'))) {
@@ -903,19 +1230,12 @@ export default function HomePage() {
 
     const searchQuery = extractSearchQuery(trimmed)
     if (searchQuery) {
-      if (!searchQuery) {
-        return { reply: 'Tell me what kind of image you want me to search for.' }
-      }
-
       try {
-        const candidates = await searchWebImages(searchQuery)
-        if (!candidates.length) {
-          return { reply: `I couldn’t find any web images for "${searchQuery}". Try a simpler subject or import a URL directly.` }
-        }
-
+        const response = await chatAssistant(trimmed)
         return {
-          reply: `I found ${candidates.length} web image options for "${searchQuery}". Pick one below to import it.`,
-          candidates,
+          reply: response.message,
+          candidates: response.candidate_images ?? [],
+          note: buildSearchResultNote(response.candidate_images ?? []),
         }
       } catch (error) {
         const detail =
@@ -928,9 +1248,11 @@ export default function HomePage() {
     }
 
     if (lowered.includes('generate from scratch') || lowered.includes('create an image')) {
+      const response = await chatAssistant(trimmed)
       return {
-        reply:
-          'Generating a brand-new photo from scratch is still intentionally avoided here. I can search the web or import a file/URL instead.',
+        reply: response.message,
+        candidates: response.candidate_images ?? [],
+        note: buildSearchResultNote(response.candidate_images ?? []),
       }
     }
 
@@ -1026,6 +1348,41 @@ export default function HomePage() {
       lowered.includes('show palette counts')
     ) {
       return { reply: analyzePaletteSummary() }
+    }
+
+    if (
+      lowered === 'turn all colors on' ||
+      lowered === 'enable all colors' ||
+      lowered === 'show all colors'
+    ) {
+      handleEnableAllColors()
+      return { reply: 'Turned all current palette colors back on.' }
+    }
+
+    if (
+      lowered === 'reset colors' ||
+      lowered === 'reset preview edits' ||
+      lowered === 'reset preview'
+    ) {
+      handleResetColorChanges()
+      return { reply: 'Reset the current preview edits back to the generated base preview.' }
+    }
+
+    if (
+      lowered === 'what are my settings' ||
+      lowered === 'show settings' ||
+      lowered === 'current settings'
+    ) {
+      return {
+        reply: [
+          `Source: ${draftSettings.source_type === 'stitched_photo' ? 'Stitched photo' : 'Photo'}`,
+          `Size: ${draftSettings.width_inches}" x ${draftSettings.height_inches}"`,
+          `Mesh: ${draftSettings.mesh_count}`,
+          `Colors: ${draftSettings.color_count}`,
+          `Contrast: ${draftSettings.contrast_level.replaceAll('_', ' ')}`,
+          `Grid: ${draftSettings.show_grid ? 'on' : 'off'}`,
+        ].join('\n'),
+      }
     }
 
     const borderMatch = trimmed.match(
@@ -1172,9 +1529,18 @@ export default function HomePage() {
       }
     }
 
-    return {
-      reply:
-        'Try commands like "find a photo of a cardinal", "import https://...", "set width to 7", "use 18 mesh", "turn grid off", "generate preview", "paint 310", "turn off 310", "merge 907 and 3052 into 907", "make the outside border fully light blue", "analyze palette", "undo", or "redo".',
+    try {
+      const response = await chatAssistant(trimmed)
+      return {
+        reply: response.message,
+        candidates: response.candidate_images ?? [],
+        note: buildSearchResultNote(response.candidate_images ?? []),
+      }
+    } catch {
+      return {
+        reply:
+          'Try commands like "find a photo of a cardinal", "import https://...", "set width to 7", "use 18 mesh", "turn grid off", "generate preview", "paint 310", "turn off 310", "merge 907 and 3052 into 907", "make the outside border fully light blue", "analyze palette", "undo", or "redo".',
+      }
     }
   }
 
@@ -1311,7 +1677,10 @@ export default function HomePage() {
               onPaintCells={handlePaintCells}
             />
           ) : (
-            <ImagePanel imageUrl={displayedImage} title={isPreviewExpanded ? '' : 'Original image'} />
+            <ImagePanel
+              imageUrl={displayedImage ?? lastVisibleImageUrl}
+              title={isPreviewExpanded ? '' : 'Original image'}
+            />
           )}
         </div>
 
@@ -1387,12 +1756,14 @@ export default function HomePage() {
           enabledColorHexes={displayEnabledColorHexes}
           colorCountsByHex={displayColorCounts}
           highlightSelection={highlightSelection}
+          hasSelectedRegion={Boolean(selectedRegion)}
           selectedRegionCount={selectedRegionCount}
           removalMode={removalMode}
           selectionMergeSuggestions={selectionMergeSuggestions}
           selectionOtherColors={selectionOtherColors}
           onApplyColorToSelection={handleApplyColorToSelection}
           onClearSelection={handleClearSelection}
+          onEyedropperSelection={() => void handleEyedropperSelection()}
           onSelect={(color) => setActivePaintColor(color.hex)}
           onHighlightSelectionChange={setHighlightSelection}
           onToggleColorEnabled={handleToggleColorEnabled}
