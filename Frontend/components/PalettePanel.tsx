@@ -14,12 +14,14 @@ type Props = {
   enabledColorHexes: string[]
   colorCountsByHex?: Record<string, number>
   highlightSelection: boolean
+  hasSelectedRegion: boolean
   selectedRegionCount: number
   removalMode: 'fill' | 'blank'
   selectionMergeSuggestions: PaletteColor[]
   selectionOtherColors: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
+  onEyedropperSelection: () => void
   onSelect: (color: PaletteColor) => void
   onHighlightSelectionChange: (value: boolean) => void
   onToggleColorEnabled: (hex: string, enabled: boolean) => void
@@ -54,12 +56,14 @@ export default function PalettePanel({
   enabledColorHexes,
   colorCountsByHex = {},
   highlightSelection,
+  hasSelectedRegion,
   selectedRegionCount,
   removalMode,
   selectionMergeSuggestions,
   selectionOtherColors,
   onApplyColorToSelection,
   onClearSelection,
+  onEyedropperSelection,
   onSelect,
   onHighlightSelectionChange,
   onToggleColorEnabled,
@@ -70,34 +74,24 @@ export default function PalettePanel({
   const [showOtherColors, setShowOtherColors] = useState(false)
   const [showSelectionOtherColors, setShowSelectionOtherColors] = useState(false)
 
-  const suggestedMoreColors = useMemo(() => {
-    if (!colors.length || !moreColors.length) return []
-
+  const allOtherColors = useMemo(() => {
     const byHex = new Map<string, PaletteColor>()
-
-    colors.forEach((baseColor) => {
-      const nearest = [...moreColors]
-        .sort((left, right) => colorDistance(baseColor.hex, left.hex) - colorDistance(baseColor.hex, right.hex))
-        .slice(0, 4)
-
-      nearest.forEach((color) => {
-        if (!byHex.has(color.hex)) {
-          byHex.set(color.hex, color)
-        }
-      })
+    ;[...SPECIAL_COLORS, ...moreColors].forEach((color) => {
+      if (!byHex.has(color.hex)) {
+        byHex.set(color.hex, color)
+      }
     })
-
-    return Array.from(byHex.values()).slice(0, 10)
-  }, [colors, moreColors])
+    return Array.from(byHex.values())
+  }, [moreColors])
 
   const fallbackSelectionSuggestions = useMemo(() => {
     if (!activeColor) return []
 
-    return [...colors, ...moreColors]
+    return [...colors]
       .filter((color) => color.hex !== activeColor)
       .sort((left, right) => colorDistance(activeColor, left.hex) - colorDistance(activeColor, right.hex))
       .slice(0, 6)
-  }, [activeColor, colors, moreColors])
+  }, [activeColor, colors])
 
   if (!colors.length && !moreColors.length) return null
 
@@ -149,19 +143,19 @@ export default function PalettePanel({
           />
           Highlight selected
         </label>
-        {moreColors.length > 0 && (
+        {allOtherColors.length > 0 && (
           <select
             value={showOtherColors ? 'other' : ''}
             onChange={handleMoreColorChange}
             style={{ minWidth: 140, maxWidth: '100%' }}
           >
             <option value="">Other colors</option>
-            <option value="other">Show DMC suggestions</option>
+            <option value="other">Show all DMC colors</option>
           </select>
         )}
       </div>
 
-      {showOtherColors && suggestedMoreColors.length > 0 && (
+      {showOtherColors && allOtherColors.length > 0 && (
         <div
           style={{
             display: 'grid',
@@ -173,8 +167,8 @@ export default function PalettePanel({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <strong style={{ fontSize: 14 }}>Suggested DMC shades</strong>
-            <span style={{ fontSize: 12, color: '#666' }}>Based on the uploaded photo</span>
+            <strong style={{ fontSize: 14 }}>Other DMC colors</strong>
+            <span style={{ fontSize: 12, color: '#666' }}>White and black pinned first</span>
           </div>
 
           <div
@@ -182,9 +176,12 @@ export default function PalettePanel({
               display: 'grid',
               gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
               gap: 6,
+              maxHeight: 180,
+              overflow: 'auto',
+              paddingRight: 2,
             }}
           >
-            {[...SPECIAL_COLORS, ...suggestedMoreColors].map((color) => {
+            {allOtherColors.map((color) => {
               const selected = activeColor === color.hex
 
               return (
@@ -257,7 +254,7 @@ export default function PalettePanel({
         {colors.map((color) => {
           const selected = activeColor === color.hex
           const enabled = enabledColorHexes.includes(color.hex)
-          const showSelectionTray = selected && selectedRegionCount > 0
+          const showSelectionTray = selected && hasSelectedRegion
           const visibleSelectionSuggestions =
             selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
 
@@ -360,21 +357,40 @@ export default function PalettePanel({
                   </div>
                   {selectionOtherColors.length > 0 && (
                     <div style={{ display: 'grid', gap: 4 }}>
-                      <button
-                        type="button"
-                        onClick={() => setShowSelectionOtherColors((current) => !current)}
-                        style={{
-                          justifySelf: 'start',
-                          border: '1px solid #d0d0d0',
-                          background: '#fff',
-                          borderRadius: 6,
-                          padding: '4px 8px',
-                          fontSize: 11,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {showSelectionOtherColors ? 'Hide' : 'Other colors'}
-                      </button>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowSelectionOtherColors((current) => !current)}
+                          style={{
+                            justifySelf: 'start',
+                            border: '1px solid #d0d0d0',
+                            background: '#fff',
+                            borderRadius: 6,
+                            padding: '4px 8px',
+                            fontSize: 11,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {showSelectionOtherColors ? 'Hide' : 'Other colors'}
+                        </button>
+                        {showSelectionOtherColors && (
+                          <button
+                            type="button"
+                            onClick={onEyedropperSelection}
+                            style={{
+                              justifySelf: 'start',
+                              border: '1px solid #d0d0d0',
+                              background: '#fff',
+                              borderRadius: 6,
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Eyedropper
+                          </button>
+                        )}
+                      </div>
                       {showSelectionOtherColors && (
                         <div
                           style={{
