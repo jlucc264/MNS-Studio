@@ -8,9 +8,13 @@ export type VisualizePayload = {
   stitch_height: number
   color_count: number
   show_grid: boolean
+  clean_background: boolean
+  simplify_colors: boolean
+  strengthen_dark_detail: boolean
+  preserve_accents: boolean
   mesh_count: number
   contrast_level: 'low' | 'normal' | 'high' | 'super_high' | 'super_super_high'
-  source_type: 'photo' | 'stitched_photo'
+  source_type: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
 export type PaletteColor = {
@@ -25,19 +29,11 @@ export type DmcColor = {
   rgb: [number, number, number]
 }
 
-export type CandidateImage = {
-  id: string
-  url: string
-  title?: string | null
-  provider?: string | null
-}
-
 export type ChatResponse = {
   action: string
   message: string
   active_image_url?: string | null
   stitch_preview_url?: string | null
-  candidate_images?: CandidateImage[]
   metadata?: Record<string, unknown>
 }
 
@@ -113,22 +109,6 @@ export async function fetchDmcColors(): Promise<PaletteColor[]> {
   }))
 }
 
-export async function searchWebImages(query: string): Promise<CandidateImage[]> {
-  const res = await fetch(`${API_BASE}/search-images?query=${encodeURIComponent(query)}`)
-
-  if (!res.ok) {
-    let message = 'Image search failed'
-    try {
-      const data = await res.json()
-      message = data.detail ?? message
-    } catch {}
-    throw new Error(message)
-  }
-
-  const data: { candidates: CandidateImage[] } = await res.json()
-  return data.candidates
-}
-
 export async function chatAssistant(message: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
@@ -163,6 +143,7 @@ export type FinalizePayload = {
   show_grid: boolean
   palette: PaletteColor[]
   cells: string[][]
+  previous_pdf_url?: string | null
 }
 
 export type FinalizeResponse = {

@@ -6,10 +6,11 @@ This roadmap is meant to keep the base product focused and strong before we laye
 
 ### Base
 - Upload an image or source artwork
+- Import an image by URL when needed
 - Generate a stitch preview
 - Adjust size, mesh, colors, and source mode
 - Clean up the preview with palette, paint, selection, and merge tools
-- Use a robust non-LLM chat assistant for search, editing commands, and guidance
+- Use a robust non-LLM chat assistant for editing commands, import guidance, and workflow help
 - Finalize and export a trustworthy PDF
 
 ### Pro
@@ -79,6 +80,7 @@ The base product should be complete enough that a user can finish a project with
 - Preserve text and distinct thread colors better
 - Reduce redundant neutral shading
 - Improve distinct-color selection for stitched sources
+- Tune against a fixed stitched-photo benchmark set instead of isolated one-off examples
 
 ### 2. Better Graphic/Text Art Handling
 - Add a dedicated mode or heuristic path for signs, logos, vector-like art, and black-on-white typography
@@ -105,7 +107,7 @@ The base product should be complete enough that a user can finish a project with
 
 ### 6. Better Non-LLM Assistant
 - Improve the non-LLM chat so it can reliably support the base product
-- Upgrade image/photo search quality and relevance
+- Make upload/import guidance clearer and more helpful
 - Make command handling more robust for editing and cleanup actions
 - Let the chat double as a lightweight guide/assistant for common tasks
 
@@ -197,7 +199,7 @@ This phase should happen only after the base workflow feels trustworthy.
 - Preprocessing controls
 - Save/load project state
 - Better polish and analytics
-- Stronger non-LLM chat/search assistant
+- Stronger non-LLM chat assistant
 - User guide
 - Better finalized report/output flow
 - UI refresh pass
@@ -215,7 +217,7 @@ This phase should happen only after the base workflow feels trustworthy.
 3. Make color-count behavior more intuitive
 4. Add preprocessing controls before preview generation
 5. Strengthen project continuity and trust in long edit sessions
-6. Build a stronger non-LLM chat/search assistant
+6. Build a stronger non-LLM chat assistant
 7. Build a user guide and clearer help surfaces
 8. Improve finalized output delivery and reporting
 9. Refresh the UI so the site feels more welcoming and polished

@@ -60,3 +60,19 @@ def finalized_output_path() -> tuple[Path, str]:
     filepath = FINALIZED_DIR / filename
     url = f"/assets/finalized/{filename}"
     return filepath, url
+
+
+def delete_finalized_output(asset_url: str | None) -> None:
+    if not asset_url:
+        return
+
+    cleaned = asset_url.lstrip("/")
+    filepath = ASSETS_DIR.parent / cleaned
+
+    try:
+        filepath.relative_to(FINALIZED_DIR)
+    except ValueError:
+        return
+
+    if filepath.exists():
+        filepath.unlink()

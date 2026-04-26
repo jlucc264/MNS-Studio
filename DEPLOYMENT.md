@@ -53,15 +53,6 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
 
 You can copy the template from [Backend/.env.example](/Users/johnlucciola/MNS/Backend/.env.example).
 
-Optional image-search upgrade:
-
-```bash
-GOOGLE_CUSTOM_SEARCH_API_KEY=your_google_api_key
-GOOGLE_CUSTOM_SEARCH_ENGINE_ID=your_programmable_search_engine_id
-```
-
-If those are set, the backend will use Google Custom Search image results first, then fall back to Openverse and Wikimedia Commons.
-
 ## Important note about files
 
 This app stores uploads, previews, and finalized PDFs on the backend filesystem under:

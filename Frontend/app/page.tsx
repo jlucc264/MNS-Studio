@@ -2,13 +2,13 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import ChatPanel from '../components/ChatPanel'
+import GuideDialog from '../components/GuideDialog'
 import GridEditor, { type DesignSelectionRect } from '../components/GridEditor'
 import ImagePanel from '../components/ImagePanel'
 import PalettePanel from '../components/PalettePanel'
 import PreviewControls, { PreviewSettings } from '../components/PreviewControls'
 import {
   assetUrl,
-  CandidateImage,
   chatAssistant,
   createPreview,
   fetchDmcColors,
@@ -29,8 +29,6 @@ type ColorEditSnapshot = {
 
 type CommandResult = {
   reply: string
-  candidates?: CandidateImage[]
-  note?: string
 }
 
 function hexToRgb(hex: string) {
@@ -48,7 +46,14 @@ function colorDistance(a: string, b: string) {
   return Math.sqrt((ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2)
 }
 
+function colorSaturation(hex: string) {
+  const [r, g, b] = hexToRgb(hex)
+  return Math.max(r, g, b) - Math.min(r, g, b)
+}
+
 const DISPLAY_GROUP_DISTANCE = 12
+const MIN_PALETTE_STATE_OVERLAP_RATIO = 0.6
+const MOBILE_BREAKPOINT = 980
 
 function cloneCells(source: string[][]) {
   return source.map((row) => [...row])
@@ -63,6 +68,61 @@ function countCellsByHex(source: string[][]) {
     })
   })
   return counts
+}
+
+function pickDistinctPaletteHexes(
+  palette: PaletteColor[],
+  colorCountsByHex: Record<string, number>,
+  targetCount: number,
+  preferredHex?: string | null
+) {
+  if (targetCount >= palette.length) {
+    return palette.map((color) => color.hex)
+  }
+
+  const maxCount = Math.max(
+    1,
+    ...palette.map((color) => colorCountsByHex[color.hex] ?? 0)
+  )
+  const selected: string[] = []
+
+  if (preferredHex && palette.some((color) => color.hex === preferredHex)) {
+    selected.push(preferredHex)
+  } else {
+    const topColor = [...palette].sort(
+      (left, right) => (colorCountsByHex[right.hex] ?? 0) - (colorCountsByHex[left.hex] ?? 0)
+    )[0]
+    if (topColor) {
+      selected.push(topColor.hex)
+    }
+  }
+
+  while (selected.length < targetCount) {
+    let bestHex: string | null = null
+    let bestScore = Number.NEGATIVE_INFINITY
+
+    palette.forEach((color) => {
+      if (selected.includes(color.hex)) return
+
+      const count = colorCountsByHex[color.hex] ?? 0
+      const normalizedCount = count / maxCount
+      const minDistance = selected.length
+        ? Math.min(...selected.map((selectedHex) => colorDistance(color.hex, selectedHex)))
+        : 0
+      const saturationBonus = colorSaturation(color.hex) / 255
+      const score = normalizedCount * 58 + minDistance * 0.42 + saturationBonus * 12
+
+      if (score > bestScore) {
+        bestScore = score
+        bestHex = color.hex
+      }
+    })
+
+    if (!bestHex) break
+    selected.push(bestHex)
+  }
+
+  return selected
 }
 
 function makeCellKey(row: number, col: number) {
@@ -92,6 +152,21 @@ function applyManualOverrides(sourceCells: string[][], manualCellOverrides: Reco
   })
 
   return nextCells
+}
+
+function getClampedSelectionBounds(
+  selection: DesignSelectionRect,
+  rowCount: number,
+  colCount: number
+) {
+  const top = Math.max(0, Math.min(selection.startRow, selection.endRow))
+  const bottom = Math.min(rowCount - 1, Math.max(selection.startRow, selection.endRow))
+  const left = Math.max(0, Math.min(selection.startCol, selection.endCol))
+  const right = Math.min(colCount - 1, Math.max(selection.startCol, selection.endCol))
+
+  if (top > bottom || left > right) return null
+
+  return { top, bottom, left, right }
 }
 
 function applyPaletteStateToCells(
@@ -237,98 +312,76 @@ function extractCommandNumber(text: string, patterns: RegExp[]) {
   return null
 }
 
-function extractSearchQuery(text: string) {
-  const normalized = normalizeCommandText(text)
+function getSettingsKey(settings: PreviewSettings | null) {
+  if (!settings) return null
 
-  const directPatterns = [
-    /^(?:find|search|look up|scope|show me|get|grab|look for|browse)\s+(.+)$/,
-    /^(?:i want|help me find|help me look for)\s+(.+)$/,
-    /^(?:search (?:the )?web for|find me|find me a|find me an|show me a|show me an)\s+(.+)$/,
-  ]
-
-  for (const pattern of directPatterns) {
-    const match = normalized.match(pattern)
-    if (!match) continue
-
-    const cleaned = match[1]
-      .replace(/^(?:for\s+)?/, '')
-      .replace(/^(?:an?|the)\s+/, '')
-      .replace(/^(?:photo|image|picture|pic)s?\s+(?:of|for)\s+/, '')
-      .replace(/^(?:photo|image|picture|pic)s?\s+/, '')
-      .replace(/\s+(?:from|on)\s+the web$/, '')
-      .trim()
-
-    if (cleaned) {
-      return cleaned
-    }
-  }
-
-  if (normalized.includes('from the web') || normalized.includes('on the web')) {
-    const cleaned = normalized
-      .replace(/^(?:please\s+)?/, '')
-      .replace(/\b(?:find|search|look up|scope|show me|get|grab)\b/g, '')
-      .replace(/\b(?:a|an|the)\b/g, ' ')
-      .replace(/\b(?:photo|image|picture|pic)s?\b/g, ' ')
-      .replace(/\b(?:from|on)\s+the web\b/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-
-    if (cleaned) {
-      return cleaned
-    }
-  }
-
-  return null
-}
-
-function buildSearchResultNote(candidates: CandidateImage[]) {
-  if (!candidates.length) return undefined
-
-  const providers = Array.from(
-    new Set(candidates.map((candidate) => candidate.provider).filter((provider): provider is string => Boolean(provider)))
-  )
-
-  if (providers.length === 1 && providers[0] === 'Openverse') {
-    return 'Openverse is usually best for broader reference photos and creative-source images.'
-  }
-
-  if (providers.length === 1 && providers[0] === 'Wikimedia Commons') {
-    return 'Wikimedia Commons is often strongest for public-domain artwork, graphics, and archival-style sources.'
-  }
-
-  if (providers.length > 1) {
-    return 'These results are blended from multiple sources, so it can be worth scanning a few cards before importing.'
-  }
-
-  return undefined
+  return JSON.stringify({
+    width_inches: settings.width_inches,
+    height_inches: settings.height_inches,
+    mesh_count: settings.mesh_count,
+    color_count: settings.color_count,
+    show_grid: settings.show_grid,
+    clean_background: settings.clean_background,
+    simplify_colors: settings.simplify_colors,
+    strengthen_dark_detail: settings.strengthen_dark_detail,
+    preserve_accents: settings.preserve_accents,
+    contrast_level: settings.contrast_level,
+    source_type: settings.source_type,
+  })
 }
 
 const DEFAULT_SETTINGS: PreviewSettings = {
   width_inches: 5,
   height_inches: 5,
   mesh_count: 13,
-  color_count: 16,
+  color_count: 128,
   show_grid: true,
+  clean_background: false,
+  simplify_colors: false,
+  strengthen_dark_detail: false,
+  preserve_accents: false,
   contrast_level: 'normal',
   source_type: 'photo',
 }
 
 function applySourceTypeDefaults(
   current: PreviewSettings,
-  sourceType: 'photo' | 'stitched_photo'
+  sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
 ): PreviewSettings {
   if (sourceType === 'stitched_photo') {
     return {
       ...current,
       source_type: sourceType,
-      color_count: Math.min(64, current.color_count),
+      color_count: 128,
+      clean_background: false,
+      simplify_colors: false,
+      strengthen_dark_detail: false,
+      preserve_accents: false,
       contrast_level: current.contrast_level === 'high' ? 'normal' : current.contrast_level,
+    }
+  }
+
+  if (sourceType === 'graphic_art') {
+    return {
+      ...current,
+      source_type: sourceType,
+      color_count: 128,
+      clean_background: false,
+      simplify_colors: false,
+      strengthen_dark_detail: false,
+      preserve_accents: false,
+      contrast_level: current.contrast_level === 'low' ? 'normal' : current.contrast_level,
     }
   }
 
   return {
     ...current,
     source_type: sourceType,
+    color_count: 128,
+    clean_background: false,
+    simplify_colors: false,
+    strengthen_dark_detail: false,
+    preserve_accents: false,
   }
 }
 
@@ -361,9 +414,26 @@ export default function HomePage() {
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
+  const [showGuideDialog, setShowGuideDialog] = useState(false)
+  const [viewportWidth, setViewportWidth] = useState(1280)
+  const [showMobileAssistant, setShowMobileAssistant] = useState(false)
+  const [showMobileSettings, setShowMobileSettings] = useState(false)
+  const [showMobilePalette, setShowMobilePalette] = useState(false)
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
+
+  useEffect(() => {
+    const updateViewportWidth = () => {
+      setViewportWidth(window.innerWidth || 1280)
+    }
+
+    updateViewportWidth()
+    window.addEventListener('resize', updateViewportWidth)
+    return () => window.removeEventListener('resize', updateViewportWidth)
+  }, [])
+
+  const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
   const displayedImage = useMemo(() => {
     if (viewMode === 'stitch' && previewImagePath) {
@@ -400,13 +470,24 @@ export default function HomePage() {
   const paletteCountsByHex = useMemo(() => countCellsByHex(deferredCells), [deferredCells])
   const displayColorCounts = paletteCountsByHex
   const displayEnabledColorHexes = enabledColorHexes
+  const requestedColorCount = displayEnabledColorHexes.length
+  const hasPendingPreviewSettings = useMemo(
+    () => hasGeneratedPreview && getSettingsKey(draftSettings) !== getSettingsKey(lastSettings),
+    [draftSettings, hasGeneratedPreview, lastSettings]
+  )
+  const currentDesignPalette = useMemo(() => buildPaletteForCells(cells), [allDmcColors, allPalette, cells, previewPalette])
+  const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
+  const currentDesignStitchCount = useMemo(
+    () => Object.values(currentDesignColorCounts).reduce((total, count) => total + count, 0),
+    [currentDesignColorCounts]
+  )
   const selectedRegionCount = useMemo(() => {
     if (!activePaintColor || !selectedRegion || !cells.length) return 0
 
-    const top = Math.min(selectedRegion.startRow, selectedRegion.endRow)
-    const bottom = Math.max(selectedRegion.startRow, selectedRegion.endRow)
-    const left = Math.min(selectedRegion.startCol, selectedRegion.endCol)
-    const right = Math.max(selectedRegion.startCol, selectedRegion.endCol)
+    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
+    if (!bounds) return 0
+
+    const { top, bottom, left, right } = bounds
 
     let count = 0
     for (let row = top; row <= bottom; row += 1) {
@@ -429,10 +510,10 @@ export default function HomePage() {
       [0, 1],
       [0, -1],
     ]
-    const top = Math.min(selectedRegion.startRow, selectedRegion.endRow)
-    const bottom = Math.max(selectedRegion.startRow, selectedRegion.endRow)
-    const left = Math.min(selectedRegion.startCol, selectedRegion.endCol)
-    const right = Math.max(selectedRegion.startCol, selectedRegion.endCol)
+    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
+    if (!bounds) return []
+
+    const { top, bottom, left, right } = bounds
 
     for (let row = top; row <= bottom; row += 1) {
       for (let col = left; col <= right; col += 1) {
@@ -609,7 +690,7 @@ export default function HomePage() {
       previousRemovalMode !== 'fill' ||
       previousEnabledColorHexes.length !== previousEffectiveSourcePaletteHexes.length ||
       previousEffectiveSourcePaletteHexes.some((hex) => !previousEnabledColorHexes.includes(hex))
-    const shouldPreservePaletteState =
+    const canAttemptToPreservePaletteState =
       hasGeneratedPreview &&
       lastSettings !== null &&
       settings.color_count === lastSettings.color_count &&
@@ -632,6 +713,10 @@ export default function HomePage() {
         stitch_height: stitchHeight,
         color_count: settings.color_count,
         show_grid: settings.show_grid,
+        clean_background: settings.clean_background,
+        simplify_colors: settings.simplify_colors,
+        strengthen_dark_detail: settings.strengthen_dark_detail,
+        preserve_accents: settings.preserve_accents,
         mesh_count: settings.mesh_count,
         contrast_level: settings.contrast_level,
         source_type: settings.source_type,
@@ -640,19 +725,29 @@ export default function HomePage() {
       const nextAllPalette = collapsed.palette
       const nextOriginalCells = collapsed.cells
       const nextFullPaletteHexes = nextAllPalette.map((color) => color.hex)
-      const nextEnabledColorHexes = shouldPreservePaletteState
+      const nextEnabledColorHexes = canAttemptToPreservePaletteState
         ? nextFullPaletteHexes.filter((hex) => previousEnabledColorHexes.includes(hex))
+        : nextFullPaletteHexes
+      const paletteOverlapRatio =
+        previousEnabledColorHexes.length > 0
+          ? nextEnabledColorHexes.length / previousEnabledColorHexes.length
+          : 1
+      const shouldPreservePaletteState =
+        canAttemptToPreservePaletteState &&
+        nextEnabledColorHexes.length > 0 &&
+        paletteOverlapRatio >= MIN_PALETTE_STATE_OVERLAP_RATIO
+      const resolvedEnabledColorHexes = shouldPreservePaletteState
+        ? nextEnabledColorHexes
         : nextFullPaletteHexes
       const shouldReapplyPaletteState =
         shouldPreservePaletteState &&
-        nextEnabledColorHexes.length > 0 &&
         (previousRemovalMode !== 'fill' ||
-          nextEnabledColorHexes.length !== nextFullPaletteHexes.length)
+          resolvedEnabledColorHexes.length !== nextFullPaletteHexes.length)
       const rebuiltFromPaletteState = shouldReapplyPaletteState
         ? applyPaletteStateToCells(
             nextOriginalCells,
             nextAllPalette,
-            nextEnabledColorHexes,
+            resolvedEnabledColorHexes,
             previousRemovalMode
           )
         : null
@@ -688,12 +783,12 @@ export default function HomePage() {
         shouldReapplyManualOverrides
           ? Array.from(
               new Set([
-                ...(shouldReapplyPaletteState ? nextEnabledColorHexes : nextFullPaletteHexes),
+                ...(shouldReapplyPaletteState ? resolvedEnabledColorHexes : nextFullPaletteHexes),
                 ...finalPreviewPalette.map((color) => color.hex),
               ])
             )
           : shouldReapplyPaletteState
-            ? nextEnabledColorHexes
+            ? resolvedEnabledColorHexes
             : nextFullPaletteHexes
       )
       setOriginalCells(nextOriginalCells)
@@ -719,24 +814,8 @@ export default function HomePage() {
   useEffect(() => {
     if (!hasGeneratedPreview || !activeImagePath || !lastSettings) return
 
-    const draftKey = JSON.stringify({
-      width_inches: draftSettings.width_inches,
-      height_inches: draftSettings.height_inches,
-      mesh_count: draftSettings.mesh_count,
-      color_count: draftSettings.color_count,
-      show_grid: draftSettings.show_grid,
-      contrast_level: draftSettings.contrast_level,
-      source_type: draftSettings.source_type,
-    })
-    const lastKey = JSON.stringify({
-      width_inches: lastSettings.width_inches,
-      height_inches: lastSettings.height_inches,
-      mesh_count: lastSettings.mesh_count,
-      color_count: lastSettings.color_count,
-      show_grid: lastSettings.show_grid,
-      contrast_level: lastSettings.contrast_level,
-      source_type: lastSettings.source_type,
-    })
+    const draftKey = getSettingsKey(draftSettings)
+    const lastKey = getSettingsKey(lastSettings)
     if (draftKey === lastKey) return
 
     const timeoutId = window.setTimeout(() => {
@@ -822,6 +901,28 @@ export default function HomePage() {
     applyEnabledPalette(nextEnabledColorHexes)
   }
 
+  function handleAutoReduceColors(targetCount: number) {
+    const clampedTarget = Math.max(2, Math.min(displayPalette.length, targetCount))
+    if (!displayPalette.length || clampedTarget >= displayPalette.length) return
+
+    const nextEnabledColorHexes = pickDistinctPaletteHexes(
+      displayPalette,
+      displayColorCounts,
+      clampedTarget,
+      activePaintColor
+    )
+
+    if (
+      nextEnabledColorHexes.length === enabledColorHexes.length &&
+      nextEnabledColorHexes.every((hex) => enabledColorHexes.includes(hex))
+    ) {
+      return
+    }
+
+    pushUndoSnapshot()
+    applyEnabledPalette(nextEnabledColorHexes)
+  }
+
   function handleToggleColorEnabled(hex: string, enabled: boolean) {
     if (enabled) {
       enableColorHex(hex)
@@ -873,10 +974,10 @@ export default function HomePage() {
   function handleApplyColorToSelection(targetHex: string) {
     if (!selectedRegion || !activePaintColor) return
 
-    const top = Math.min(selectedRegion.startRow, selectedRegion.endRow)
-    const bottom = Math.max(selectedRegion.startRow, selectedRegion.endRow)
-    const left = Math.min(selectedRegion.startCol, selectedRegion.endCol)
-    const right = Math.max(selectedRegion.startCol, selectedRegion.endCol)
+    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
+    if (!bounds) return
+
+    const { top, bottom, left, right } = bounds
     let changed = 0
     const nextCells = cells.map((row, rowIndex) =>
       row.map((cell, colIndex) => {
@@ -1176,21 +1277,13 @@ export default function HomePage() {
       lowered === 'what can i do here'
     ) {
       const response = await chatAssistant(trimmed)
-      return {
-        reply: response.message,
-        candidates: response.candidate_images ?? [],
-        note: buildSearchResultNote(response.candidate_images ?? []),
-      }
+      return { reply: response.message }
     }
 
     const helpMatch = lowered.match(/^(?:help|guide|how do i use)\s+(.+)$/)
     if (helpMatch) {
       const response = await chatAssistant(trimmed)
-      return {
-        reply: response.message,
-        candidates: response.candidate_images ?? [],
-        note: buildSearchResultNote(response.candidate_images ?? []),
-      }
+      return { reply: response.message }
     }
 
     if (
@@ -1200,6 +1293,17 @@ export default function HomePage() {
     ) {
       setDraftSettings((current) => applySourceTypeDefaults(current, 'stitched_photo'))
       return { reply: 'Switched the source mode to stitched photo.' }
+    }
+
+    if (
+      lowered === 'use graphic art' ||
+      lowered === 'use screenshot art' ||
+      lowered === 'switch to graphic art' ||
+      lowered === 'switch to screenshot art' ||
+      lowered === 'set source to graphic art'
+    ) {
+      setDraftSettings((current) => applySourceTypeDefaults(current, 'graphic_art'))
+      return { reply: 'Switched the source mode to graphic / screenshot art.' }
     }
 
     if (
@@ -1228,32 +1332,22 @@ export default function HomePage() {
       return { reply: 'Use the Upload file button in chat and I’ll import it into the project.' }
     }
 
-    const searchQuery = extractSearchQuery(trimmed)
-    if (searchQuery) {
-      try {
-        const response = await chatAssistant(trimmed)
-        return {
-          reply: response.message,
-          candidates: response.candidate_images ?? [],
-          note: buildSearchResultNote(response.candidate_images ?? []),
-        }
-      } catch (error) {
-        const detail =
-          error instanceof Error ? error.message : 'Web image search is unavailable right now.'
-
-        return {
-          reply: `${detail} You can still upload a file or paste an image URL with "import https://...".`,
-        }
+    if (
+      lowered.includes('search') ||
+      lowered.includes('find a photo') ||
+      lowered.includes('find an image') ||
+      lowered.includes('search the web') ||
+      lowered.includes('look for')
+    ) {
+      return {
+        reply:
+          'MNS Studio does not search for images. Find the image you want online, then upload it here or paste the direct image URL with `import https://...`.',
       }
     }
 
     if (lowered.includes('generate from scratch') || lowered.includes('create an image')) {
       const response = await chatAssistant(trimmed)
-      return {
-        reply: response.message,
-        candidates: response.candidate_images ?? [],
-        note: buildSearchResultNote(response.candidate_images ?? []),
-      }
+      return { reply: response.message }
     }
 
     const widthValue = extractCommandNumber(lowered, [
@@ -1310,6 +1404,78 @@ export default function HomePage() {
     ) {
       updateSettings({ show_grid: true })
       return { reply: 'Turned grid on.' }
+    }
+
+    if (
+      lowered.includes('clean background on') ||
+      lowered.includes('enable clean background') ||
+      lowered.includes('turn clean background on')
+    ) {
+      updateSettings({ clean_background: true })
+      return { reply: 'Turned Clean background on.' }
+    }
+
+    if (
+      lowered.includes('clean background off') ||
+      lowered.includes('disable clean background') ||
+      lowered.includes('turn clean background off')
+    ) {
+      updateSettings({ clean_background: false })
+      return { reply: 'Turned Clean background off.' }
+    }
+
+    if (
+      lowered.includes('simplify colors on') ||
+      lowered.includes('enable simplify colors') ||
+      lowered.includes('turn simplify colors on')
+    ) {
+      updateSettings({ simplify_colors: true })
+      return { reply: 'Turned Simplify colors on.' }
+    }
+
+    if (
+      lowered.includes('simplify colors off') ||
+      lowered.includes('disable simplify colors') ||
+      lowered.includes('turn simplify colors off')
+    ) {
+      updateSettings({ simplify_colors: false })
+      return { reply: 'Turned Simplify colors off.' }
+    }
+
+    if (
+      lowered.includes('strengthen dark detail on') ||
+      lowered.includes('enable strengthen dark detail') ||
+      lowered.includes('turn strengthen dark detail on')
+    ) {
+      updateSettings({ strengthen_dark_detail: true })
+      return { reply: 'Turned Strengthen dark detail on.' }
+    }
+
+    if (
+      lowered.includes('strengthen dark detail off') ||
+      lowered.includes('disable strengthen dark detail') ||
+      lowered.includes('turn strengthen dark detail off')
+    ) {
+      updateSettings({ strengthen_dark_detail: false })
+      return { reply: 'Turned Strengthen dark detail off.' }
+    }
+
+    if (
+      lowered.includes('preserve accents on') ||
+      lowered.includes('enable preserve accents') ||
+      lowered.includes('turn preserve accents on')
+    ) {
+      updateSettings({ preserve_accents: true })
+      return { reply: 'Turned Preserve accents on.' }
+    }
+
+    if (
+      lowered.includes('preserve accents off') ||
+      lowered.includes('disable preserve accents') ||
+      lowered.includes('turn preserve accents off')
+    ) {
+      updateSettings({ preserve_accents: false })
+      return { reply: 'Turned Preserve accents off.' }
     }
 
     if (lowered.includes('super super high contrast') || lowered.includes('contrast super super high')) {
@@ -1375,11 +1541,21 @@ export default function HomePage() {
     ) {
       return {
         reply: [
-          `Source: ${draftSettings.source_type === 'stitched_photo' ? 'Stitched photo' : 'Photo'}`,
+          `Source: ${
+            draftSettings.source_type === 'stitched_photo'
+              ? 'Stitched photo'
+              : draftSettings.source_type === 'graphic_art'
+                ? 'Graphic / screenshot art'
+                : 'Photo'
+          }`,
           `Size: ${draftSettings.width_inches}" x ${draftSettings.height_inches}"`,
           `Mesh: ${draftSettings.mesh_count}`,
           `Colors: ${draftSettings.color_count}`,
           `Contrast: ${draftSettings.contrast_level.replaceAll('_', ' ')}`,
+          `Clean background: ${draftSettings.clean_background ? 'on' : 'off'}`,
+          `Simplify colors: ${draftSettings.simplify_colors ? 'on' : 'off'}`,
+          `Strengthen dark detail: ${draftSettings.strengthen_dark_detail ? 'on' : 'off'}`,
+          `Preserve accents: ${draftSettings.preserve_accents ? 'on' : 'off'}`,
           `Grid: ${draftSettings.show_grid ? 'on' : 'off'}`,
         ].join('\n'),
       }
@@ -1531,15 +1707,11 @@ export default function HomePage() {
 
     try {
       const response = await chatAssistant(trimmed)
-      return {
-        reply: response.message,
-        candidates: response.candidate_images ?? [],
-        note: buildSearchResultNote(response.candidate_images ?? []),
-      }
+      return { reply: response.message }
     } catch {
       return {
         reply:
-          'Try commands like "find a photo of a cardinal", "import https://...", "set width to 7", "use 18 mesh", "turn grid off", "generate preview", "paint 310", "turn off 310", "merge 907 and 3052 into 907", "make the outside border fully light blue", "analyze palette", "undo", or "redo".',
+          'Try commands like "import https://...", "set width to 7", "use 18 mesh", "use graphic art", "clean background on", "simplify colors on", "strengthen dark detail on", "preserve accents on", "turn grid off", "generate preview", "paint 310", "turn off 310", "merge 907 and 3052 into 907", "make the outside border fully light blue", "analyze palette", "undo", or "redo".',
       }
     }
   }
@@ -1557,21 +1729,9 @@ export default function HomePage() {
     }
   }
 
-  async function handleCandidateSelection(image: CandidateImage) {
-    setLoading(true)
-    try {
-      const result = await importImageFromUrl(image.url)
-      applyImportedImage(result.active_image_url)
-      return `Imported ${image.title ?? 'that web image'}.`
-    } catch (error) {
-      setLoading(false)
-      throw error
-    }
-  }
-
   async function handleFinalize() {
-    const settingsForFinalize = draftSettings ?? lastSettings
-    if (!previewImagePath || !settingsForFinalize) return
+    const settingsForFinalize = lastSettings
+    if (!previewImagePath || !settingsForFinalize || !cells.length || hasPendingPreviewSettings) return
 
     setLoading(true)
     try {
@@ -1580,11 +1740,12 @@ export default function HomePage() {
         width_inches: settingsForFinalize.width_inches,
         height_inches: settingsForFinalize.height_inches,
         mesh_count: settingsForFinalize.mesh_count,
-        color_count: settingsForFinalize.color_count,
+        color_count: requestedColorCount,
         contrast_level: settingsForFinalize.contrast_level,
         show_grid: settingsForFinalize.show_grid,
-        palette: previewPalette,
+        palette: currentDesignPalette,
         cells,
+        previous_pdf_url: finalPdfPath,
       })
 
       setFinalPdfPath(result.pdf_url)
@@ -1594,25 +1755,145 @@ export default function HomePage() {
     }
   }
 
+  const desktopSettingsVisible = !isMobile && !isPreviewExpanded
+
+  const statusBlock = (
+    <>
+      {loading && <p style={{ margin: 0 }}>Working...</p>}
+      {uploadError && <p style={{ color: '#b00020', margin: 0 }}>{uploadError}</p>}
+      {hasPendingPreviewSettings && !loading && (
+        <p style={{ margin: 0, color: '#8a5a00' }}>
+          Settings changed. Waiting for the stitch preview to refresh before finalizing.
+        </p>
+      )}
+
+      {finalPdfPath && (
+        <a href={assetUrl(finalPdfPath) ?? '#'} target="_blank" rel="noreferrer">
+          Download finalized PDF
+        </a>
+      )}
+    </>
+  )
+
+  const chatPanel = (
+    <ChatPanel
+      onSubmitMessage={handleChatMessage}
+      onUploadFile={handleChatUpload}
+      onGeneratePreview={() => void handleApply(draftSettings)}
+      canGeneratePreview={Boolean(activeImagePath)}
+      hasPreview={Boolean(previewImagePath && cells.length)}
+      sourceType={draftSettings.source_type}
+      onSourceTypeChange={(sourceType) =>
+        setDraftSettings((current) => applySourceTypeDefaults(current, sourceType))
+      }
+    />
+  )
+
+  const settingsPanel = (
+    <div
+      style={{
+        display: 'grid',
+        gap: 6,
+        width: '100%',
+        minWidth: 0,
+        padding: 8,
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        border: '1px solid #d9d9d9',
+        borderRadius: 12,
+        background: '#fbfbfb',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+      }}
+    >
+      <div style={{ display: 'grid', gap: 2 }}>
+        <h2 style={{ margin: 0, fontSize: 13 }}>Size and Settings</h2>
+      </div>
+
+      <PreviewControls
+        importedAspectRatio={importedAspectRatio}
+        settings={draftSettings}
+        actualColorCount={displayPalette.length}
+        lockAspectRatio={lockAspectRatio}
+        onSettingsChange={setDraftSettings}
+        onLockAspectRatioChange={setLockAspectRatio}
+      />
+    </div>
+  )
+
+  const paletteShell = (
+    <aside
+      style={{
+        display: 'grid',
+        gap: 16,
+        alignContent: 'start',
+        minWidth: 0,
+        width: '100%',
+        maxWidth: isMobile ? '100%' : 260,
+        height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
+        padding: 10,
+        boxSizing: 'border-box',
+        border: '1px solid #d9d9d9',
+        borderRadius: 14,
+        background: '#fbfbfb',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+      }}
+    >
+        <PalettePanel
+          colors={displayPalette}
+          colorCount={draftSettings.color_count}
+          activeColor={activePaintColor}
+          enabledColorHexes={displayEnabledColorHexes}
+        colorCountsByHex={displayColorCounts}
+        highlightSelection={highlightSelection}
+        hasSelectedRegion={Boolean(selectedRegion)}
+        selectedRegionCount={selectedRegionCount}
+        removalMode={removalMode}
+        selectionMergeSuggestions={selectionMergeSuggestions}
+        selectionOtherColors={selectionOtherColors}
+        onApplyColorToSelection={handleApplyColorToSelection}
+        onClearSelection={handleClearSelection}
+        onEyedropperSelection={() => void handleEyedropperSelection()}
+        onSelect={(color) => setActivePaintColor(color.hex)}
+          onHighlightSelectionChange={setHighlightSelection}
+          onToggleColorEnabled={handleToggleColorEnabled}
+          onEnableAll={handleEnableAllColors}
+          onColorCountChange={(nextCount) => updateSettings({ color_count: nextCount })}
+          onAutoReduceToCount={handleAutoReduceColors}
+        onRemovalModeChange={handleRemovalModeChange}
+        moreColors={allDmcColors.filter(
+          (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
+        )}
+      />
+    </aside>
+  )
+
   return (
     <main
       style={{
         display: 'grid',
-        gridTemplateColumns: isPreviewExpanded
-          ? 'minmax(0, 1fr) clamp(220px, 22vw, 260px)'
-          : 'minmax(250px, 290px) minmax(0, 760px) clamp(220px, 22vw, 260px)',
-        height: '100vh',
+        gridTemplateColumns: isMobile
+          ? 'minmax(0, 1fr)'
+          : isPreviewExpanded
+            ? 'minmax(0, 1fr) clamp(220px, 22vw, 260px)'
+            : 'minmax(250px, 290px) minmax(0, 760px) clamp(220px, 22vw, 260px)',
+        gridAutoRows: isMobile ? 'auto' : undefined,
+        minHeight: '100vh',
+        height: isMobile ? 'auto' : '100vh',
         gap: 14,
-        padding: 16,
+        padding: isMobile ? 12 : 16,
         fontFamily: 'Arial, sans-serif',
         alignItems: 'start',
-        overflow: 'hidden',
+        overflow: isMobile ? 'auto' : 'hidden',
         justifyContent: 'center',
         boxSizing: 'border-box',
         width: '100%',
       }}
     >
-      {!isPreviewExpanded && (
+      <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
+
+      {!isMobile && !isPreviewExpanded && (
         <section
           style={{
             display: 'grid',
@@ -1625,47 +1906,69 @@ export default function HomePage() {
         >
           <h1 style={{ margin: 0, fontSize: 26, lineHeight: 1.05 }}>MNS Studio</h1>
 
-          <ChatPanel
-            onSubmitMessage={handleChatMessage}
-            onUploadFile={handleChatUpload}
-            onSelectCandidate={handleCandidateSelection}
-            onGeneratePreview={() => void handleApply(draftSettings)}
-            canGeneratePreview={Boolean(activeImagePath)}
-            sourceType={draftSettings.source_type}
-            onSourceTypeChange={(sourceType) =>
-              setDraftSettings((current) => applySourceTypeDefaults(current, sourceType))
-            }
-          />
-
-          {loading && <p style={{ margin: 0 }}>Working...</p>}
-          {uploadError && <p style={{ color: '#b00020', margin: 0 }}>{uploadError}</p>}
-
-          {finalPdfPath && (
-            <a href={assetUrl(finalPdfPath) ?? '#'} target="_blank" rel="noreferrer">
-              Download finalized PDF
-            </a>
-          )}
+          {chatPanel}
+          {statusBlock}
         </section>
       )}
 
       <section
         style={{
           display: 'grid',
-          gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
-          gap: isPreviewExpanded ? 6 : 8,
+          gridTemplateRows: isMobile
+            ? 'auto minmax(320px, 62vh) auto auto auto auto'
+            : isPreviewExpanded
+              ? 'auto minmax(0, 1fr) auto'
+              : 'auto minmax(0, 1fr) auto auto',
+          gap: isMobile ? 10 : isPreviewExpanded ? 6 : 8,
           minWidth: 0,
           width: '100%',
-          height: '100%',
-          overflow: 'hidden',
+          height: isMobile ? 'auto' : '100%',
+          overflow: isMobile ? 'visible' : 'hidden',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)}>
-            {isPreviewExpanded ? 'Show chat and sizing' : 'Expand preview'}
-          </button>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: isMobile ? 'space-between' : 'flex-end',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          {isMobile && <h1 style={{ margin: 0, fontSize: 26, lineHeight: 1.05 }}>MNS Studio</h1>}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => setShowGuideDialog(true)}>
+              How it works
+            </button>
+            {isMobile ? (
+              <>
+                <button type="button" onClick={() => setShowMobileAssistant((current) => !current)}>
+                  {showMobileAssistant ? 'Hide assistant' : 'Show assistant'}
+                </button>
+                <button type="button" onClick={() => setShowMobileSettings((current) => !current)}>
+                  {showMobileSettings ? 'Hide settings' : 'Show settings'}
+                </button>
+                <button type="button" onClick={() => setShowMobilePalette((current) => !current)}>
+                  {showMobilePalette ? 'Hide palette' : 'Show palette'}
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)}>
+                {isPreviewExpanded ? 'Show chat and sizing' : 'Expand preview'}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div style={{ minWidth: 0, minHeight: 0, height: '100%', overflow: 'hidden' }}>
+        <div
+          style={{
+            minWidth: 0,
+            minHeight: 0,
+            height: '100%',
+            overflow: 'hidden',
+          }}
+        >
           {shouldShowStitchGrid ? (
             <GridEditor
               cells={cells}
@@ -1698,82 +2001,41 @@ export default function HomePage() {
           <button onClick={handleResetColorChanges} disabled={!previewImagePath}>
             Reset
           </button>
-          <button onClick={() => setShowFinalizeModal(true)} disabled={!previewImagePath}>
+          <button
+            onClick={() => setShowFinalizeModal(true)}
+            disabled={!previewImagePath || !cells.length || hasPendingPreviewSettings || loading}
+          >
             Finalize
           </button>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gap: 6,
-            width: '100%',
-            minWidth: 0,
-            padding: isPreviewExpanded ? 6 : 8,
-            boxSizing: 'border-box',
-            overflow: 'hidden',
-            border: '1px solid #d9d9d9',
-            borderRadius: 12,
-            background: '#fbfbfb',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
-          }}
-        >
-          <div style={{ display: 'grid', gap: 2 }}>
-            <h2 style={{ margin: 0, fontSize: 13 }}>Size and Settings</h2>
+        {isMobile && showMobileAssistant && (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {chatPanel}
+            <div
+              style={{
+                display: 'grid',
+                gap: 8,
+                padding: 10,
+                border: '1px solid #d9d9d9',
+                borderRadius: 12,
+                background: '#fbfbfb',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+              }}
+            >
+              {statusBlock}
+            </div>
           </div>
+        )}
 
-          <PreviewControls
-            importedAspectRatio={importedAspectRatio}
-            settings={draftSettings}
-            lockAspectRatio={lockAspectRatio}
-            onSettingsChange={setDraftSettings}
-            onLockAspectRatioChange={setLockAspectRatio}
-          />
-        </div>
+        {((!isMobile && desktopSettingsVisible) || (isMobile && showMobileSettings)) && settingsPanel}
+
+        {isMobile && showMobilePalette && (
+          <div style={{ minHeight: 420, maxHeight: '70vh' }}>{paletteShell}</div>
+        )}
       </section>
 
-      <aside
-        style={{
-          display: 'grid',
-        gap: 16,
-        alignContent: 'start',
-        minWidth: 0,
-        width: '100%',
-        maxWidth: 260,
-        height: '100%',
-        overflow: 'hidden',
-        padding: 10,
-        boxSizing: 'border-box',
-        border: '1px solid #d9d9d9',
-        borderRadius: 14,
-        background: '#fbfbfb',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
-        }}
-      >
-        <PalettePanel
-          colors={displayPalette}
-          activeColor={activePaintColor}
-          enabledColorHexes={displayEnabledColorHexes}
-          colorCountsByHex={displayColorCounts}
-          highlightSelection={highlightSelection}
-          hasSelectedRegion={Boolean(selectedRegion)}
-          selectedRegionCount={selectedRegionCount}
-          removalMode={removalMode}
-          selectionMergeSuggestions={selectionMergeSuggestions}
-          selectionOtherColors={selectionOtherColors}
-          onApplyColorToSelection={handleApplyColorToSelection}
-          onClearSelection={handleClearSelection}
-          onEyedropperSelection={() => void handleEyedropperSelection()}
-          onSelect={(color) => setActivePaintColor(color.hex)}
-          onHighlightSelectionChange={setHighlightSelection}
-          onToggleColorEnabled={handleToggleColorEnabled}
-          onEnableAll={handleEnableAllColors}
-          onRemovalModeChange={handleRemovalModeChange}
-          moreColors={allDmcColors.filter(
-            (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
-          )}
-        />
-      </aside>
+      {!isMobile && paletteShell}
 
 
 
@@ -1799,13 +2061,48 @@ export default function HomePage() {
               gap: 16,
             }}
           >
-            <h2 style={{ margin: 0 }}>Finalize design?</h2>
+            <h2 style={{ margin: 0 }}>Create finalized PDF?</h2>
             <p style={{ margin: 0 }}>
-              This will generate a printable PDF of the current stitch preview.
+              This will generate a polished three-page PDF with the stitch canvas, a stitch report, and a true-size gridded reference page.
             </p>
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                padding: 12,
+                borderRadius: 10,
+                background: '#f6f6f6',
+                border: '1px solid #e2e2e2',
+                fontSize: 14,
+              }}
+            >
+              <div>
+                <strong>Size:</strong>{' '}
+                {`${lastSettings?.width_inches ?? 0}" x ${lastSettings?.height_inches ?? 0}"`}
+              </div>
+              <div>
+                <strong>Mesh:</strong> {lastSettings?.mesh_count ?? 0}
+              </div>
+              <div>
+                <strong>Requested colors:</strong> {requestedColorCount}
+              </div>
+              <div>
+                <strong>Colors used:</strong> {currentDesignPalette.length}
+              </div>
+              <div>
+                <strong>Total stitches:</strong> {currentDesignStitchCount}
+              </div>
+            </div>
+            {hasPendingPreviewSettings && (
+              <p style={{ margin: 0, color: '#8a5a00', fontSize: 14 }}>
+                There are unapplied settings changes. Wait for the preview to refresh before finalizing.
+              </p>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setShowFinalizeModal(false)}>Cancel</button>
-              <button onClick={handleFinalize}>Confirm</button>
+              <button onClick={handleFinalize} disabled={loading || !cells.length || hasPendingPreviewSettings}>
+                Confirm
+              </button>
             </div>
           </div>
         </div>

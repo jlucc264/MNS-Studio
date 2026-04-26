@@ -8,12 +8,21 @@ export type PreviewSettings = {
   mesh_count: 13 | 18
   color_count: number
   show_grid: boolean
+  clean_background: boolean
+  simplify_colors: boolean
+  strengthen_dark_detail: boolean
+  preserve_accents: boolean
   contrast_level: 'low' | 'normal' | 'high' | 'super_high' | 'super_super_high'
-  source_type: 'photo' | 'stitched_photo'
+  source_type: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
 const MAX_PRINTABLE_SHORT_SIDE = 7
 const MAX_PRINTABLE_LONG_SIDE = 9.5
+
+function formatOneDecimal(value: number) {
+  return value.toFixed(1)
+}
+
 function clampToPrintableArea(width: number, height: number) {
   const safeWidth = Math.max(1, width)
   const safeHeight = Math.max(1, height)
@@ -48,6 +57,7 @@ function clampToPrintableArea(width: number, height: number) {
 type Props = {
   importedAspectRatio: number | null
   settings: PreviewSettings
+  actualColorCount: number
   lockAspectRatio: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
@@ -56,6 +66,7 @@ type Props = {
 export default function PreviewControls({
   importedAspectRatio,
   settings,
+  actualColorCount,
   lockAspectRatio,
   onSettingsChange,
   onLockAspectRatioChange,
@@ -64,13 +75,13 @@ export default function PreviewControls({
     width_inches: widthInches,
     height_inches: heightInches,
     mesh_count: meshCount,
-    color_count: colorCount,
     show_grid: showGrid,
+    clean_background: cleanBackground,
     contrast_level: contrastLevel,
+    source_type: sourceType,
   } = settings
 
   const borderInches = 1
-  const maxColorCount = 64
   const canvasWidthInches = widthInches + borderInches * 2
   const canvasHeightInches = heightInches + borderInches * 2
 
@@ -103,7 +114,7 @@ export default function PreviewControls({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
           gap: 6,
           alignItems: 'start',
           width: '100%',
@@ -208,29 +219,6 @@ export default function PreviewControls({
         </label>
 
         <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
-          <span>Colors</span>
-          <input
-            type="number"
-            min="2"
-            max={maxColorCount}
-            value={colorCount}
-            onChange={(e) =>
-              onSettingsChange({
-                ...settings,
-                color_count: Math.min(maxColorCount, Number(e.target.value)),
-              })
-            }
-            style={{
-              fontSize: 11.5,
-              padding: '4px 6px',
-              minWidth: 0,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-          />
-        </label>
-
-        <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
           <span>Contrast</span>
           <select
             value={contrastLevel}
@@ -303,6 +291,20 @@ export default function PreviewControls({
             />
             Show grid
         </label>
+
+        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1 }}>
+            <input
+              type="checkbox"
+              checked={cleanBackground}
+              onChange={(e) =>
+                onSettingsChange({
+                  ...settings,
+                  clean_background: e.target.checked,
+                })
+              }
+            />
+            Clean background
+        </label>
       </div>
 
       <div
@@ -310,7 +312,7 @@ export default function PreviewControls({
           fontSize: 11.5,
           color: '#555',
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
           gap: 4,
           paddingTop: 2,
           borderTop: '1px solid #e4e4e4',
@@ -319,20 +321,50 @@ export default function PreviewControls({
         }}
       >
         <div>
-          <strong>Design:</strong> {widthInches}" x {heightInches}"
+          <strong>Design:</strong> {formatOneDecimal(widthInches)}" x {formatOneDecimal(heightInches)}"
         </div>
         <div>
-          <strong>Canvas:</strong> {canvasWidthInches}" x {canvasHeightInches}"
+          <strong>Canvas:</strong> {formatOneDecimal(canvasWidthInches)}" x {formatOneDecimal(canvasHeightInches)}"
         </div>
         <div>
           <strong>Stitches:</strong> {stitchWidth} x {stitchHeight}
         </div>
-      </div>
-      {settings.source_type === 'stitched_photo' ? (
-        <div style={{ fontSize: 11.5, color: '#666' }}>
-          Stitched photo mode still tends to work best with fewer colors, but it is no longer capped.
+        <div>
+          <strong>Actual colors:</strong> {actualColorCount}
         </div>
-      ) : null}
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gap: 4,
+          paddingTop: 6,
+          borderTop: '1px solid #e4e4e4',
+          fontSize: 11.5,
+          color: '#666',
+        }}
+      >
+        <div>
+          <strong>
+            {sourceType === 'stitched_photo'
+              ? 'Stitched photo:'
+              : sourceType === 'graphic_art'
+                ? 'Graphic / screenshot art:'
+                : 'Photo:'}
+          </strong>{' '}
+          {sourceType === 'stitched_photo'
+            ? 'Best for photographed needlepoint, canvas texture, and thread-defined text or borders.'
+            : sourceType === 'graphic_art'
+              ? 'Best for screenshots, logos, sign art, and stitched reference images where crisp structure matters more than photo realism.'
+              : 'Best for regular photos, artwork, logos, and cleaner source images.'}
+        </div>
+        <div>
+          {sourceType === 'stitched_photo'
+            ? 'Start with fewer colors and only turn Clean background on when canvas tones are stealing the palette.'
+            : sourceType === 'graphic_art'
+              ? 'Use this when Photo blurs detail and Stitched photo over-simplifies. Clean background can help on some screenshots, but keep it optional.'
+              : 'Use Clean background when bright neutral backgrounds are crowding out the main subject.'}
+        </div>
+      </div>
     </div>
   )
 }

@@ -5,13 +5,11 @@ def classify_intent(message: str) -> str:
         return "help"
     if any(phrase in msg for phrase in ["help ", "guide ", "how do i use"]):
         return "help"
-    if any(word in msg for word in ["find", "search", "look up", "look for", "browse"]):
-        return "search"
     if any(word in msg for word in ["import", "upload", "url"]):
         return "import"
     if any(word in msg for word in ["undo", "redo", "merge", "paint", "border", "palette", "turn off", "turn on"]):
         return "edit"
-    if any(word in msg for word in ["width", "height", "mesh", "contrast", "source", "stitched photo", "photo mode", "grid"]):
+    if any(word in msg for word in ["width", "height", "mesh", "contrast", "source", "stitched photo", "photo mode", "graphic art", "screenshot art", "grid"]):
         return "settings"
     if any(word in msg for word in ["stitch", "preview", "grid", "mesh", "colors"]):
         return "visualize"

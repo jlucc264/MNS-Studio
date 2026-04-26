@@ -3,7 +3,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,15 +21,13 @@ from app.models import (
 from app.services.intent import classify_intent
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
+from app.services.storage import delete_finalized_output
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = BASE_DIR / "assets"
 logger = logging.getLogger(__name__)
-SEARCH_RESULT_LIMIT = 12
-GOOGLE_CUSTOM_SEARCH_API_KEY = os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY", "").strip()
-GOOGLE_CUSTOM_SEARCH_ENGINE_ID = os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID", "").strip()
 
 
 def parse_allowed_origins() -> list[str]:
@@ -66,70 +63,21 @@ def fetch_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def normalize_search_query(query: str) -> str:
-    cleaned = query.strip()
-    cleaned = re.sub(
-        r"\b(photo|image|picture|pic|needlepoint-worthy|needlepoint worthy|web)\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or query.strip()
-
-
 def normalize_text_for_match(value: str | None) -> str:
     if not value:
         return ""
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
-
-def score_candidate(query: str, candidate: dict, provider_index: int) -> tuple[float, str]:
-    normalized_query = normalize_text_for_match(query)
-    query_tokens = [token for token in normalized_query.split() if token]
-    title = normalize_text_for_match(candidate.get("title"))
-
-    title_tokens = set(title.split()) if title else set()
-    overlap = sum(1 for token in query_tokens if token in title_tokens)
-    exact_bonus = 3 if title and normalized_query and normalized_query in title else 0
-    startswith_bonus = 1.5 if title and normalized_query and title.startswith(normalized_query) else 0
-    thumbnail_bonus = 0.25 if "thumb" in (candidate.get("url") or "").lower() else 0
-    provider_bonus = max(0.0, 0.5 - (provider_index * 0.1))
-    title_penalty = 0.0 if title else -0.75
-
-    score = overlap + exact_bonus + startswith_bonus + thumbnail_bonus + provider_bonus + title_penalty
-    return score, candidate.get("id") or candidate.get("url") or ""
-
-
-def merge_search_candidates(query: str, provider_results: list[list[dict]]) -> list[dict]:
-    merged: list[tuple[float, str, dict]] = []
-    seen_urls: set[str] = set()
-
-    for provider_index, candidates in enumerate(provider_results):
-        for candidate in candidates:
-            image_url = candidate.get("url")
-            if not image_url or image_url in seen_urls:
-                continue
-
-            seen_urls.add(image_url)
-            score, stable_key = score_candidate(query, candidate, provider_index)
-            merged.append((score, stable_key, candidate))
-
-    merged.sort(key=lambda item: (-item[0], item[1]))
-    return [candidate for _, _, candidate in merged[:SEARCH_RESULT_LIMIT]]
-
-
 def build_chat_help_message(topic: str | None = None) -> str:
     normalized = normalize_text_for_match(topic)
 
-    if any(word in normalized for word in ["search", "find", "import", "upload", "url"]):
+    if any(word in normalized for word in ["import", "upload", "url"]):
         return "\n".join(
             [
-                "You can search or import images with commands like:",
-                '- `find a photo of a cardinal`',
-                '- `search the web for a christmas needlepoint sign`',
+                "You can bring images into the project with commands like:",
                 '- `import https://...`',
                 "- or upload an image directly in chat.",
+                "- If you need source artwork, find it online first and then bring it into MNS Studio.",
             ]
         )
 
@@ -153,7 +101,8 @@ def build_chat_help_message(topic: str | None = None) -> str:
                 "Source mode guide:",
                 "- `Photo` is better for normal photographs and product shots.",
                 "- `Stitched photo` is better for photos of existing stitched work where fabric or canvas colors are interfering.",
-                "- If text or logos are still breaking badly, the image may want more graphic/text-art handling instead of more contrast.",
+                "- `Graphic / screenshot art` is better for screenshots, sign art, stitched reference graphics, and other crisp non-photo sources.",
+                "- If text or logos are still breaking badly, try `Graphic / screenshot art` before pushing contrast higher.",
             ]
         )
 
@@ -166,16 +115,23 @@ def build_chat_help_message(topic: str | None = None) -> str:
                 '- `use 18 mesh`',
                 '- `set colors to 12`',
                 '- `normal contrast` / `high contrast` / `super high contrast`',
-                '- `use stitched photo` / `use photo`',
+                '- `use stitched photo` / `use photo` / `use graphic art`',
+                '- `simplify colors on` / `off`',
+                '- `strengthen dark detail on` / `off`',
+                '- `preserve accents on` / `off`',
             ]
         )
 
     return "\n".join(
         [
-            "I can help with search, import, settings, cleanup, and guidance.",
+            "I can help with import, settings, cleanup, and guidance.",
             "Try commands like:",
-            '- `find a photo of a cardinal`',
+            '- upload an image',
+            '- `import https://...`',
             '- `use stitched photo`',
+            '- `use graphic art`',
+            '- `simplify colors on`',
+            '- `preserve accents on`',
             '- `set width to 7`',
             '- `generate preview`',
             '- `merge 907 and 3052 into 907`',
@@ -183,142 +139,6 @@ def build_chat_help_message(topic: str | None = None) -> str:
             '- `help source modes` or `help editing`',
         ]
     )
-
-
-def search_openverse_images(query: str) -> list[dict]:
-    api_url = (
-        "https://api.openverse.org/v1/images/"
-        f"?q={quote_plus(query)}&page_size={SEARCH_RESULT_LIMIT}&mature=false"
-    )
-    data = fetch_json(api_url)
-    results = data.get("results", [])
-    candidates = []
-
-    for item in results:
-        image_url = item.get("thumbnail") or item.get("url")
-        if not image_url:
-            continue
-
-        title = item.get("title") or item.get("creator") or "Openverse image"
-        candidates.append(
-            {
-                "id": str(item.get("id", image_url)),
-                "url": image_url,
-                "title": title,
-                "provider": "Openverse",
-            }
-        )
-
-    return candidates
-
-
-def search_google_custom_images(query: str) -> list[dict]:
-    if not GOOGLE_CUSTOM_SEARCH_API_KEY or not GOOGLE_CUSTOM_SEARCH_ENGINE_ID:
-        return []
-
-    api_url = (
-        "https://customsearch.googleapis.com/customsearch/v1"
-        f"?key={quote_plus(GOOGLE_CUSTOM_SEARCH_API_KEY)}"
-        f"&cx={quote_plus(GOOGLE_CUSTOM_SEARCH_ENGINE_ID)}"
-        f"&q={quote_plus(query)}"
-        "&searchType=image"
-        f"&num={SEARCH_RESULT_LIMIT}"
-        "&safe=active"
-    )
-    data = fetch_json(api_url)
-    items = data.get("items", [])
-    candidates = []
-
-    for item in items:
-        image_url = item.get("image", {}).get("thumbnailLink") or item.get("link")
-        if not image_url:
-            continue
-
-        candidates.append(
-            {
-                "id": item.get("cacheId") or item.get("link") or image_url,
-                "url": image_url,
-                "title": item.get("title") or item.get("displayLink") or "Google image result",
-                "provider": "Google",
-            }
-        )
-
-    return candidates
-
-
-def search_wikimedia_images(query: str) -> list[dict]:
-    api_url = (
-        "https://commons.wikimedia.org/w/api.php"
-        f"?action=query&generator=search&gsrsearch={quote_plus(query)}"
-        f"&gsrnamespace=6&gsrlimit={SEARCH_RESULT_LIMIT}"
-        "&prop=imageinfo&iiprop=url&iiurlwidth=800"
-        "&format=json&formatversion=2"
-    )
-    data = fetch_json(api_url)
-    pages = data.get("query", {}).get("pages", [])
-    candidates = []
-
-    for page in pages:
-        imageinfo = (page.get("imageinfo") or [{}])[0]
-        image_url = imageinfo.get("thumburl") or imageinfo.get("url")
-        if not image_url:
-            continue
-
-        title = page.get("title", "").removeprefix("File:")
-        candidates.append(
-            {
-                "id": str(page.get("pageid", title)),
-                "url": image_url,
-                "title": title or None,
-                "provider": "Wikimedia Commons",
-            }
-        )
-
-    return candidates
-
-
-@app.get("/search-images")
-def search_images(query: str):
-    if not query.strip():
-        raise HTTPException(status_code=400, detail="Search query is required.")
-
-    normalized_query = normalize_search_query(query)
-    search_providers = [
-        search_google_custom_images,
-        search_openverse_images,
-        search_wikimedia_images,
-    ]
-    provider_errors = []
-    provider_results: list[list[dict]] = []
-
-    for provider in search_providers:
-        try:
-            candidates = provider(normalized_query)
-        except Exception as exc:
-            provider_errors.append(f"{provider.__name__}: {exc}")
-            continue
-
-        provider_results.append(candidates)
-
-    merged_candidates = merge_search_candidates(normalized_query, provider_results)
-    if merged_candidates:
-        return {"candidates": merged_candidates}
-
-    if provider_errors:
-        logger.warning(
-            "Image search failed for query %r. Provider errors: %s",
-            normalized_query,
-            "; ".join(provider_errors),
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Image search is unavailable right now. "
-                f"Provider details: {'; '.join(provider_errors)}"
-            ),
-        )
-
-    return {"candidates": []}
 
 
 @app.post("/chat", response_model=AppResponse)
@@ -340,49 +160,6 @@ def chat(request: ChatRequest):
             action="help",
             message=build_chat_help_message(topic),
             metadata={"topic": topic or "general"},
-        )
-
-    if intent == "search":
-        normalized_query = normalize_search_query(message)
-        provider_errors = []
-        provider_results: list[list[dict]] = []
-
-        for provider in (search_openverse_images, search_wikimedia_images):
-            try:
-                provider_results.append(provider(normalized_query))
-            except Exception as exc:
-                provider_errors.append(f"{provider.__name__}: {exc}")
-
-        candidates = merge_search_candidates(normalized_query, provider_results)
-        if candidates:
-            return AppResponse(
-                action="search",
-                message=f'I found {len(candidates)} image options for "{normalized_query}". Pick one to import it.',
-                candidate_images=candidates,
-                metadata={"query": normalized_query},
-            )
-
-        if provider_errors:
-            logger.warning(
-                "Chat search failed for query %r. Provider errors: %s",
-                normalized_query,
-                "; ".join(provider_errors),
-            )
-            return AppResponse(
-                action="search",
-                message=(
-                    "Image search is unavailable right now. "
-                    f"Provider details: {'; '.join(provider_errors)}"
-                ),
-                candidate_images=[],
-                metadata={"query": normalized_query},
-            )
-
-        return AppResponse(
-            action="search",
-            message=f'I could not find any image results for "{normalized_query}". Try a simpler subject or import a URL directly.',
-            candidate_images=[],
-            metadata={"query": normalized_query},
         )
 
     if intent == "import":
@@ -417,7 +194,7 @@ def chat(request: ChatRequest):
 
     return AppResponse(
         action="generate",
-        message="Brand-new image generation is intentionally not included in the base product. I can help you search, import, and clean up an image instead.",
+        message="Brand-new image generation is intentionally not included in the base product. I can help you import an image, adjust settings, and clean up the preview instead.",
     )
 
 
@@ -460,6 +237,10 @@ def visualize(request: VisualizeRequest):
     stitch_height=request.stitch_height,
     color_count=request.color_count,
     show_grid=request.show_grid,
+    clean_background=request.clean_background,
+    simplify_colors=request.simplify_colors,
+    strengthen_dark_detail=request.strengthen_dark_detail,
+    preserve_accents=request.preserve_accents,
     mesh_count=request.mesh_count,
     contrast_level=request.contrast_level,
     source_type=request.source_type,
@@ -475,6 +256,7 @@ def visualize(request: VisualizeRequest):
 
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
+    delete_finalized_output(request.previous_pdf_url)
     pdf_url = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,

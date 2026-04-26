@@ -39,6 +39,7 @@ Work:
 - improve text preservation without dulling the whole palette too much
 - keep improving distinct-color and neutral-shade handling
 - compare against a small set of reference images instead of tuning blind
+- use [STITCHED_BENCHMARKS.md](/Users/johnlucciola/MNS/STITCHED_BENCHMARKS.md) as the stitched-photo regression set
 
 ### 3. Clarify Source Modes
 Goal: make it obvious when to use each path.
@@ -73,14 +74,14 @@ Likely controls:
 Goal: make the built-in chat useful even without AI.
 
 Definition of done:
-- search feels more reliable
 - editing commands are more robust
+- upload/import guidance is clearer
 - chat can guide users through common workflows
 - the free/base product has a strong assistant layer without inference costs
 
 Deliverables:
-- better photo/image search integration
 - stronger command parsing for deterministic editing actions
+- stronger import-by-URL and upload guidance
 - guide/help responses for common tasks and mode choices
 - clearer boundaries between deterministic assistant behavior and future Pro AI behavior
 

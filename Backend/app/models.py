@@ -1,12 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
-
-
-class CandidateImage(BaseModel):
-    id: str
-    url: str
-    title: Optional[str] = None
-    provider: Optional[str] = None
+from typing import Optional
 
 
 class ChatRequest(BaseModel):
@@ -24,6 +17,10 @@ class VisualizeRequest(BaseModel):
     stitch_height: int
     color_count: int = 16
     show_grid: bool = True
+    clean_background: bool = False
+    simplify_colors: bool = False
+    strengthen_dark_detail: bool = False
+    preserve_accents: bool = False
     mesh_count: int = 13
     contrast_level: str = "normal"
     source_type: str = "photo"
@@ -47,7 +44,6 @@ class AppResponse(BaseModel):
     message: str
     active_image_url: Optional[str] = None
     stitch_preview_url: Optional[str] = None
-    candidate_images: List[CandidateImage] = []
     metadata: dict = {}
 
 class FinalizeRequest(BaseModel):
@@ -60,6 +56,7 @@ class FinalizeRequest(BaseModel):
     show_grid: bool
     palette: list[PaletteColor]
     cells: list[list[str]]
+    previous_pdf_url: Optional[str] = None
 
 
 class FinalizeResponse(BaseModel):

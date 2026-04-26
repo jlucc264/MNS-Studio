@@ -1,6 +1,6 @@
 'use client'
 
-import { ChangeEvent, useMemo, useState } from 'react'
+import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 
 type PaletteColor = {
   hex: string
@@ -10,6 +10,7 @@ type PaletteColor = {
 
 type Props = {
   colors: PaletteColor[]
+  colorCount: number
   activeColor: string | null
   enabledColorHexes: string[]
   colorCountsByHex?: Record<string, number>
@@ -26,6 +27,8 @@ type Props = {
   onHighlightSelectionChange: (value: boolean) => void
   onToggleColorEnabled: (hex: string, enabled: boolean) => void
   onEnableAll: () => void
+  onColorCountChange: (nextCount: number) => void
+  onAutoReduceToCount: (targetCount: number) => void
   onRemovalModeChange: (mode: 'fill' | 'blank') => void
   moreColors: PaletteColor[]
 }
@@ -52,6 +55,7 @@ function colorDistance(a: string, b: string) {
 
 export default function PalettePanel({
   colors,
+  colorCount,
   activeColor,
   enabledColorHexes,
   colorCountsByHex = {},
@@ -68,11 +72,14 @@ export default function PalettePanel({
   onHighlightSelectionChange,
   onToggleColorEnabled,
   onEnableAll,
+  onColorCountChange,
+  onAutoReduceToCount,
   onRemovalModeChange,
   moreColors,
 }: Props) {
   const [showOtherColors, setShowOtherColors] = useState(false)
   const [showSelectionOtherColors, setShowSelectionOtherColors] = useState(false)
+  const [autoReduceTarget, setAutoReduceTarget] = useState(12)
 
   const allOtherColors = useMemo(() => {
     const byHex = new Map<string, PaletteColor>()
@@ -92,6 +99,27 @@ export default function PalettePanel({
       .sort((left, right) => colorDistance(activeColor, left.hex) - colorDistance(activeColor, right.hex))
       .slice(0, 6)
   }, [activeColor, colors])
+
+  useEffect(() => {
+    if (!colors.length) return
+    setAutoReduceTarget((current) => Math.max(2, Math.min(colors.length, current)))
+  }, [colors.length])
+
+  const orderedColors = useMemo(() => {
+    const enabledSet = new Set(enabledColorHexes)
+
+    return [...colors].sort((left, right) => {
+      const leftEnabled = enabledSet.has(left.hex) ? 1 : 0
+      const rightEnabled = enabledSet.has(right.hex) ? 1 : 0
+      if (leftEnabled !== rightEnabled) return rightEnabled - leftEnabled
+
+      const leftCount = colorCountsByHex[left.hex] ?? 0
+      const rightCount = colorCountsByHex[right.hex] ?? 0
+      if (leftCount !== rightCount) return rightCount - leftCount
+
+      return left.dmc_code.localeCompare(right.dmc_code, undefined, { numeric: true })
+    })
+  }, [colorCountsByHex, colors, enabledColorHexes])
 
   if (!colors.length && !moreColors.length) return null
 
@@ -113,7 +141,30 @@ export default function PalettePanel({
         alignContent: 'start',
       }}
     >
-      <h3 style={{ margin: 0 }}>Paint palette</h3>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Paint palette</h3>
+        <span style={{ fontSize: 12, color: '#666' }}>{colors.length} actual colors</span>
+      </div>
+
+      <label
+        style={{
+          display: 'grid',
+          gap: 4,
+          fontSize: 13,
+          color: '#333',
+        }}
+      >
+        <span>{`Color budget: ${colorCount}`}</span>
+        <input
+          type="range"
+          min={2}
+          max={128}
+          step={1}
+          value={colorCount}
+          onChange={(event) => onColorCountChange(Number(event.target.value))}
+          style={{ width: '100%' }}
+        />
+      </label>
 
       <div
         style={{
@@ -126,6 +177,35 @@ export default function PalettePanel({
         <button type="button" onClick={onEnableAll}>
           Turn all on
         </button>
+        {colors.length > 2 && (
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 13,
+              color: '#333',
+            }}
+          >
+            <span>Auto reduce to</span>
+            <input
+              type="number"
+              min={2}
+              max={colors.length}
+              step={1}
+              value={autoReduceTarget}
+              onChange={(event) =>
+                setAutoReduceTarget(
+                  Math.max(2, Math.min(colors.length, Number(event.target.value) || 2))
+                )
+              }
+              style={{ width: 56 }}
+            />
+            <button type="button" onClick={() => onAutoReduceToCount(autoReduceTarget)}>
+              Reduce
+            </button>
+          </label>
+        )}
         <label
           style={{
             display: 'inline-flex',
@@ -251,7 +331,7 @@ export default function PalettePanel({
           paddingRight: 2,
         }}
       >
-        {colors.map((color) => {
+        {orderedColors.map((color) => {
           const selected = activeColor === color.hex
           const enabled = enabledColorHexes.includes(color.hex)
           const showSelectionTray = selected && hasSelectedRegion

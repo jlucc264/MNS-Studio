@@ -13,7 +13,9 @@ type Props = {
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
-const CANVAS_PADDING = 16
+const RULER_THICKNESS = 24
+const PREVIEW_FRAME_WIDTH_UNITS = 13
+const PREVIEW_FRAME_HEIGHT_UNITS = 9
 
 export type DesignSelectionRect = {
   startRow: number
@@ -47,6 +49,10 @@ function clampZoom(nextZoom: number) {
   return Math.max(100, Math.min(400, nextZoom))
 }
 
+function formatInches(value: number) {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(2).replace(/\.?0+$/, '')
+}
+
 function isWithinSelection(
   selection: DesignSelectionRect | null,
   row: number,
@@ -70,10 +76,8 @@ function drawCanvasCell({
   displayMode,
   highlightSelection,
   inDesign,
-  isSelectedInRegion,
-  row,
-  selectedRegionActive,
-  col,
+  isInsideFocusRegion,
+  focusRegionActive,
   x,
   y,
 }: {
@@ -84,10 +88,8 @@ function drawCanvasCell({
   displayMode: 'flat' | 'stitched'
   highlightSelection: boolean
   inDesign: boolean
-  isSelectedInRegion: boolean
-  row: number
-  selectedRegionActive: boolean
-  col: number
+  isInsideFocusRegion: boolean
+  focusRegionActive: boolean
   x: number
   y: number
 }) {
@@ -96,13 +98,13 @@ function drawCanvasCell({
       activeColor &&
       inDesign &&
       color === activeColor &&
-      (!selectedRegionActive || isSelectedInRegion)
+      (!focusRegionActive || isInsideFocusRegion)
   )
   const dimNonSelected = Boolean(
     highlightSelection &&
       activeColor &&
       inDesign &&
-      (color !== activeColor || (selectedRegionActive && color === activeColor && !isSelectedInRegion))
+      (focusRegionActive ? !isInsideFocusRegion : color !== activeColor)
   )
 
   context.clearRect(x, y, cellSize, cellSize)
@@ -216,13 +218,16 @@ export default function GridEditor({
   if (!cells.length) return null
 
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const [containerWidth, setContainerWidth] = useState(640)
-  const [viewportHeight, setViewportHeight] = useState(520)
+  const [containerSize, setContainerSize] = useState({ width: 640, height: 520 })
+  const [toolbarHeight, setToolbarHeight] = useState(56)
   const [zoomPercent, setZoomPercent] = useState(100)
+  const [scrollPosition, setScrollPosition] = useState({ left: 0, top: 0 })
   const [displayMode, setDisplayMode] = useState<'flat' | 'stitched'>('stitched')
+  const [isZooming, setIsZooming] = useState(false)
   const [brushDensity, setBrushDensity] = useState(1)
   const [isPainting, setIsPainting] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
@@ -240,30 +245,33 @@ export default function GridEditor({
   const canvasSizeRef = useRef<{ width: number; height: number } | null>(null)
   const overlayCanvasSizeRef = useRef<{ width: number; height: number } | null>(null)
   const liveSelectionRectRef = useRef<DesignSelectionRect | null>(null)
-  const selectionFrameRef = useRef<number | null>(null)
+  const zoomSettleTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     const node = containerRef.current
     if (!node) return
 
-    const updateWidth = () => {
-      setContainerWidth(node.clientWidth || 640)
+    const updateSize = () => {
+      setContainerSize({
+        width: node.clientWidth || 640,
+        height: node.clientHeight || 520,
+      })
     }
 
-    updateWidth()
+    updateSize()
 
-    const observer = new ResizeObserver(updateWidth)
+    const observer = new ResizeObserver(updateSize)
     observer.observe(node)
 
     return () => observer.disconnect()
   }, [])
 
   useEffect(() => {
-    const node = viewportRef.current
+    const node = toolbarRef.current
     if (!node) return
 
     const updateHeight = () => {
-      setViewportHeight(node.clientHeight || Math.round(window.innerHeight * 0.7))
+      setToolbarHeight(node.clientHeight || 56)
     }
 
     updateHeight()
@@ -285,6 +293,14 @@ export default function GridEditor({
   useEffect(() => {
     brushDensityRef.current = brushDensity
   }, [brushDensity])
+
+  useEffect(() => {
+    return () => {
+      if (zoomSettleTimeoutRef.current !== null) {
+        window.clearTimeout(zoomSettleTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!highlightSelection) {
@@ -325,23 +341,82 @@ export default function GridEditor({
   const cols = cells[0].length
   const totalRows = rows + borderStitches * 2
   const totalCols = cols + borderStitches * 2
+  const stageRows = PREVIEW_FRAME_HEIGHT_UNITS * meshCount
+  const stageCols = PREVIEW_FRAME_WIDTH_UNITS * meshCount
+  const availableStageWidth = Math.max(containerSize.width - RULER_THICKNESS, 160)
+  const availableStageHeight = Math.max(
+    containerSize.height - toolbarHeight - 8 - RULER_THICKNESS,
+    160
+  )
+  const baseCellSize = useMemo(
+    () =>
+      Math.max(
+        1,
+        Math.min(availableStageWidth / stageCols, availableStageHeight / stageRows)
+      ),
+    [availableStageHeight, availableStageWidth, stageCols, stageRows]
+  )
 
-  const baseCellSize = useMemo(() => {
-    const usableWidth = Math.max(containerWidth - 72, 120)
-    const usableHeight = Math.max(viewportHeight - 72, 120)
-    const widthFit = Math.floor(usableWidth / totalCols)
-    const heightFit = Math.floor(usableHeight / totalRows)
+  const cellSize = Math.max(1, (baseCellSize * zoomPercent) / 100)
+  const stageWidth = stageCols * cellSize
+  const stageHeight = stageRows * cellSize
+  const previewViewportWidth = Math.round(stageCols * baseCellSize)
+  const previewViewportHeight = Math.round(stageRows * baseCellSize)
+  const previewFrameWidth = previewViewportWidth + RULER_THICKNESS
+  const previewFrameHeight = previewViewportHeight + RULER_THICKNESS
+  const wrapperWidth = Math.max(previewViewportWidth, Math.round(stageWidth))
+  const wrapperHeight = Math.max(previewViewportHeight, Math.round(stageHeight))
+  const gridOriginX = Math.max(0, (wrapperWidth - Math.round(stageWidth)) / 2)
+  const gridOriginY = Math.max(0, (wrapperHeight - Math.round(stageHeight)) / 2)
+  const contentOriginCol = Math.max(0, Math.floor((stageCols - totalCols) / 2))
+  const contentOriginRow = Math.max(0, Math.floor((stageRows - totalRows) / 2))
+  const inchStepPixels = meshCount * cellSize
+  const horizontalRulerTicks = useMemo(
+    () =>
+      Array.from({ length: PREVIEW_FRAME_WIDTH_UNITS + 1 }, (_, index) => ({
+        index,
+        offset: index * inchStepPixels,
+      })),
+    [inchStepPixels]
+  )
+  const verticalRulerTicks = useMemo(
+    () =>
+      Array.from({ length: PREVIEW_FRAME_HEIGHT_UNITS + 1 }, (_, index) => ({
+        index,
+        offset: index * inchStepPixels,
+      })),
+    [inchStepPixels]
+  )
+  const visibleHorizontalTicks = useMemo(
+    () =>
+      horizontalRulerTicks
+        .map((tick) => ({ ...tick, position: tick.offset - scrollPosition.left }))
+        .filter((tick) => tick.position >= -32 && tick.position <= previewViewportWidth + 32),
+    [horizontalRulerTicks, previewViewportWidth, scrollPosition.left]
+  )
+  const visibleVerticalTicks = useMemo(
+    () =>
+      verticalRulerTicks
+        .map((tick) => ({ ...tick, position: tick.offset - scrollPosition.top }))
+        .filter((tick) => tick.position >= -32 && tick.position <= previewViewportHeight + 32),
+    [previewViewportHeight, scrollPosition.top, verticalRulerTicks]
+  )
 
-    return Math.max(2, Math.min(12, widthFit, heightFit))
-  }, [containerWidth, totalCols, totalRows, viewportHeight])
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
 
-  const cellSize = Math.max(2, Math.round((baseCellSize * zoomPercent) / 100))
-  const gridWidth = totalCols * cellSize
-  const gridHeight = totalRows * cellSize
-  const wrapperWidth = Math.max(containerWidth, gridWidth + CANVAS_PADDING * 2)
-  const wrapperHeight = Math.max(viewportHeight, gridHeight + CANVAS_PADDING * 2)
-  const gridOriginX = Math.round((wrapperWidth - gridWidth) / 2)
-  const gridOriginY = Math.round((wrapperHeight - gridHeight) / 2)
+    const syncScroll = () => {
+      setScrollPosition({
+        left: viewport.scrollLeft,
+        top: viewport.scrollTop,
+      })
+    }
+
+    syncScroll()
+    viewport.addEventListener('scroll', syncScroll, { passive: true })
+    return () => viewport.removeEventListener('scroll', syncScroll)
+  }, [zoomPercent, previewViewportHeight, previewViewportWidth])
 
   const buildBrushCoords = useCallback(
     (row: number, col: number) => {
@@ -376,8 +451,12 @@ export default function GridEditor({
     [buildBrushCoords, onPaintCells]
   )
 
-  const getDesignCellFromClientPoint = useCallback(
-    (clientX: number, clientY: number) => {
+  const getCellFromClientPoint = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+      clampTo: 'design' | 'stage' = 'design'
+    ) => {
       const canvas = canvasRef.current
       if (!canvas) return null
 
@@ -387,16 +466,43 @@ export default function GridEditor({
 
       const gridCol = Math.floor((localX - gridOriginX) / cellSize)
       const gridRow = Math.floor((localY - gridOriginY) / cellSize)
+      const designCol = gridCol - contentOriginCol - borderStitches
+      const designRow = gridRow - contentOriginRow - borderStitches
 
-      if (gridCol < borderStitches || gridCol >= borderStitches + cols) return null
-      if (gridRow < borderStitches || gridRow >= borderStitches + rows) return null
+      if (clampTo === 'stage') {
+        const minDesignCol = -contentOriginCol - borderStitches
+        const maxDesignCol = stageCols - contentOriginCol - borderStitches - 1
+        const minDesignRow = -contentOriginRow - borderStitches
+        const maxDesignRow = stageRows - contentOriginRow - borderStitches - 1
+        const clampedDesignCol = Math.max(minDesignCol, Math.min(maxDesignCol, designCol))
+        const clampedDesignRow = Math.max(minDesignRow, Math.min(maxDesignRow, designRow))
+
+        return {
+          row: clampedDesignRow,
+          col: clampedDesignCol,
+        }
+      }
+
+      if (designCol < 0 || designCol >= cols) return null
+      if (designRow < 0 || designRow >= rows) return null
 
       return {
-        row: gridRow - borderStitches,
-        col: gridCol - borderStitches,
+        row: designRow,
+        col: designCol,
       }
     },
-    [borderStitches, cellSize, cols, gridOriginX, gridOriginY, rows]
+    [
+      borderStitches,
+      cellSize,
+      cols,
+      contentOriginCol,
+      contentOriginRow,
+      gridOriginX,
+      gridOriginY,
+      rows,
+      stageCols,
+      stageRows,
+    ]
   )
 
   const updateZoom = useCallback(
@@ -422,6 +528,10 @@ export default function GridEditor({
       const contentY = viewport.scrollTop + anchorY
       const zoomRatio = clampedZoom / currentZoom
 
+      setIsZooming(true)
+      if (zoomSettleTimeoutRef.current !== null) {
+        window.clearTimeout(zoomSettleTimeoutRef.current)
+      }
       setZoomPercent(clampedZoom)
 
       window.requestAnimationFrame(() => {
@@ -431,6 +541,11 @@ export default function GridEditor({
         nextViewport.scrollLeft = Math.max(0, contentX * zoomRatio - anchorX)
         nextViewport.scrollTop = Math.max(0, contentY * zoomRatio - anchorY)
       })
+
+      zoomSettleTimeoutRef.current = window.setTimeout(() => {
+        setIsZooming(false)
+        zoomSettleTimeoutRef.current = null
+      }, 140)
     },
     []
   )
@@ -438,18 +553,51 @@ export default function GridEditor({
   const handleCanvasPointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (event.pointerType === 'touch') return
+      if (highlightSelection) {
+        event.preventDefault()
+        selectionPointerIdRef.current = event.pointerId
+        setIsSelecting(true)
+        const startHit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        if (!startHit) return
+
+        const nextRect = {
+          startRow: startHit.row,
+          startCol: startHit.col,
+          endRow: startHit.row,
+          endCol: startHit.col,
+        }
+        liveSelectionRectRef.current = nextRect
+        setDragSelectionRect(nextRect)
+        return
+      }
+
       if (!activeColorRef.current) return
 
-      const hit = getDesignCellFromClientPoint(event.clientX, event.clientY)
+      const hit = getCellFromClientPoint(event.clientX, event.clientY)
       if (!hit) return
 
       event.preventDefault()
-      if (highlightSelection) {
-        selectionPointerIdRef.current = event.pointerId
-        setIsSelecting(true)
+
+      onPaintStart()
+      paintingPointerIdRef.current = event.pointerId
+      setIsPainting(true)
+      paintCell(hit.row, hit.col)
+    },
+    [getCellFromClientPoint, highlightSelection, onPaintStart, paintCell]
+  )
+
+  const handleCanvasPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (highlightSelection && isSelecting && selectionPointerIdRef.current === event.pointerId) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        if (!hit) return
+
+        const current = liveSelectionRectRef.current
+        if (!current) return
+        if (current.endRow === hit.row && current.endCol === hit.col) return
+
         const nextRect = {
-          startRow: hit.row,
-          startCol: hit.col,
+          ...current,
           endRow: hit.row,
           endCol: hit.col,
         }
@@ -458,47 +606,14 @@ export default function GridEditor({
         return
       }
 
-      onPaintStart()
-      paintingPointerIdRef.current = event.pointerId
-      setIsPainting(true)
-      paintCell(hit.row, hit.col)
-    },
-    [getDesignCellFromClientPoint, highlightSelection, onPaintStart, paintCell]
-  )
-
-  const handleCanvasPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (highlightSelection && isSelecting && selectionPointerIdRef.current === event.pointerId) {
-        const hit = getDesignCellFromClientPoint(event.clientX, event.clientY)
-        if (!hit) return
-
-        const current = liveSelectionRectRef.current
-        if (!current) return
-        if (current.endRow == hit.row && current.endCol === hit.col) return
-
-        liveSelectionRectRef.current = {
-          ...current,
-          endRow: hit.row,
-          endCol: hit.col,
-        }
-
-        if (selectionFrameRef.current !== null) return
-
-        selectionFrameRef.current = window.requestAnimationFrame(() => {
-          selectionFrameRef.current = null
-          setDragSelectionRect(liveSelectionRectRef.current)
-        })
-        return
-      }
-
       if (!isPainting || paintingPointerIdRef.current !== event.pointerId) return
 
-      const hit = getDesignCellFromClientPoint(event.clientX, event.clientY)
+      const hit = getCellFromClientPoint(event.clientX, event.clientY)
       if (!hit) return
 
       paintCell(hit.row, hit.col)
     },
-    [getDesignCellFromClientPoint, highlightSelection, isPainting, isSelecting, paintCell]
+    [getCellFromClientPoint, highlightSelection, isPainting, isSelecting, paintCell]
   )
 
   useEffect(() => {
@@ -552,6 +667,9 @@ export default function GridEditor({
     }
   }, [updateZoom])
 
+  const renderSelection = selectionRect
+  const effectiveDisplayMode = isZooming && displayMode === 'stitched' ? 'flat' : displayMode
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -559,7 +677,7 @@ export default function GridEditor({
     const context = canvas.getContext('2d')
     if (!context) return
 
-    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5)
+    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.25)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
@@ -579,18 +697,26 @@ export default function GridEditor({
     canvas.style.height = `${wrapperHeight}px`
 
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0)
+    const activeFocusRegion = renderSelection
     const renderSignature = [
       wrapperWidth,
       wrapperHeight,
       cellSize,
-      displayMode,
+      effectiveDisplayMode,
       activeColor ?? '',
       highlightSelection,
-      selectionRect
-        ? [selectionRect.startRow, selectionRect.startCol, selectionRect.endRow, selectionRect.endCol].join(':')
+      activeFocusRegion
+        ? [
+            activeFocusRegion.startRow,
+            activeFocusRegion.startCol,
+            activeFocusRegion.endRow,
+            activeFocusRegion.endCol,
+          ].join(':')
         : '',
       gridOriginX,
       gridOriginY,
+      contentOriginCol,
+      contentOriginRow,
       borderStitches,
       rows,
       cols,
@@ -605,10 +731,10 @@ export default function GridEditor({
       context.fillStyle = '#ffffff'
       context.fillRect(0, 0, wrapperWidth, wrapperHeight)
 
-      for (let row = 0; row < totalRows; row += 1) {
-        for (let col = 0; col < totalCols; col += 1) {
-          const sourceRow = row - borderStitches
-          const sourceCol = col - borderStitches
+      for (let row = 0; row < stageRows; row += 1) {
+        for (let col = 0; col < stageCols; col += 1) {
+          const sourceRow = row - contentOriginRow - borderStitches
+          const sourceCol = col - contentOriginCol - borderStitches
           const inDesign =
             sourceRow >= 0 && sourceRow < rows && sourceCol >= 0 && sourceCol < cols
           const color = inDesign ? cells[sourceRow][sourceCol] : '#FFFFFF'
@@ -620,13 +746,11 @@ export default function GridEditor({
             activeColor,
             color,
             cellSize,
-            displayMode,
+            displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign,
-            isSelectedInRegion: isWithinSelection(selectionRect, sourceRow, sourceCol),
-            row: sourceRow,
-            selectedRegionActive: Boolean(selectionRect),
-            col: sourceCol,
+            isInsideFocusRegion: isWithinSelection(activeFocusRegion, sourceRow, sourceCol),
+            focusRegionActive: Boolean(activeFocusRegion),
             x,
             y,
           })
@@ -638,21 +762,19 @@ export default function GridEditor({
         for (let col = 0; col < cols; col += 1) {
           if (previousCells[row][col] === cells[row][col]) continue
 
-          const x = gridOriginX + (col + borderStitches) * cellSize
-          const y = gridOriginY + (row + borderStitches) * cellSize
+          const x = gridOriginX + (col + borderStitches + contentOriginCol) * cellSize
+          const y = gridOriginY + (row + borderStitches + contentOriginRow) * cellSize
 
           drawCanvasCell({
             context,
             activeColor,
             color: cells[row][col],
             cellSize,
-            displayMode,
+            displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign: true,
-            isSelectedInRegion: isWithinSelection(selectionRect, row, col),
-            row,
-            selectedRegionActive: Boolean(selectionRect),
-            col,
+            isInsideFocusRegion: isWithinSelection(activeFocusRegion, row, col),
+            focusRegionActive: Boolean(activeFocusRegion),
             x,
             y,
           })
@@ -667,16 +789,17 @@ export default function GridEditor({
     cellSize,
     cells,
     cols,
-    displayMode,
+    effectiveDisplayMode,
     activeColor,
     highlightSelection,
     selectionRect,
-    dragSelectionRect,
     gridOriginX,
     gridOriginY,
+    contentOriginCol,
+    contentOriginRow,
     rows,
-    totalCols,
-    totalRows,
+    stageCols,
+    stageRows,
     wrapperHeight,
     wrapperWidth,
   ])
@@ -685,7 +808,7 @@ export default function GridEditor({
     const overlayCanvas = overlayCanvasRef.current
     if (!overlayCanvas) return
 
-    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5)
+    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.25)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
@@ -717,8 +840,8 @@ export default function GridEditor({
     const bottom = Math.max(overlaySelection.startRow, overlaySelection.endRow)
     const left = Math.min(overlaySelection.startCol, overlaySelection.endCol)
     const right = Math.max(overlaySelection.startCol, overlaySelection.endCol)
-    const x = gridOriginX + (left + borderStitches) * cellSize
-    const y = gridOriginY + (top + borderStitches) * cellSize
+    const x = gridOriginX + (left + borderStitches + contentOriginCol) * cellSize
+    const y = gridOriginY + (top + borderStitches + contentOriginRow) * cellSize
     const width = (right - left + 1) * cellSize
     const height = (bottom - top + 1) * cellSize
 
@@ -732,6 +855,8 @@ export default function GridEditor({
   }, [
     borderStitches,
     cellSize,
+    contentOriginCol,
+    contentOriginRow,
     dragSelectionRect,
     gridOriginX,
     gridOriginY,
@@ -749,10 +874,10 @@ export default function GridEditor({
         justifyContent: 'stretch',
         alignContent: 'start',
         width: '100%',
-        height: '100%',
-        minHeight: 0,
         minWidth: 0,
         maxWidth: '100%',
+        minHeight: 0,
+        height: '100%',
         boxSizing: 'border-box',
         background: '#f7f7f7',
         padding: 8,
@@ -762,6 +887,7 @@ export default function GridEditor({
       }}
     >
       <div
+        ref={toolbarRef}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -817,7 +943,9 @@ export default function GridEditor({
           >
             -
           </button>
-          <span style={{ minWidth: 52, textAlign: 'center', fontSize: 14 }}>{zoomPercent}%</span>
+          <span style={{ minWidth: 52, textAlign: 'center', fontSize: 14 }}>
+            {Math.round(zoomPercent)}%
+          </span>
           <button
             type="button"
             onClick={() => updateZoom(zoomPercent + 25)}
@@ -856,53 +984,197 @@ export default function GridEditor({
       </div>
 
       <div
-        ref={viewportRef}
         style={{
           width: '100%',
           height: '100%',
           minHeight: 0,
-          overflowX: zoomPercent > 100 ? 'auto' : 'hidden',
-          overflowY: zoomPercent > 100 ? 'auto' : 'hidden',
-          background: '#ffffff',
-          borderRadius: 8,
-          touchAction: 'pan-x pan-y',
-          overscrollBehavior: 'contain',
-          WebkitOverflowScrolling: 'touch',
-          border: '1px solid #e4e4e4',
+          display: 'grid',
+          justifyItems: 'center',
+          alignItems: 'start',
         }}
       >
         <div
           style={{
-            minWidth: '100%',
-            minHeight: '100%',
-            width: `${wrapperWidth}px`,
-            height: `${wrapperHeight}px`,
-            boxSizing: 'border-box',
+            width: `${previewFrameWidth}px`,
+            height: `${previewFrameHeight}px`,
+            maxWidth: '100%',
+            maxHeight: '100%',
+            borderRadius: 8,
+            border: '1px solid #e4e4e4',
+            background: '#ffffff',
             display: 'grid',
-            justifyContent: 'center',
-            alignContent: 'center',
-            position: 'relative',
+            gridTemplateColumns: `${RULER_THICKNESS}px minmax(0, 1fr)`,
+            gridTemplateRows: `${RULER_THICKNESS}px minmax(0, 1fr)`,
+            overflow: 'hidden',
           }}
         >
-          <canvas
-            ref={canvasRef}
-            onPointerDown={handleCanvasPointerDown}
-            onPointerMove={handleCanvasPointerMove}
+          <div
             style={{
-              display: 'block',
-              cursor: activeColor ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+              gridColumn: '1 / 2',
+              gridRow: '1 / 2',
+              borderRight: '1px solid #ececec',
+              borderBottom: '1px solid #ececec',
+              background: '#fafafa',
+            }}
+          />
+
+          <div
+            style={{
+              gridColumn: '2 / 3',
+              gridRow: '1 / 2',
+              position: 'relative',
+              overflow: 'hidden',
+              borderBottom: '1px solid #ececec',
+              background: 'rgba(250, 250, 250, 0.96)',
+            }}
+          >
+            {visibleHorizontalTicks.map((tick) => (
+              <div
+                key={`viewport-ruler-x-${tick.index}`}
+                style={{
+                  position: 'absolute',
+                  left: tick.position,
+                  top: 0,
+                  transform: 'translateX(-0.5px)',
+                }}
+              >
+                <div
+                  style={{
+                    width: 0,
+                    height: tick.index % 2 === 0 ? 14 : 10,
+                    borderLeft: '1px solid rgba(17,17,17,0.65)',
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 12,
+                    left:
+                      tick.index === 0
+                        ? 4
+                        : tick.index === horizontalRulerTicks.length - 1
+                          ? -4
+                          : 0,
+                    transform:
+                      tick.index === 0
+                        ? 'none'
+                        : tick.index === horizontalRulerTicks.length - 1
+                          ? 'translateX(-100%)'
+                          : 'translateX(-50%)',
+                    fontSize: 10,
+                    color: '#5a5a5a',
+                    whiteSpace: 'nowrap',
+                    textAlign: 'center',
+                  }}
+                >
+                  {tick.index}"
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              gridColumn: '1 / 2',
+              gridRow: '2 / 3',
+              position: 'relative',
+              overflow: 'hidden',
+              borderRight: '1px solid #ececec',
+              background: 'rgba(250, 250, 250, 0.96)',
+            }}
+          >
+            {visibleVerticalTicks.map((tick) => (
+              <div
+                key={`viewport-ruler-y-${tick.index}`}
+                style={{
+                  position: 'absolute',
+                  top: tick.position,
+                  left: 0,
+                  transform: 'translateY(-0.5px)',
+                }}
+              >
+                <div
+                  style={{
+                    width: tick.index % 2 === 0 ? 14 : 10,
+                    height: 0,
+                    borderTop: '1px solid rgba(17,17,17,0.65)',
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top:
+                      tick.index === 0
+                        ? 2
+                        : tick.index === verticalRulerTicks.length - 1
+                          ? -4
+                          : 0,
+                    transform:
+                      tick.index === 0
+                        ? 'none'
+                        : tick.index === verticalRulerTicks.length - 1
+                          ? 'translateY(-100%)'
+                          : 'translateY(-50%)',
+                    left: 2,
+                    fontSize: 10,
+                    color: '#5a5a5a',
+                    writingMode: 'vertical-rl',
+                    textOrientation: 'mixed',
+                  }}
+                >
+                  {tick.index}"
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            ref={viewportRef}
+            style={{
+              gridColumn: '2 / 3',
+              gridRow: '2 / 3',
+              width: `${previewViewportWidth}px`,
+              height: `${previewViewportHeight}px`,
+              minHeight: 0,
+              minWidth: 0,
+              overflowX: zoomPercent > 100 ? 'auto' : 'hidden',
+              overflowY: zoomPercent > 100 ? 'auto' : 'hidden',
               touchAction: 'pan-x pan-y',
+              overscrollBehavior: 'contain',
+              WebkitOverflowScrolling: 'touch',
             }}
-          />
-          <canvas
-            ref={overlayCanvasRef}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'block',
-              pointerEvents: 'none',
-            }}
-          />
+          >
+            <div
+              style={{
+                minWidth: '100%',
+                minHeight: '100%',
+                width: `${wrapperWidth}px`,
+                height: `${wrapperHeight}px`,
+                boxSizing: 'border-box',
+                position: 'relative',
+              }}
+            >
+              <canvas
+                ref={canvasRef}
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                style={{
+                  display: 'block',
+                  cursor: activeColor ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                  touchAction: 'pan-x pan-y',
+                }}
+              />
+              <canvas
+                ref={overlayCanvasRef}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'block',
+                  pointerEvents: 'none',
+                }}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>

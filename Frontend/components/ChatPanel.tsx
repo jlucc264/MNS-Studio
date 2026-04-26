@@ -1,7 +1,6 @@
 'use client'
 
 import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react'
-import { CandidateImage } from '../lib/api'
 
 type Message = {
   id: string
@@ -11,26 +10,24 @@ type Message = {
 
 type CommandResult = {
   reply: string
-  candidates?: CandidateImage[]
-  note?: string
 }
 
 type Props = {
   onSubmitMessage: (message: string) => Promise<CommandResult>
   onUploadFile: (file: File) => Promise<string>
-  onSelectCandidate: (image: CandidateImage) => Promise<string>
   onGeneratePreview: () => void
   canGeneratePreview: boolean
-  sourceType: 'photo' | 'stitched_photo'
-  onSourceTypeChange: (sourceType: 'photo' | 'stitched_photo') => void
+  hasPreview: boolean
+  sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
+  onSourceTypeChange: (sourceType: 'photo' | 'stitched_photo' | 'graphic_art') => void
 }
 
 export default function ChatPanel({
   onSubmitMessage,
   onUploadFile,
-  onSelectCandidate,
   onGeneratePreview,
   canGeneratePreview,
+  hasPreview,
   sourceType,
   onSourceTypeChange,
 }: Props) {
@@ -41,20 +38,95 @@ export default function ChatPanel({
       id: 'welcome',
       role: 'assistant',
       text:
-        'Ask me to search the web, import an image, change settings, edit the preview, or type `help` for guided commands.',
+        'Upload an image, paste an image URL, change settings, edit the preview, or type `help` for guided commands.',
     },
   ])
   const [input, setInput] = useState('')
-  const [candidateImages, setCandidateImages] = useState<CandidateImage[]>([])
-  const [candidateNote, setCandidateNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
 
   useEffect(() => {
     const node = logRef.current
     if (!node) return
     node.scrollTop = node.scrollHeight
-  }, [candidateImages.length, messages])
+  }, [messages])
+
+  const guideContent = (() => {
+    if (sourceType === 'graphic_art') {
+      return {
+        title: 'Graphic / screenshot workflow',
+        lines: [
+          'Best for screenshots, logos, stitched reference art, and crisp sign-style images.',
+          'Start with a high color budget, then use Auto reduce to trim the palette without losing accents.',
+          'If tiny details are still getting lost, try `preserve accents on` before pushing contrast higher.',
+        ],
+      }
+    }
+
+    if (sourceType === 'stitched_photo') {
+      return {
+        title: 'Stitched photo workflow',
+        lines: [
+          'Best for photographed stitched work where fabric or canvas colors interfere with the design.',
+          'Use this when you want cleaner palette discipline and less screenshot-style sharpness.',
+          'Try `clean background on` only when neutral canvas tones are stealing too much color budget.',
+        ],
+      }
+    }
+
+    return {
+      title: 'Photo workflow',
+      lines: [
+        'Best for regular photos, artwork, and cases where text continuity needs softer preservation.',
+        'If the preview feels noisy, try `simplify colors on` before changing source modes.',
+        'If dark edges or lettering feel weak, try `strengthen dark detail on` before raising contrast.',
+      ],
+    }
+  })()
+
+  const quickSuggestions = (() => {
+    if (!canGeneratePreview) {
+      return ['help', 'import https://...', 'use graphic art']
+    }
+
+    if (!hasPreview) {
+      return ['generate preview', 'show settings', 'preserve accents on']
+    }
+
+    if (sourceType === 'graphic_art') {
+      return ['preserve accents on', 'simplify colors on', 'show settings']
+    }
+
+    if (sourceType === 'stitched_photo') {
+      return ['clean background on', 'show settings', 'generate preview']
+    }
+
+    return ['strengthen dark detail on', 'simplify colors on', 'show settings']
+  })()
+
+  async function runQuickCommand(command: string) {
+    if (busy) return
+
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', text: command }])
+    setBusy(true)
+
+    try {
+      const result = await onSubmitMessage(command)
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: 'assistant', text: result.reply },
+      ])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Command failed'
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: 'assistant', text: message },
+      ])
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -71,16 +143,12 @@ export default function ChatPanel({
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: result.reply },
       ])
-      setCandidateImages(result.candidates ?? [])
-      setCandidateNote(result.note ?? null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Command failed'
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: message },
       ])
-      setCandidateImages([])
-      setCandidateNote(null)
     } finally {
       setBusy(false)
     }
@@ -99,15 +167,12 @@ export default function ChatPanel({
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: reply },
       ])
-      setCandidateImages([])
-      setCandidateNote(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Upload failed'
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', text: message },
       ])
-      setCandidateNote(null)
     } finally {
       setBusy(false)
     }
@@ -121,39 +186,6 @@ export default function ChatPanel({
     event.target.value = ''
   }
 
-  async function handleCandidateClick(image: CandidateImage) {
-    if (busy) return
-
-    setMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role: 'user',
-        text: `Use web image: ${image.title ?? image.url}`,
-      },
-    ])
-    setBusy(true)
-
-    try {
-      const reply = await onSelectCandidate(image)
-      setMessages((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: 'assistant', text: reply },
-      ])
-      setCandidateImages([])
-      setCandidateNote(null)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to use that image'
-      setMessages((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: 'assistant', text: message },
-      ])
-      setCandidateNote(null)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) return
     event.preventDefault()
@@ -164,7 +196,7 @@ export default function ChatPanel({
     }
   }
 
-  async function handleDrop(event: DragEvent<HTMLFormElement>) {
+  async function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault()
     setDragActive(false)
     if (busy) return
@@ -177,22 +209,105 @@ export default function ChatPanel({
 
   return (
     <div
+      onDragEnter={(event) => {
+        event.preventDefault()
+        if (!busy) setDragActive(true)
+      }}
+      onDragOver={(event) => {
+        event.preventDefault()
+        if (!busy) setDragActive(true)
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDragActive(false)
+      }}
+      onDrop={(event) => void handleDrop(event)}
       style={{
         display: 'grid',
         gap: 0,
         border: '1px solid #d9d9d9',
         borderRadius: 14,
-        background: '#ffffff',
+        background: dragActive ? '#f3f7ff' : '#ffffff',
         boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
         overflow: 'hidden',
       }}
     >
       <div
+        style={{
+          display: 'grid',
+          gap: 8,
+          padding: 12,
+          borderBottom: '1px solid #ececec',
+          background: '#ffffff',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <strong style={{ fontSize: 14 }}>Quick guide</strong>
+          <button
+            type="button"
+            onClick={() => setShowGuide((current) => !current)}
+            style={{
+              border: '1px solid #d0d0d0',
+              background: '#fff',
+              borderRadius: 8,
+              padding: '4px 8px',
+              font: 'inherit',
+              cursor: 'pointer',
+            }}
+          >
+            {showGuide ? 'Hide' : 'Show'}
+          </button>
+        </div>
+
+        {showGuide && (
+          <div
+            style={{
+              display: 'grid',
+              gap: 6,
+              padding: 10,
+              border: '1px solid #e5e5e5',
+              borderRadius: 10,
+              background: '#fafafa',
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{guideContent.title}</div>
+            {guideContent.lines.map((line) => (
+              <div key={line} style={{ fontSize: 12.5, color: '#555', lineHeight: 1.35 }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {quickSuggestions.map((command) => (
+            <button
+              key={command}
+              type="button"
+              onClick={() => void runQuickCommand(command)}
+              disabled={busy}
+              style={{
+                border: '1px solid #d0d0d0',
+                background: '#f8f8f8',
+                borderRadius: 999,
+                padding: '6px 10px',
+                font: 'inherit',
+                fontSize: 12,
+                cursor: busy ? 'default' : 'pointer',
+              }}
+            >
+              {command}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
         ref={logRef}
         style={{
           display: 'grid',
           gap: 8,
-          height: 260,
+          height: 'clamp(180px, 28vh, 260px)',
           overflow: 'auto',
           padding: 12,
           background: '#fafafa',
@@ -213,98 +328,7 @@ export default function ChatPanel({
           >
             {message.text}
           </div>
-        ))}
-
-        {candidateImages.length > 0 && (
-          <div style={{ display: 'grid', gap: 8, paddingTop: 4 }}>
-            <div style={{ display: 'grid', gap: 4 }}>
-              <strong style={{ fontSize: 13 }}>Web image options</strong>
-              {candidateNote && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#556',
-                    background: '#f4f7fb',
-                    border: '1px solid #dde6f2',
-                    borderRadius: 8,
-                    padding: '6px 8px',
-                  }}
-                >
-                  {candidateNote}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'grid', gap: 8, maxHeight: 220, overflow: 'auto' }}>
-              {candidateImages.map((image) => (
-                <button
-                  key={image.id}
-                  type="button"
-                  onClick={() => handleCandidateClick(image)}
-                  disabled={busy}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '60px 1fr',
-                    gap: 10,
-                    alignItems: 'center',
-                    padding: 8,
-                    borderRadius: 8,
-                    border: '1px solid #ddd',
-                    background: 'white',
-                    textAlign: 'left',
-                  }}
-                >
-                  <img
-                    src={image.url}
-                    alt={image.title ?? 'candidate image'}
-                    style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6 }}
-                  />
-                  <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        fontWeight: 600,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {image.title ?? 'Untitled image'}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                      {image.provider && (
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: '#355',
-                            background: '#eef4f7',
-                            border: '1px solid #d9e4ea',
-                            borderRadius: 999,
-                            padding: '2px 6px',
-                            lineHeight: 1.2,
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {image.provider}
-                        </span>
-                      )}
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: '#666',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {image.url}
-                      </span>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        ))} 
       </div>
 
       <input
@@ -317,25 +341,12 @@ export default function ChatPanel({
 
       <form
         onSubmit={handleSubmit}
-        onDragEnter={(event) => {
-          event.preventDefault()
-          if (!busy) setDragActive(true)
-        }}
-        onDragOver={(event) => {
-          event.preventDefault()
-          if (!busy) setDragActive(true)
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-          setDragActive(false)
-        }}
-        onDrop={handleDrop}
         style={{
           display: 'grid',
           gap: 8,
           padding: 12,
           borderTop: '1px solid #e8e8e8',
-          background: dragActive ? '#f3f7ff' : '#ffffff',
+          background: 'transparent',
         }}
       >
         <textarea
@@ -357,6 +368,21 @@ export default function ChatPanel({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
               type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy}
+              style={{
+                border: '1px solid #d0d0d0',
+                background: '#ffffff',
+                borderRadius: 8,
+                padding: '6px 10px',
+                font: 'inherit',
+                cursor: busy ? 'default' : 'pointer',
+              }}
+            >
+              Upload file
+            </button>
+            <button
+              type="button"
               onClick={onGeneratePreview}
               disabled={busy || !canGeneratePreview}
               style={{
@@ -373,7 +399,7 @@ export default function ChatPanel({
             <select
               value={sourceType}
               onChange={(event) =>
-                onSourceTypeChange(event.target.value as 'photo' | 'stitched_photo')
+                onSourceTypeChange(event.target.value as 'photo' | 'stitched_photo' | 'graphic_art')
               }
               style={{
                 border: '1px solid #d0d0d0',
@@ -385,6 +411,7 @@ export default function ChatPanel({
             >
               <option value="photo">Photo</option>
               <option value="stitched_photo">Stitched photo</option>
+              <option value="graphic_art">Graphic / screenshot art</option>
             </select>
           </div>
         </div>
