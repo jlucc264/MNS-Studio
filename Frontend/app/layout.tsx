@@ -10,7 +10,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0 }}>{children}</body>
+      <body
+        style={{
+          margin: 0,
+          fontFamily: 'Georgia, "Times New Roman", serif',
+          color: '#3f382f',
+          background: '#f5f1ea',
+        }}
+      >
+        {children}
+      </body>
     </html>
   )
 }

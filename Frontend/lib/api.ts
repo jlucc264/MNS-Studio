@@ -1,6 +1,15 @@
-const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, '') || 'http://localhost:8000'
-)
+function resolveApiBase() {
+  const configuredBase = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, '')
+  if (configuredBase) return configuredBase
+
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:8000`
+  }
+
+  return 'http://localhost:8000'
+}
+
+const API_BASE = resolveApiBase()
 
 export type VisualizePayload = {
   image_url: string

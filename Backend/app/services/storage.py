@@ -55,8 +55,8 @@ def preview_output_path() -> tuple[Path, str]:
     return filepath, url
 
 
-def finalized_output_path() -> tuple[Path, str]:
-    filename = f"finalized_{uuid4().hex}.pdf"
+def finalized_output_path(label: str = "finalized") -> tuple[Path, str]:
+    filename = f"{label}_{uuid4().hex}.pdf"
     filepath = FINALIZED_DIR / filename
     url = f"/assets/finalized/{filename}"
     return filepath, url

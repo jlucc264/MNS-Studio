@@ -19,7 +19,6 @@ type Props = {
   canGeneratePreview: boolean
   hasPreview: boolean
   sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
-  onSourceTypeChange: (sourceType: 'photo' | 'stitched_photo' | 'graphic_art') => void
 }
 
 export default function ChatPanel({
@@ -29,7 +28,6 @@ export default function ChatPanel({
   canGeneratePreview,
   hasPreview,
   sourceType,
-  onSourceTypeChange,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
@@ -224,7 +222,10 @@ export default function ChatPanel({
       onDrop={(event) => void handleDrop(event)}
       style={{
         display: 'grid',
+        gridTemplateRows: 'auto minmax(0, 1fr) auto',
         gap: 0,
+        height: '100%',
+        minHeight: 0,
         border: '1px solid #d9d9d9',
         borderRadius: 14,
         background: dragActive ? '#f3f7ff' : '#ffffff',
@@ -236,7 +237,7 @@ export default function ChatPanel({
         style={{
           display: 'grid',
           gap: 8,
-          padding: 12,
+          padding: 10,
           borderBottom: '1px solid #ececec',
           background: '#ffffff',
         }}
@@ -307,9 +308,9 @@ export default function ChatPanel({
         style={{
           display: 'grid',
           gap: 8,
-          height: 'clamp(180px, 28vh, 260px)',
+          minHeight: 0,
           overflow: 'auto',
-          padding: 12,
+          padding: 10,
           background: '#fafafa',
         }}
       >
@@ -344,13 +345,13 @@ export default function ChatPanel({
         style={{
           display: 'grid',
           gap: 8,
-          padding: 12,
+          padding: 10,
           borderTop: '1px solid #e8e8e8',
           background: 'transparent',
         }}
       >
         <textarea
-          rows={3}
+          rows={2}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleKeyDown}
@@ -396,23 +397,6 @@ export default function ChatPanel({
             >
               Generate stitch preview
             </button>
-            <select
-              value={sourceType}
-              onChange={(event) =>
-                onSourceTypeChange(event.target.value as 'photo' | 'stitched_photo' | 'graphic_art')
-              }
-              style={{
-                border: '1px solid #d0d0d0',
-                background: '#ffffff',
-                borderRadius: 8,
-                padding: '6px 10px',
-                font: 'inherit',
-              }}
-            >
-              <option value="photo">Photo</option>
-              <option value="stitched_photo">Stitched photo</option>
-              <option value="graphic_art">Graphic / screenshot art</option>
-            </select>
           </div>
         </div>
       </form>

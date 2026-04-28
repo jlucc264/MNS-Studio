@@ -32,6 +32,12 @@ def _rgb_to_reportlab(hex_color: str) -> colors.Color:
     return colors.Color(red / 255, green / 255, blue / 255)
 
 
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return f"{value[:max_chars - 1]}..."
+
+
 def _render_preview_image_from_cells(
     cells: list[list[str]],
     mesh_count: int,
@@ -108,7 +114,6 @@ def _draw_report_page(
     width_inches: float,
     height_inches: float,
     mesh_count: int,
-    color_count: int,
     contrast_level: str,
     palette: list[dict],
     cells: list[list[str]],
@@ -155,7 +160,6 @@ def _draw_report_page(
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
         ("Canvas size", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
         ("Mesh", str(mesh_count)),
-        ("Requested colors", str(color_count)),
         ("Colors used", str(used_colors)),
         ("Total stitches", str(total_stitches)),
         ("Contrast", contrast_level.replace('_', ' ')),
@@ -165,13 +169,13 @@ def _draw_report_page(
     pdf.setFont("Helvetica-Bold", 10)
     pdf.setFillColor(colors.HexColor("#3A413B"))
     for index, (label, value) in enumerate(summary_pairs):
-        column = index // 4
-        row = index % 4
-        x = summary_x + column * 178
+        column = index // 3
+        row = index % 3
+        x = summary_x + column * 180
         y_position = summary_y - row * 18
         pdf.drawString(x, y_position, f"{label}:")
         pdf.setFont("Helvetica", 10)
-        pdf.drawString(x + 82, y_position, value)
+        pdf.drawString(x + 88, y_position, value)
         pdf.setFont("Helvetica-Bold", 10)
 
     y = page_height - 182
@@ -179,13 +183,12 @@ def _draw_report_page(
     pdf.line(margin, y, margin + content_width, y)
     y -= 22
 
-    swatch_x = margin
+    swatch_x = margin + 6
     code_x = swatch_x + 28
-    name_x = margin + 140
-    count_x = page_width - margin - 90
-
+    name_x = margin + 132
+    table_text_color = colors.HexColor("#2D332F")
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.setFillColor(colors.HexColor("#222222"))
+    pdf.setFillColor(table_text_color)
     pdf.drawString(code_x, y, "Code")
     pdf.drawString(name_x, y, "Color")
     pdf.drawRightString(page_width - margin, y, "Stitches")
@@ -196,19 +199,21 @@ def _draw_report_page(
 
     row_height = 24
     swatch_size = 14
+    row_background_height = 20
+    row_text_offset = 5
     pdf.setFont("Helvetica", 10)
 
     for index, row in enumerate(rows):
         if y < margin + 24:
             pdf.showPage()
             pdf.setFillColor(colors.HexColor("#F7F5F0"))
-            pdf.roundRect(margin, page_height - 74, content_width, 40, CARD_RADIUS, fill=1, stroke=0)
+            pdf.roundRect(margin, page_height - 74, content_width, 40, 8, fill=1, stroke=0)
             pdf.setFont("Helvetica-Bold", 16)
             pdf.setFillColor(colors.HexColor("#173F2A"))
             pdf.drawString(margin + 16, page_height - 58, "MNS Studio Finalized Report")
             y = page_height - 98
             pdf.setFont("Helvetica-Bold", 11)
-            pdf.setFillColor(colors.HexColor("#222222"))
+            pdf.setFillColor(table_text_color)
             pdf.drawString(code_x, y, "Code")
             pdf.drawString(name_x, y, "Color")
             pdf.drawRightString(page_width - margin, y, "Stitches")
@@ -219,16 +224,18 @@ def _draw_report_page(
 
         if index % 2 == 0:
             pdf.setFillColor(colors.HexColor("#FBFBFB"))
-            pdf.roundRect(margin - 6, y - 16, content_width + 12, 20, 6, fill=1, stroke=0)
+            pdf.rect(margin, y - row_text_offset - row_background_height / 2, content_width, row_background_height, fill=1, stroke=0)
+
+        row_center_y = y - row_text_offset
 
         pdf.setFillColor(_rgb_to_reportlab(row["hex"]))
-        pdf.rect(swatch_x, y - swatch_size + 3, swatch_size, swatch_size, fill=1, stroke=0)
+        pdf.rect(swatch_x, row_center_y - swatch_size / 2, swatch_size, swatch_size, fill=1, stroke=0)
         pdf.setStrokeColor(colors.HexColor("#B8B8B8"))
-        pdf.rect(swatch_x, y - swatch_size + 3, swatch_size, swatch_size, fill=0, stroke=1)
+        pdf.rect(swatch_x, row_center_y - swatch_size / 2, swatch_size, swatch_size, fill=0, stroke=1)
 
-        pdf.setFillColor(colors.black)
+        pdf.setFillColor(table_text_color)
         pdf.drawString(code_x, y, row["dmc_code"])
-        pdf.drawString(name_x, y, row["dmc_name"])
+        pdf.drawString(name_x, y, _truncate_text(row["dmc_name"], 42))
         pdf.drawRightString(page_width - margin, y, str(row["count"]))
         y -= row_height
 
@@ -240,7 +247,6 @@ def _draw_cover_page(
     width_inches: float,
     height_inches: float,
     mesh_count: int,
-    color_count: int,
     contrast_level: str,
     used_colors: int,
     total_stitches: int,
@@ -297,8 +303,7 @@ def _draw_cover_page(
     stat_pairs = [
         ("Design", f'{width_inches:.1f}" x {height_inches:.1f}"'),
         ("Mesh", str(mesh_count)),
-        ("Requested", str(color_count)),
-        ("Used", str(used_colors)),
+        ("Colors used", str(used_colors)),
         ("Stitches", str(total_stitches)),
         ("Contrast", contrast_level.replace('_', ' ')),
     ]
@@ -367,53 +372,59 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-) -> str:
-    out_path, out_url = finalized_output_path()
+) -> tuple[str, Path]:
+    public_path, public_url = finalized_output_path("finalized")
+    internal_path, _ = finalized_output_path("internal_finalized")
 
     page_size = landscape(letter) if width_inches > height_inches else letter
-    c = canvas.Canvas(str(out_path), pagesize=page_size)
-
     preview_image = _render_preview_image_from_cells(cells, mesh_count, show_grid)
     report_rows = _build_report_rows(cells, palette)
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
 
-    _draw_cover_page(
-        c,
-        page_size,
-        preview_image,
-        width_inches,
-        height_inches,
-        mesh_count,
-        color_count,
-        contrast_level,
-        used_colors,
-        total_stitches,
-    )
+    def draw_public_pages(pdf: canvas.Canvas) -> None:
+        _draw_cover_page(
+            pdf,
+            page_size,
+            preview_image,
+            width_inches,
+            height_inches,
+            mesh_count,
+            contrast_level,
+            used_colors,
+            total_stitches,
+        )
 
-    c.showPage()
-    _draw_report_page(
-        c,
-        page_size,
-        preview_image,
-        width_inches,
-        height_inches,
-        mesh_count,
-        color_count,
-        contrast_level,
-        palette,
-        cells,
-    )
+        pdf.showPage()
+        _draw_report_page(
+            pdf,
+            page_size,
+            preview_image,
+            width_inches,
+            height_inches,
+            mesh_count,
+            contrast_level,
+            palette,
+            cells,
+        )
 
-    c.showPage()
+    public_pdf = canvas.Canvas(str(public_path), pagesize=page_size)
+    draw_public_pages(public_pdf)
+    public_pdf.save()
+
+    internal_pdf = canvas.Canvas(str(internal_path), pagesize=page_size)
+    draw_public_pages(internal_pdf)
+    internal_pdf.showPage()
     true_size_grid_image = _render_preview_image_from_cells(cells, mesh_count, True)
     _draw_true_size_reference_page(
-        c,
+        internal_pdf,
         width_inches,
         height_inches,
         mesh_count,
         true_size_grid_image,
     )
+    internal_pdf.save()
 
-    c.save()
-    return out_url
+    # The public URL is returned to the app for completion tracking; the internal file
+    # is sent by the finalize endpoint and intentionally not exposed in the UI.
+    return public_url, internal_path

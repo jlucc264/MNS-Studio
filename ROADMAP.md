@@ -10,6 +10,7 @@ This roadmap is meant to keep the base product focused and strong before we laye
 - Generate a stitch preview
 - Adjust size, mesh, colors, and source mode
 - Clean up the preview with palette, paint, selection, and merge tools
+- Save and reopen drafts once accounts exist
 - Use a robust non-LLM chat assistant for editing commands, import guidance, and workflow help
 - Finalize and export a trustworthy PDF
 
@@ -18,6 +19,7 @@ This roadmap is meant to keep the base product focused and strong before we laye
 - Use natural-language editing and semantic commands
 - Get AI suggestions for cleanup, palette consolidation, and region edits
 - Use inference to speed up repetitive editing workflows
+- Offer paid plan features through a third-party payment platform instead of custom billing infrastructure
 
 ## Guiding Principle
 
@@ -95,7 +97,9 @@ The base product should be complete enough that a user can finish a project with
   - Preserve dark details
 
 ### 4. Project Continuity
-- Save and reload project state
+- Save and reload project state as drafts
+- Let logged-in users access their saved drafts across sessions/devices
+- Decide whether anonymous local drafts are useful before full account support
 - Preserve more edit history across non-destructive regenerations
 - Make long sessions safer and easier to resume
 
@@ -127,10 +131,17 @@ The base product should be complete enough that a user can finish a project with
 ### 9. UI Refresh
 - Make the site feel less like a raw tool and more like a destination/product
 - Clean up the visual design, spacing, and hierarchy
+- Carry formatting and visual-system improvements through the app consistently
 - Improve responsiveness for smaller screens
 - Decide what “mobile friendly” means:
   - full editing on tablet/desktop
   - lighter review/edit flow on phone if needed
+
+### 10. Website Shell
+- Add a real home/about page outside the editor experience
+- Explain what MNS Studio is, who it is for, and how the workflow works
+- Keep the editor as the primary product surface, but give new users a clearer entry point
+- Make room for future pricing, Pro, examples, and support content
 
 ## Phase 3: AI Readiness
 
@@ -153,10 +164,12 @@ This phase should happen only after the base workflow feels trustworthy.
 - Do not let text parsing become the source of truth
 
 ### 3. Auth + Billing Foundations
-- Accounts
+- Add login/accounts, primarily to support saved drafts and future Pro access
+- Choose an established payment platform instead of building payments from scratch
 - Free vs Pro gating
 - Usage tracking
 - Cost control and logging for premium operations
+- Account-level access to saved drafts, exports, and paid features
 
 ### 4. AI-Safe Backend Surface
 - Dedicated AI endpoints
@@ -183,6 +196,11 @@ This phase should happen only after the base workflow feels trustworthy.
 - Border/text/background/motif targeting
 - Region-aware commands without forcing the user to paint everything manually
 
+### 5. Pro Plan Packaging
+- Decide what belongs in Pro vs the free/base product
+- Gate expensive AI features behind paid access
+- Keep base drafting/export useful enough that Pro feels optional but valuable
+
 ## Suggested Versioning
 
 ### v1.0
@@ -203,9 +221,12 @@ This phase should happen only after the base workflow feels trustworthy.
 - User guide
 - Better finalized report/output flow
 - UI refresh pass
+- Home/about page
 
 ### Pro Beta
 - Auth and plan gating
+- Saved drafts tied to accounts
+- Payment-platform integration
 - Natural-language command layer
 - AI recommendations
 - Limited prompt-to-image generation
@@ -221,6 +242,8 @@ This phase should happen only after the base workflow feels trustworthy.
 7. Build a user guide and clearer help surfaces
 8. Improve finalized output delivery and reporting
 9. Refresh the UI so the site feels more welcoming and polished
+10. Plan login, saved drafts, Pro packaging, and payment-platform integration
+11. Add a home/about page for new visitors
 
 ## Ready-For-Pro Checklist
 
@@ -228,5 +251,7 @@ We should feel good about starting the Pro layer when:
 - A user can complete a full project without AI
 - Export is trusted
 - Edit history is stable
+- Draft saving/reopening has a clear account-backed path
 - Source modes are understandable
+- The payment-platform choice is made
 - The remaining value gap is convenience and intelligence, not correctness

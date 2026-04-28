@@ -1,12 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 type Props = {
   cells: string[][]
   activeColor: string | null
   highlightSelection: boolean
   meshCount: 13 | 18
+  brushDensity: number
   onSelectionChange?: (selection: DesignSelectionRect | null) => void
   onPaintStart: () => void
   onPaintCells: (coords: Array<[number, number]>) => void
@@ -16,6 +17,7 @@ const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.o
 const RULER_THICKNESS = 24
 const PREVIEW_FRAME_WIDTH_UNITS = 13
 const PREVIEW_FRAME_HEIGHT_UNITS = 9
+const ZOOM_BUTTON_STEP = 50
 
 export type DesignSelectionRect = {
   startRow: number
@@ -211,6 +213,7 @@ export default function GridEditor({
   activeColor,
   highlightSelection,
   meshCount,
+  brushDensity,
   onSelectionChange,
   onPaintStart,
   onPaintCells,
@@ -220,6 +223,9 @@ export default function GridEditor({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const zoomLabelRef = useRef<HTMLSpanElement | null>(null)
+  const horizontalRulerTickRefs = useRef<Array<HTMLDivElement | null>>([])
+  const verticalRulerTickRefs = useRef<Array<HTMLDivElement | null>>([])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 640, height: 520 })
@@ -228,7 +234,6 @@ export default function GridEditor({
   const [scrollPosition, setScrollPosition] = useState({ left: 0, top: 0 })
   const [displayMode, setDisplayMode] = useState<'flat' | 'stitched'>('stitched')
   const [isZooming, setIsZooming] = useState(false)
-  const [brushDensity, setBrushDensity] = useState(1)
   const [isPainting, setIsPainting] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
   const [selectionRect, setSelectionRect] = useState<DesignSelectionRect | null>(null)
@@ -246,8 +251,20 @@ export default function GridEditor({
   const overlayCanvasSizeRef = useRef<{ width: number; height: number } | null>(null)
   const liveSelectionRectRef = useRef<DesignSelectionRect | null>(null)
   const zoomSettleTimeoutRef = useRef<number | null>(null)
+  const zoomFrameRef = useRef<number | null>(null)
+  const pendingZoomRef = useRef<{
+    zoom: number
+    origin?: { clientX: number; clientY: number }
+  } | null>(null)
+  const pendingZoomAnchorRef = useRef<{
+    zoom: number
+    stageX: number
+    stageY: number
+    anchorX: number
+    anchorY: number
+  } | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = containerRef.current
     if (!node) return
 
@@ -266,7 +283,7 @@ export default function GridEditor({
     return () => observer.disconnect()
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = toolbarRef.current
     if (!node) return
 
@@ -298,6 +315,9 @@ export default function GridEditor({
     return () => {
       if (zoomSettleTimeoutRef.current !== null) {
         window.clearTimeout(zoomSettleTimeoutRef.current)
+      }
+      if (zoomFrameRef.current !== null) {
+        window.cancelAnimationFrame(zoomFrameRef.current)
       }
     }
   }, [])
@@ -389,34 +409,26 @@ export default function GridEditor({
   )
   const visibleHorizontalTicks = useMemo(
     () =>
-      horizontalRulerTicks
-        .map((tick) => ({ ...tick, position: tick.offset - scrollPosition.left }))
-        .filter((tick) => tick.position >= -32 && tick.position <= previewViewportWidth + 32),
+      horizontalRulerTicks.map((tick) => ({
+        ...tick,
+        position: tick.offset - scrollPosition.left,
+        visible:
+          tick.offset - scrollPosition.left >= -32 &&
+          tick.offset - scrollPosition.left <= previewViewportWidth + 32,
+      })),
     [horizontalRulerTicks, previewViewportWidth, scrollPosition.left]
   )
   const visibleVerticalTicks = useMemo(
     () =>
-      verticalRulerTicks
-        .map((tick) => ({ ...tick, position: tick.offset - scrollPosition.top }))
-        .filter((tick) => tick.position >= -32 && tick.position <= previewViewportHeight + 32),
+      verticalRulerTicks.map((tick) => ({
+        ...tick,
+        position: tick.offset - scrollPosition.top,
+        visible:
+          tick.offset - scrollPosition.top >= -32 &&
+          tick.offset - scrollPosition.top <= previewViewportHeight + 32,
+      })),
     [previewViewportHeight, scrollPosition.top, verticalRulerTicks]
   )
-
-  useEffect(() => {
-    const viewport = viewportRef.current
-    if (!viewport) return
-
-    const syncScroll = () => {
-      setScrollPosition({
-        left: viewport.scrollLeft,
-        top: viewport.scrollTop,
-      })
-    }
-
-    syncScroll()
-    viewport.addEventListener('scroll', syncScroll, { passive: true })
-    return () => viewport.removeEventListener('scroll', syncScroll)
-  }, [zoomPercent, previewViewportHeight, previewViewportWidth])
 
   const buildBrushCoords = useCallback(
     (row: number, col: number) => {
@@ -505,6 +517,49 @@ export default function GridEditor({
     ]
   )
 
+  const updateLiveRulers = useCallback(
+    (nextZoom: number, scrollLeft: number, scrollTop: number) => {
+      const nextCellSize = Math.max(1, (baseCellSize * nextZoom) / 100)
+
+      horizontalRulerTickRefs.current.forEach((tickNode, index) => {
+        if (!tickNode) return
+
+        const position = index * meshCount * nextCellSize - scrollLeft
+        tickNode.style.left = `${position}px`
+        tickNode.style.display =
+          position >= -32 && position <= previewViewportWidth + 32 ? 'block' : 'none'
+      })
+
+      verticalRulerTickRefs.current.forEach((tickNode, index) => {
+        if (!tickNode) return
+
+        const position = index * meshCount * nextCellSize - scrollTop
+        tickNode.style.top = `${position}px`
+        tickNode.style.display =
+          position >= -32 && position <= previewViewportHeight + 32 ? 'block' : 'none'
+      })
+    },
+    [baseCellSize, meshCount, previewViewportHeight, previewViewportWidth]
+  )
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+
+    const syncScroll = () => {
+      updateLiveRulers(zoomPercentRef.current, viewport.scrollLeft, viewport.scrollTop)
+
+      setScrollPosition({
+        left: viewport.scrollLeft,
+        top: viewport.scrollTop,
+      })
+    }
+
+    syncScroll()
+    viewport.addEventListener('scroll', syncScroll, { passive: true })
+    return () => viewport.removeEventListener('scroll', syncScroll)
+  }, [previewViewportHeight, previewViewportWidth, updateLiveRulers])
+
   const updateZoom = useCallback(
     (
       nextZoom: number,
@@ -517,6 +572,7 @@ export default function GridEditor({
       const currentZoom = zoomPercentRef.current
       const clampedZoom = clampZoom(nextZoom)
       if (!viewport || clampedZoom === currentZoom) {
+        zoomPercentRef.current = clampedZoom
         setZoomPercent(clampedZoom)
         return
       }
@@ -524,30 +580,103 @@ export default function GridEditor({
       const rect = viewport.getBoundingClientRect()
       const anchorX = origin ? origin.clientX - rect.left : viewport.clientWidth / 2
       const anchorY = origin ? origin.clientY - rect.top : viewport.clientHeight / 2
-      const contentX = viewport.scrollLeft + anchorX
-      const contentY = viewport.scrollTop + anchorY
-      const zoomRatio = clampedZoom / currentZoom
+      const currentCellSize = Math.max(1, (baseCellSize * currentZoom) / 100)
+      const currentStageWidth = stageCols * currentCellSize
+      const currentStageHeight = stageRows * currentCellSize
+      const currentWrapperWidth = Math.max(previewViewportWidth, Math.round(currentStageWidth))
+      const currentWrapperHeight = Math.max(previewViewportHeight, Math.round(currentStageHeight))
+      const currentGridOriginX = Math.max(0, (currentWrapperWidth - Math.round(currentStageWidth)) / 2)
+      const currentGridOriginY = Math.max(0, (currentWrapperHeight - Math.round(currentStageHeight)) / 2)
+      const anchoredStageX = (viewport.scrollLeft + anchorX - currentGridOriginX) / currentCellSize
+      const anchoredStageY = (viewport.scrollTop + anchorY - currentGridOriginY) / currentCellSize
 
-      setIsZooming(true)
       if (zoomSettleTimeoutRef.current !== null) {
         window.clearTimeout(zoomSettleTimeoutRef.current)
       }
+
+      pendingZoomAnchorRef.current = {
+        zoom: clampedZoom,
+        stageX: anchoredStageX,
+        stageY: anchoredStageY,
+        anchorX,
+        anchorY,
+      }
+
+      setIsZooming(true)
+      zoomPercentRef.current = clampedZoom
       setZoomPercent(clampedZoom)
+      viewport.style.overflowX = clampedZoom > 100 ? 'auto' : 'hidden'
+      viewport.style.overflowY = clampedZoom > 100 ? 'auto' : 'hidden'
 
-      window.requestAnimationFrame(() => {
-        const nextViewport = viewportRef.current
-        if (!nextViewport) return
-
-        nextViewport.scrollLeft = Math.max(0, contentX * zoomRatio - anchorX)
-        nextViewport.scrollTop = Math.max(0, contentY * zoomRatio - anchorY)
-      })
+      if (zoomLabelRef.current) {
+        zoomLabelRef.current.textContent = `${Math.round(clampedZoom)}%`
+      }
 
       zoomSettleTimeoutRef.current = window.setTimeout(() => {
         setIsZooming(false)
         zoomSettleTimeoutRef.current = null
-      }, 140)
+      }, 160)
     },
-    []
+    [baseCellSize, previewViewportHeight, previewViewportWidth, stageCols, stageRows]
+  )
+
+  useLayoutEffect(() => {
+    const pendingAnchor = pendingZoomAnchorRef.current
+    const viewport = viewportRef.current
+    if (!pendingAnchor || !viewport || pendingAnchor.zoom !== zoomPercent) return
+
+    const maxScrollLeft = Math.max(0, wrapperWidth - previewViewportWidth)
+    const maxScrollTop = Math.max(0, wrapperHeight - previewViewportHeight)
+    const nextScrollLeft =
+      gridOriginX + pendingAnchor.stageX * cellSize - pendingAnchor.anchorX
+    const nextScrollTop =
+      gridOriginY + pendingAnchor.stageY * cellSize - pendingAnchor.anchorY
+
+    viewport.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft))
+    viewport.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop))
+    updateLiveRulers(zoomPercent, viewport.scrollLeft, viewport.scrollTop)
+    setScrollPosition({
+      left: viewport.scrollLeft,
+      top: viewport.scrollTop,
+    })
+    pendingZoomAnchorRef.current = null
+  }, [
+    cellSize,
+    gridOriginX,
+    gridOriginY,
+    previewViewportHeight,
+    previewViewportWidth,
+    updateLiveRulers,
+    wrapperHeight,
+    wrapperWidth,
+    zoomPercent,
+  ])
+
+  const scheduleZoom = useCallback(
+    (
+      nextZoom: number,
+      origin?: {
+        clientX: number
+        clientY: number
+      }
+    ) => {
+      pendingZoomRef.current = {
+        zoom: clampZoom(nextZoom),
+        origin,
+      }
+
+      if (zoomFrameRef.current !== null) return
+
+      zoomFrameRef.current = window.requestAnimationFrame(() => {
+        zoomFrameRef.current = null
+        const pendingZoom = pendingZoomRef.current
+        pendingZoomRef.current = null
+        if (!pendingZoom) return
+
+        updateZoom(pendingZoom.zoom, pendingZoom.origin)
+      })
+    },
+    [updateZoom]
   )
 
   const handleCanvasPointerDown = useCallback(
@@ -625,8 +754,9 @@ export default function GridEditor({
 
       event.preventDefault()
       const direction = event.deltaY < 0 ? 1 : -1
-      const magnitude = Math.min(32, Math.max(6, Math.abs(event.deltaY) * 0.08))
-      updateZoom(zoomPercentRef.current + direction * magnitude, {
+      const magnitude = Math.min(54, Math.max(12, Math.abs(event.deltaY) * 0.14))
+      const currentTarget = pendingZoomRef.current?.zoom ?? zoomPercentRef.current
+      scheduleZoom(currentTarget + direction * magnitude, {
         clientX: event.clientX,
         clientY: event.clientY,
       })
@@ -646,7 +776,7 @@ export default function GridEditor({
         scale?: number
       }
       const scale = gestureEvent.scale ?? 1
-      updateZoom(gestureStartZoomRef.current * scale, {
+      scheduleZoom(gestureStartZoomRef.current * scale, {
         clientX: gestureEvent.clientX ?? viewport.getBoundingClientRect().left + viewport.clientWidth / 2,
         clientY: gestureEvent.clientY ?? viewport.getBoundingClientRect().top + viewport.clientHeight / 2,
       })
@@ -665,7 +795,7 @@ export default function GridEditor({
       viewport.removeEventListener('gesturestart', handleGestureStart as EventListener)
       viewport.removeEventListener('gesturechange', handleGestureChange as EventListener)
     }
-  }, [updateZoom])
+  }, [scheduleZoom])
 
   const renderSelection = selectionRect
   const effectiveDisplayMode = isZooming && displayMode === 'stitched' ? 'flat' : displayMode
@@ -677,7 +807,7 @@ export default function GridEditor({
     const context = canvas.getContext('2d')
     if (!context) return
 
-    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.25)
+    const devicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
@@ -741,11 +871,17 @@ export default function GridEditor({
           const x = gridOriginX + col * cellSize
           const y = gridOriginY + row * cellSize
 
+          if (isZooming) {
+            context.fillStyle = color
+            context.fillRect(x, y, cellSize + 0.5, cellSize + 0.5)
+            continue
+          }
+
           drawCanvasCell({
             context,
             activeColor,
             color,
-            cellSize,
+            cellSize: cellSize,
             displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign,
@@ -769,7 +905,7 @@ export default function GridEditor({
             context,
             activeColor,
             color: cells[row][col],
-            cellSize,
+            cellSize: cellSize,
             displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign: true,
@@ -802,13 +938,14 @@ export default function GridEditor({
     stageRows,
     wrapperHeight,
     wrapperWidth,
+    isZooming,
   ])
 
   useEffect(() => {
     const overlayCanvas = overlayCanvasRef.current
     if (!overlayCanvas) return
 
-    const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.25)
+    const devicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
@@ -863,6 +1000,7 @@ export default function GridEditor({
     selectionRect,
     wrapperHeight,
     wrapperWidth,
+    isZooming,
   ])
 
   return (
@@ -938,48 +1076,24 @@ export default function GridEditor({
           </div>
           <button
             type="button"
-            onClick={() => updateZoom(zoomPercent - 25)}
-            disabled={zoomPercent <= 100}
+            onClick={() => scheduleZoom(zoomPercentRef.current - ZOOM_BUTTON_STEP)}
+            disabled={zoomPercentRef.current <= 100}
           >
             -
           </button>
-          <span style={{ minWidth: 52, textAlign: 'center', fontSize: 14 }}>
+          <span ref={zoomLabelRef} style={{ minWidth: 52, textAlign: 'center', fontSize: 14 }}>
             {Math.round(zoomPercent)}%
           </span>
           <button
             type="button"
-            onClick={() => updateZoom(zoomPercent + 25)}
-            disabled={zoomPercent >= 400}
+            onClick={() => scheduleZoom(zoomPercentRef.current + ZOOM_BUTTON_STEP)}
+            disabled={zoomPercentRef.current >= 400}
           >
             +
           </button>
-          <button type="button" onClick={() => updateZoom(100)} disabled={zoomPercent === 100}>
+          <button type="button" onClick={() => scheduleZoom(100)} disabled={zoomPercentRef.current === 100}>
             Reset
           </button>
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              color: '#333',
-            }}
-          >
-            Brush
-            <input
-              type="range"
-              min={1}
-              max={5}
-              step={1}
-              value={brushDensity}
-              onChange={(event) => {
-                setBrushDensity(Number(event.target.value))
-                lastPaintedCellRef.current = null
-              }}
-              disabled={!activeColor}
-            />
-            <span style={{ minWidth: 14, textAlign: 'right' }}>{brushDensity}</span>
-          </label>
         </div>
       </div>
 
@@ -1031,10 +1145,14 @@ export default function GridEditor({
             {visibleHorizontalTicks.map((tick) => (
               <div
                 key={`viewport-ruler-x-${tick.index}`}
+                ref={(node) => {
+                  horizontalRulerTickRefs.current[tick.index] = node
+                }}
                 style={{
                   position: 'absolute',
                   left: tick.position,
                   top: 0,
+                  display: tick.visible ? 'block' : 'none',
                   transform: 'translateX(-0.5px)',
                 }}
               >
@@ -1086,10 +1204,14 @@ export default function GridEditor({
             {visibleVerticalTicks.map((tick) => (
               <div
                 key={`viewport-ruler-y-${tick.index}`}
+                ref={(node) => {
+                  verticalRulerTickRefs.current[tick.index] = node
+                }}
                 style={{
                   position: 'absolute',
                   top: tick.position,
                   left: 0,
+                  display: tick.visible ? 'block' : 'none',
                   transform: 'translateY(-0.5px)',
                 }}
               >
@@ -1154,25 +1276,33 @@ export default function GridEditor({
                 position: 'relative',
               }}
             >
-              <canvas
-                ref={canvasRef}
-                onPointerDown={handleCanvasPointerDown}
-                onPointerMove={handleCanvasPointerMove}
+              <div
                 style={{
-                  display: 'block',
-                  cursor: activeColor ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
-                  touchAction: 'pan-x pan-y',
+                  width: '100%',
+                  height: '100%',
+                  position: 'relative',
                 }}
-              />
-              <canvas
-                ref={overlayCanvasRef}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'block',
-                  pointerEvents: 'none',
-                }}
-              />
+              >
+                <canvas
+                  ref={canvasRef}
+                  onPointerDown={handleCanvasPointerDown}
+                  onPointerMove={handleCanvasPointerMove}
+                  style={{
+                    display: 'block',
+                    cursor: activeColor ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    touchAction: 'pan-x pan-y',
+                  }}
+                />
+                <canvas
+                  ref={overlayCanvasRef}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'block',
+                    pointerEvents: 'none',
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>

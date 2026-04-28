@@ -1,6 +1,15 @@
 'use client'
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import {
+  type DragEvent,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import ChatPanel from '../components/ChatPanel'
 import GuideDialog from '../components/GuideDialog'
 import GridEditor, { type DesignSelectionRect } from '../components/GridEditor'
@@ -238,7 +247,7 @@ function collapsePaletteShades(
 
   const nextCells = sourceCells.map((row) => row.map((cell) => dominantMap.get(cell) ?? cell))
   const paletteByHex = new Map(sourcePalette.map((color) => [color.hex, color]))
-  const nextPalette = sortedPalette
+  const nextPalette = sourcePalette
     .filter((color) => dominantMap.get(color.hex) === color.hex)
     .map((color) => paletteByHex.get(color.hex) ?? color)
 
@@ -405,7 +414,8 @@ export default function HomePage() {
   const [redoStack, setRedoStack] = useState<ColorEditSnapshot[]>([])
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
-  const [highlightSelection, setHighlightSelection] = useState(false)
+  const [toolMode, setToolMode] = useState<'paint' | 'select'>('paint')
+  const [brushDensity, setBrushDensity] = useState(1)
   const [selectedRegion, setSelectedRegion] = useState<DesignSelectionRect | null>(null)
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
@@ -416,12 +426,13 @@ export default function HomePage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(1280)
-  const [showMobileAssistant, setShowMobileAssistant] = useState(false)
-  const [showMobileSettings, setShowMobileSettings] = useState(false)
-  const [showMobilePalette, setShowMobilePalette] = useState(false)
+  const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
+  const [showChatDrawer, setShowChatDrawer] = useState(false)
+  const [stagedUploadDragActive, setStagedUploadDragActive] = useState(false)
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
+  const stagedUploadInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const updateViewportWidth = () => {
@@ -470,7 +481,6 @@ export default function HomePage() {
   const paletteCountsByHex = useMemo(() => countCellsByHex(deferredCells), [deferredCells])
   const displayColorCounts = paletteCountsByHex
   const displayEnabledColorHexes = enabledColorHexes
-  const requestedColorCount = displayEnabledColorHexes.length
   const hasPendingPreviewSettings = useMemo(
     () => hasGeneratedPreview && getSettingsKey(draftSettings) !== getSettingsKey(lastSettings),
     [draftSettings, hasGeneratedPreview, lastSettings]
@@ -586,6 +596,7 @@ export default function HomePage() {
     setLockAspectRatio(true)
     setHasGeneratedPreview(false)
     setViewMode('original')
+    setActiveWorkflowStep(2)
 
     const resolvedUrl = assetUrl(url)
     if (!resolvedUrl) {
@@ -803,6 +814,7 @@ export default function HomePage() {
       setFinalPdfPath(null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
+      setActiveWorkflowStep(2)
       setSelectedRegion(null)
     } finally {
       if (requestId === latestApplyRequestIdRef.current) {
@@ -859,16 +871,19 @@ export default function HomePage() {
       nextRemovalMode
     )
     const collapsed = collapsePaletteShades(nextCells, nextPreviewPalette)
+    const resolvedEnabledColorHexes = nextEnabledColorHexes.filter((hex) =>
+      collapsed.palette.some((color) => color.hex === hex)
+    )
 
     setPreviewImagePath(originalPreviewImagePath)
     setPreviewPalette(collapsed.palette)
-    setEnabledColorHexes(nextEnabledColorHexes)
+    setEnabledColorHexes(resolvedEnabledColorHexes)
     setCells(collapsed.cells)
     setRemovalMode(nextRemovalMode)
     setActivePaintColor((current) => {
       if (!current) return collapsed.palette[0]?.hex ?? '#FFFFFF'
       if (current === '#FFFFFF') return current
-      return nextEnabledColorHexes.includes(current) ? current : collapsed.palette[0]?.hex ?? '#FFFFFF'
+      return resolvedEnabledColorHexes.includes(current) ? current : collapsed.palette[0]?.hex ?? '#FFFFFF'
     })
     setViewMode('stitch')
     setFinalPdfPath(null)
@@ -876,12 +891,22 @@ export default function HomePage() {
 
   function disableColorHex(hex: string) {
     if (!enabledColorHexes.includes(hex)) return
+    if ((paletteCountsByHex[hex] ?? 0) === 0) {
+      setEnabledColorHexes(enabledColorHexes.filter((item) => item !== hex))
+      return
+    }
+
     pushUndoSnapshot()
     applyEnabledPalette(enabledColorHexes.filter((item) => item !== hex))
   }
 
   function enableColorHex(hex: string) {
     if (enabledColorHexes.includes(hex)) return
+    if ((paletteCountsByHex[hex] ?? 0) === 0) {
+      setEnabledColorHexes(Array.from(new Set([...enabledColorHexes, hex])))
+      return
+    }
+
     pushUndoSnapshot()
     applyEnabledPalette(Array.from(new Set([...enabledColorHexes, hex])))
   }
@@ -1729,9 +1754,28 @@ export default function HomePage() {
     }
   }
 
+  async function handleStagedUploadDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setStagedUploadDragActive(false)
+    if (loading) return
+
+    const file = event.dataTransfer.files?.[0]
+    if (!file || !file.type.startsWith('image/')) return
+
+    await handleChatUpload(file)
+  }
+
   async function handleFinalize() {
     const settingsForFinalize = lastSettings
-    if (!previewImagePath || !settingsForFinalize || !cells.length || hasPendingPreviewSettings) return
+    if (
+      finalPdfPath ||
+      !previewImagePath ||
+      !settingsForFinalize ||
+      !cells.length ||
+      hasPendingPreviewSettings
+    ) {
+      return
+    }
 
     setLoading(true)
     try {
@@ -1740,7 +1784,7 @@ export default function HomePage() {
         width_inches: settingsForFinalize.width_inches,
         height_inches: settingsForFinalize.height_inches,
         mesh_count: settingsForFinalize.mesh_count,
-        color_count: requestedColorCount,
+        color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
         show_grid: settingsForFinalize.show_grid,
         palette: currentDesignPalette,
@@ -1750,12 +1794,11 @@ export default function HomePage() {
 
       setFinalPdfPath(result.pdf_url)
       setShowFinalizeModal(false)
+      setActiveWorkflowStep(3)
     } finally {
       setLoading(false)
     }
   }
-
-  const desktopSettingsVisible = !isMobile && !isPreviewExpanded
 
   const statusBlock = (
     <>
@@ -1767,9 +1810,9 @@ export default function HomePage() {
         </p>
       )}
 
-      {finalPdfPath && (
+      {finalPdfPath && !loading && (
         <a href={assetUrl(finalPdfPath) ?? '#'} target="_blank" rel="noreferrer">
-          Download finalized PDF
+          Download finalized PDF report
         </a>
       )}
     </>
@@ -1783,9 +1826,6 @@ export default function HomePage() {
       canGeneratePreview={Boolean(activeImagePath)}
       hasPreview={Boolean(previewImagePath && cells.length)}
       sourceType={draftSettings.source_type}
-      onSourceTypeChange={(sourceType) =>
-        setDraftSettings((current) => applySourceTypeDefaults(current, sourceType))
-      }
     />
   )
 
@@ -1812,7 +1852,6 @@ export default function HomePage() {
       <PreviewControls
         importedAspectRatio={importedAspectRatio}
         settings={draftSettings}
-        actualColorCount={displayPalette.length}
         lockAspectRatio={lockAspectRatio}
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
@@ -1820,225 +1859,599 @@ export default function HomePage() {
     </div>
   )
 
-  const paletteShell = (
-    <aside
+  const workflowSteps = [
+    { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
+    { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
+    { id: 3 as const, label: 'Finalize', complete: Boolean(finalPdfPath) },
+  ]
+
+  const btnPrimary = {
+    padding: '10px 20px',
+    borderRadius: 8,
+    border: '1px solid #5c7856',
+    background: '#6e8d67',
+    color: '#fff',
+    fontFamily: 'inherit',
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: 'pointer',
+    lineHeight: 1.3,
+  } as const
+
+  const btnSecondary = {
+    padding: '8px 14px',
+    borderRadius: 8,
+    border: '1px solid #d0c9bf',
+    background: '#fff',
+    color: '#3f382f',
+    fontFamily: 'inherit',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    lineHeight: 1.3,
+  } as const
+  const previewStatsSettings = hasGeneratedPreview ? lastSettings : null
+  const previewDesignLabel = previewStatsSettings
+    ? `${previewStatsSettings.width_inches.toFixed(1)}" × ${previewStatsSettings.height_inches.toFixed(1)}"`
+    : 'N/A'
+  const previewCanvasLabel = previewStatsSettings
+    ? `${(previewStatsSettings.width_inches + 2).toFixed(1)}" × ${(previewStatsSettings.height_inches + 2).toFixed(1)}"`
+    : 'N/A'
+  const previewStitchesLabel = previewStatsSettings
+    ? `${Math.round(previewStatsSettings.width_inches * previewStatsSettings.mesh_count)} × ${Math.round(
+        previewStatsSettings.height_inches * previewStatsSettings.mesh_count
+      )}`
+    : 'N/A'
+  const previewMeshLabel = previewStatsSettings ? `${previewStatsSettings.mesh_count}ct` : 'N/A'
+
+  const previewToolbar = (
+    <div
       style={{
-        display: 'grid',
-        gap: 16,
-        alignContent: 'start',
-        minWidth: 0,
-        width: '100%',
-        maxWidth: isMobile ? '100%' : 260,
-        height: '100%',
-        minHeight: 0,
-        overflow: 'hidden',
-        padding: 10,
-        boxSizing: 'border-box',
-        border: '1px solid #d9d9d9',
-        borderRadius: 14,
-        background: '#fbfbfb',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+        display: 'flex',
+        gap: 18,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '10px 14px',
+        borderBottom: '1px solid #e8e4db',
+        background: '#fffdf8',
+        flexWrap: 'wrap',
       }}
     >
-        <PalettePanel
-          colors={displayPalette}
-          colorCount={draftSettings.color_count}
-          activeColor={activePaintColor}
-          enabledColorHexes={displayEnabledColorHexes}
-        colorCountsByHex={displayColorCounts}
-        highlightSelection={highlightSelection}
-        hasSelectedRegion={Boolean(selectedRegion)}
-        selectedRegionCount={selectedRegionCount}
-        removalMode={removalMode}
-        selectionMergeSuggestions={selectionMergeSuggestions}
-        selectionOtherColors={selectionOtherColors}
-        onApplyColorToSelection={handleApplyColorToSelection}
-        onClearSelection={handleClearSelection}
-        onEyedropperSelection={() => void handleEyedropperSelection()}
-        onSelect={(color) => setActivePaintColor(color.hex)}
-          onHighlightSelectionChange={setHighlightSelection}
-          onToggleColorEnabled={handleToggleColorEnabled}
-          onEnableAll={handleEnableAllColors}
-          onColorCountChange={(nextCount) => updateSettings({ color_count: nextCount })}
-          onAutoReduceToCount={handleAutoReduceColors}
-        onRemovalModeChange={handleRemovalModeChange}
-        moreColors={allDmcColors.filter(
-          (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
-        )}
-      />
-    </aside>
+      <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>DESIGN</div>
+          <strong style={{ fontSize: 13 }}>{previewDesignLabel}</strong>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>CANVAS</div>
+          <strong style={{ fontSize: 13 }}>{previewCanvasLabel}</strong>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>STITCHES</div>
+          <strong style={{ fontSize: 13 }}>{previewStitchesLabel}</strong>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#6d8568', fontWeight: 700 }}>MESH</div>
+          <strong style={{ fontSize: 13, color: '#5f7f5a' }}>{previewMeshLabel}</strong>
+        </div>
+      </div>
+
+      <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)} style={btnSecondary}>
+        {isPreviewExpanded ? 'Collapse preview' : 'Expand preview'}
+      </button>
+    </div>
   )
+
+  const leftPanelContent = (() => {
+    if (activeWorkflowStep === 1) {
+      return (
+        <>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
+              Upload Image
+            </h2>
+            <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
+              Start with a photo, screenshot, or artwork file.
+            </p>
+          </div>
+          <div
+            onDragEnter={(event) => {
+              event.preventDefault()
+              if (!loading) setStagedUploadDragActive(true)
+            }}
+            onDragOver={(event) => {
+              event.preventDefault()
+              if (!loading) setStagedUploadDragActive(true)
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+              setStagedUploadDragActive(false)
+            }}
+            onDrop={(event) => void handleStagedUploadDrop(event)}
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 18,
+              border: stagedUploadDragActive ? '1px solid #6e8d67' : '1px dashed #d5ccbf',
+              borderRadius: 14,
+              background: stagedUploadDragActive ? '#f0f6ee' : '#fff',
+              boxShadow: '0 10px 24px rgba(44, 37, 30, 0.06)',
+            }}
+          >
+            <input
+              ref={stagedUploadInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void handleChatUpload(file)
+                event.target.value = ''
+              }}
+            />
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => stagedUploadInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  stagedUploadInputRef.current?.click()
+                }
+              }}
+              style={{
+                display: 'grid',
+                placeItems: 'center',
+                gap: 8,
+                minHeight: 150,
+                padding: 18,
+                borderRadius: 12,
+                background: '#f8f5ef',
+                color: '#6f665b',
+                textAlign: 'center',
+                cursor: loading ? 'default' : 'pointer',
+              }}
+            >
+              <strong style={{ color: '#3f382f', fontSize: 18 }}>Drop image file here</strong>
+              <span>or click to choose a file</span>
+            </div>
+            <button type="button" onClick={() => setShowChatDrawer(true)} style={btnSecondary}>
+              Import URL in chat
+            </button>
+            {activeImagePath && <p style={{ margin: 0, color: '#5f7f5a' }}>Image loaded.</p>}
+          </div>
+          {statusBlock}
+          {activeImagePath && (
+            <button
+              type="button"
+              onClick={() => setActiveWorkflowStep(2)}
+              style={btnPrimary}
+            >
+              Continue to Design →
+            </button>
+          )}
+        </>
+      )
+    }
+
+    if (activeWorkflowStep === 2) {
+      return (
+        <>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
+              Design
+            </h2>
+            <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
+              Set size, mesh, and source mode. Paint colors on the right.
+            </p>
+          </div>
+          {settingsPanel}
+          <button
+            type="button"
+            onClick={() => void handleApply(draftSettings)}
+            disabled={!activeImagePath || loading}
+            style={btnPrimary}
+          >
+            {hasGeneratedPreview ? 'Regenerate preview' : 'Generate stitch preview'}
+          </button>
+          {statusBlock}
+          {hasGeneratedPreview && !finalPdfPath && (
+            <button
+              type="button"
+              onClick={() => setActiveWorkflowStep(3)}
+              style={btnSecondary}
+            >
+              Continue to Finalize →
+            </button>
+          )}
+        </>
+      )
+    }
+
+    return (
+      <>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
+            Finalize
+          </h2>
+          <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
+            Generate the final two-page PDF report when the canvas looks right.
+          </p>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gap: 8,
+            padding: 16,
+            border: '1px solid #e8e2d7',
+            borderRadius: 14,
+            background: '#fff',
+            fontSize: 14,
+          }}
+        >
+          <div><strong>Size:</strong> {lastSettings?.width_inches ?? draftSettings.width_inches}" x {lastSettings?.height_inches ?? draftSettings.height_inches}"</div>
+          <div><strong>Mesh:</strong> {lastSettings?.mesh_count ?? draftSettings.mesh_count}</div>
+          <div><strong>Colors used:</strong> {currentDesignPalette.length}</div>
+          <div><strong>Total stitches:</strong> {currentDesignStitchCount}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowFinalizeModal(true)}
+          disabled={!previewImagePath || !cells.length || hasPendingPreviewSettings || loading || Boolean(finalPdfPath)}
+          style={btnPrimary}
+        >
+          Finalize & Export PDF
+        </button>
+        {statusBlock}
+      </>
+    )
+  })()
 
   return (
     <main
       style={{
         display: 'grid',
-        gridTemplateColumns: isMobile
-          ? 'minmax(0, 1fr)'
-          : isPreviewExpanded
-            ? 'minmax(0, 1fr) clamp(220px, 22vw, 260px)'
-            : 'minmax(250px, 290px) minmax(0, 760px) clamp(220px, 22vw, 260px)',
-        gridAutoRows: isMobile ? 'auto' : undefined,
+        gridTemplateRows: '72px minmax(0, 1fr) auto',
         minHeight: '100vh',
-        height: isMobile ? 'auto' : '100vh',
-        gap: 14,
-        padding: isMobile ? 12 : 16,
-        fontFamily: 'Arial, sans-serif',
-        alignItems: 'start',
-        overflow: isMobile ? 'auto' : 'hidden',
-        justifyContent: 'center',
+        height: '100vh',
+        overflow: 'hidden',
         boxSizing: 'border-box',
         width: '100%',
+        background: '#f5f1ea',
+        color: '#3f382f',
       }}
     >
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
 
-      {!isMobile && !isPreviewExpanded && (
-        <section
-          style={{
-            display: 'grid',
-            gap: 10,
-            alignContent: 'start',
-            minWidth: 0,
-            height: '100%',
-            overflow: 'hidden',
-          }}
-        >
-          <h1 style={{ margin: 0, fontSize: 26, lineHeight: 1.05 }}>MNS Studio</h1>
-
-          {chatPanel}
-          {statusBlock}
-        </section>
-      )}
-
-      <section
+      <nav
         style={{
-          display: 'grid',
-          gridTemplateRows: isMobile
-            ? 'auto minmax(320px, 62vh) auto auto auto auto'
-            : isPreviewExpanded
-              ? 'auto minmax(0, 1fr) auto'
-              : 'auto minmax(0, 1fr) auto auto',
-          gap: isMobile ? 10 : isPreviewExpanded ? 6 : 8,
-          minWidth: 0,
-          width: '100%',
-          height: isMobile ? 'auto' : '100%',
-          overflow: isMobile ? 'visible' : 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 18,
+          padding: '14px 24px',
+          borderBottom: '1px solid #e7e1d8',
+          background: '#fffdf8',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: isMobile ? 'space-between' : 'flex-end',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          {isMobile && <h1 style={{ margin: 0, fontSize: 26, lineHeight: 1.05 }}>MNS Studio</h1>}
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => setShowGuideDialog(true)}>
-              How it works
-            </button>
-            {isMobile ? (
-              <>
-                <button type="button" onClick={() => setShowMobileAssistant((current) => !current)}>
-                  {showMobileAssistant ? 'Hide assistant' : 'Show assistant'}
-                </button>
-                <button type="button" onClick={() => setShowMobileSettings((current) => !current)}>
-                  {showMobileSettings ? 'Hide settings' : 'Show settings'}
-                </button>
-                <button type="button" onClick={() => setShowMobilePalette((current) => !current)}>
-                  {showMobilePalette ? 'Hide palette' : 'Show palette'}
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)}>
-                {isPreviewExpanded ? 'Show chat and sizing' : 'Expand preview'}
-              </button>
-            )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          <div
+            aria-hidden="true"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 10px)',
+              gap: 3,
+              padding: 2,
+            }}
+          >
+            {Array.from({ length: 9 }, (_, index) => (
+              <span
+                key={index}
+                style={{
+                  width: 10,
+                  height: 10,
+                  border: '2px solid #111',
+                  borderRadius: 2,
+                  boxSizing: 'border-box',
+                }}
+              />
+            ))}
           </div>
-        </div>
-
-        <div
-          style={{
-            minWidth: 0,
-            minHeight: 0,
-            height: '100%',
-            overflow: 'hidden',
-          }}
-        >
-          {shouldShowStitchGrid ? (
-            <GridEditor
-              cells={cells}
-              activeColor={activePaintColor}
-              highlightSelection={highlightSelection}
-              meshCount={lastSettings?.mesh_count ?? 13}
-              onSelectionChange={setSelectedRegion}
-              onPaintStart={pushUndoSnapshot}
-              onPaintCells={handlePaintCells}
-            />
-          ) : (
-            <ImagePanel
-              imageUrl={displayedImage ?? lastVisibleImageUrl}
-              title={isPreviewExpanded ? '' : 'Original image'}
-            />
+          <strong style={{ fontSize: 25, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
+          {!isMobile && <span style={{ color: '#d8d0c4' }}>|</span>}
+          {!isMobile && (
+            <div style={{ display: 'flex', gap: 28, color: '#7f776d', fontWeight: 600 }}>
+              <button type="button" disabled style={{ border: 0, background: 'transparent', font: 'inherit', color: '#9a9288' }}>
+                Projects
+              </button>
+              <button type="button" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#3f382f', fontWeight: 700 }}>
+                Active Canvas
+              </button>
+            </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <button onClick={() => setViewMode('original')}>Original</button>
-          <button onClick={() => setViewMode('stitch')} disabled={!previewImagePath}>
-            Stitch preview
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+          <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
+            How it works
           </button>
-          <button onClick={handleUndoColorChange} disabled={!undoStack.length}>
-            Undo
+          <button type="button" disabled style={{ ...btnSecondary, opacity: 0.5 }}>
+            Save Draft
           </button>
-          <button onClick={handleRedoColorChange} disabled={!redoStack.length}>
-            Redo
-          </button>
-          <button onClick={handleResetColorChanges} disabled={!previewImagePath}>
-            Reset
-          </button>
-          <button
-            onClick={() => setShowFinalizeModal(true)}
-            disabled={!previewImagePath || !cells.length || hasPendingPreviewSettings || loading}
-          >
-            Finalize
-          </button>
+          {!isMobile && (
+            <div style={{ width: 42, height: 42, borderRadius: '50%', background: '#eee8e1', display: 'grid', placeItems: 'center', fontWeight: 700 }}>
+              EW
+            </div>
+          )}
         </div>
+      </nav>
 
-        {isMobile && showMobileAssistant && (
-          <div style={{ display: 'grid', gap: 10 }}>
-            {chatPanel}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile
+            ? 'minmax(0, 1fr)'
+            : isPreviewExpanded && activeWorkflowStep === 2
+              ? 'minmax(0, 1fr) minmax(240px, 280px)'
+              : isPreviewExpanded
+                ? 'minmax(0, 1fr)'
+                : activeWorkflowStep === 2
+                  ? 'minmax(280px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
+                  : 'minmax(300px, 380px) minmax(0, 1fr)',
+          minHeight: 0,
+          overflow: 'hidden',
+        }}
+      >
+        {!isPreviewExpanded && (
+          <aside
+          style={{
+            display: 'grid',
+            gridTemplateRows: 'auto minmax(0, 1fr)',
+            borderRight: '1px solid #e0d9cf',
+            background: '#fffdf8',
+            minWidth: 0,
+            minHeight: 0,
+          }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
+            {workflowSteps.map((step) => {
+              const active = activeWorkflowStep === step.id
+              const locked = Boolean(finalPdfPath) && step.id < 3
+              return (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => { if (!locked) setActiveWorkflowStep(step.id) }}
+                  disabled={locked}
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    justifyItems: 'center',
+                    border: 0,
+                    background: 'transparent',
+                    color: active ? '#3f382f' : '#8a8177',
+                    fontWeight: active ? 700 : 600,
+                    fontSize: 12,
+                    cursor: locked ? 'default' : 'pointer',
+                    opacity: locked ? 0.45 : 1,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: '50%',
+                      display: 'grid',
+                      placeItems: 'center',
+                      background: step.complete ? '#dfe8dd' : active ? '#6e8d67' : '#ede9e2',
+                      color: step.complete ? '#6e8d67' : active ? '#fff' : '#8a8177',
+                      fontWeight: 800,
+                    }}
+                  >
+                    {step.complete ? '✓' : step.id}
+                  </span>
+                  <span>{step.label}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: 22,
+              alignContent: 'start',
+              padding: 24,
+              minHeight: 0,
+              overflow: 'auto',
+            }}
+          >
+            {leftPanelContent}
+          </div>
+        </aside>
+        )}
+
+        <section
+          style={{
+            display: 'grid',
+            gridTemplateRows: 'auto minmax(0, 1fr) auto',
+            minHeight: 0,
+            minWidth: 0,
+            overflow: 'hidden',
+            background: '#ebe6dd',
+          }}
+        >
+          {previewToolbar}
+
+          <div
+            style={{
+              minWidth: 0,
+              minHeight: 0,
+              height: '100%',
+              overflow: 'hidden',
+              position: 'relative',
+              padding: 12,
+              boxSizing: 'border-box',
+            }}
+          >
+            {cells.length > 0 && (
+              <div
+                style={{
+                  position: shouldShowStitchGrid ? 'relative' : 'absolute',
+                  inset: shouldShowStitchGrid ? undefined : 12,
+                  width: '100%',
+                  height: '100%',
+                  visibility: shouldShowStitchGrid ? 'visible' : 'hidden',
+                  pointerEvents: shouldShowStitchGrid ? 'auto' : 'none',
+                }}
+              >
+                <GridEditor
+                  cells={cells}
+                  activeColor={activePaintColor}
+                  highlightSelection={toolMode === 'select'}
+                  meshCount={lastSettings?.mesh_count ?? 13}
+                  brushDensity={brushDensity}
+                  onSelectionChange={setSelectedRegion}
+                  onPaintStart={pushUndoSnapshot}
+                  onPaintCells={handlePaintCells}
+                />
+              </div>
+            )}
+
             <div
               style={{
-                display: 'grid',
-                gap: 8,
-                padding: 10,
-                border: '1px solid #d9d9d9',
-                borderRadius: 12,
-                background: '#fbfbfb',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+                position: shouldShowStitchGrid ? 'absolute' : 'relative',
+                inset: shouldShowStitchGrid ? 12 : undefined,
+                width: '100%',
+                height: '100%',
+                visibility: shouldShowStitchGrid ? 'hidden' : 'visible',
+                pointerEvents: shouldShowStitchGrid ? 'none' : 'auto',
               }}
             >
-              {statusBlock}
+              <ImagePanel
+                imageUrl={displayedImage ?? lastVisibleImageUrl}
+                title={isPreviewExpanded ? '' : 'Original image'}
+              />
             </div>
           </div>
+
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+              padding: '10px 14px',
+              borderTop: '1px solid #ded8cf',
+              background: '#fffdf8',
+            }}
+          >
+            <button type="button" onClick={() => setViewMode('original')} style={btnSecondary}>Original</button>
+            <button type="button" onClick={() => setViewMode('stitch')} disabled={!previewImagePath} style={btnSecondary}>
+              Stitch preview
+            </button>
+            <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>
+              Undo
+            </button>
+            <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>
+              Redo
+            </button>
+            <button type="button" onClick={handleResetColorChanges} disabled={!previewImagePath} style={btnSecondary}>
+              Reset
+            </button>
+          </div>
+        </section>
+
+        {!isMobile && activeWorkflowStep === 2 && (
+          <aside
+            style={{
+              display: 'grid',
+              gridTemplateRows: 'minmax(0, 1fr)',
+              borderLeft: '1px solid #e0d9cf',
+              background: '#fffdf8',
+              minWidth: 0,
+              minHeight: 0,
+              overflow: 'hidden',
+              padding: '14px 12px',
+              boxSizing: 'border-box',
+            }}
+          >
+            <PalettePanel
+              colors={displayPalette}
+              colorCount={draftSettings.color_count}
+              activeColor={activePaintColor}
+              enabledColorHexes={displayEnabledColorHexes}
+              colorCountsByHex={displayColorCounts}
+              toolMode={toolMode}
+              onToolModeChange={(mode) => {
+                setToolMode(mode)
+                if (mode === 'paint') setSelectedRegion(null)
+              }}
+              brushDensity={brushDensity}
+              onBrushDensityChange={setBrushDensity}
+              hasSelectedRegion={Boolean(selectedRegion)}
+              selectedRegionCount={selectedRegionCount}
+              removalMode={removalMode}
+              selectionMergeSuggestions={selectionMergeSuggestions}
+              selectionOtherColors={selectionOtherColors}
+              onApplyColorToSelection={handleApplyColorToSelection}
+              onClearSelection={handleClearSelection}
+              onEyedropperSelection={() => void handleEyedropperSelection()}
+              onSelect={(color) => setActivePaintColor(color.hex)}
+              onToggleColorEnabled={handleToggleColorEnabled}
+              onEnableAll={handleEnableAllColors}
+              onColorCountChange={(nextCount) => updateSettings({ color_count: nextCount })}
+              onAutoReduceToCount={handleAutoReduceColors}
+              onRemovalModeChange={handleRemovalModeChange}
+              moreColors={allDmcColors.filter(
+                (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
+              )}
+            />
+          </aside>
         )}
+      </div>
 
-        {((!isMobile && desktopSettingsVisible) || (isMobile && showMobileSettings)) && settingsPanel}
+      <section
+        style={{
+          borderTop: '1px solid #e0d9cf',
+          background: '#fffdf8',
+          height: showChatDrawer ? 372 : 64,
+          display: 'grid',
+          gridTemplateRows: '64px minmax(0, 1fr)',
+          minHeight: 0,
+          overflow: 'hidden',
+          transition: 'height 160ms ease',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setShowChatDrawer((current) => !current)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 24px',
+            border: 0,
+            background: 'transparent',
+            textAlign: 'left',
+            cursor: 'pointer',
+          }}
+        >
+          <span style={{ width: 36, height: 36, borderRadius: '50%', background: '#e5eee2', display: 'grid', placeItems: 'center', color: '#6e8d67', fontWeight: 800, fontSize: 22, lineHeight: 1 }}>
+            ^
+          </span>
+          <span style={{ display: 'grid', gap: 2 }}>
+            <strong style={{ letterSpacing: 1, color: '#8a8177', fontSize: 12 }}>HELP</strong>
+            <span style={{ fontSize: 17 }}>Click to Expand Chat</span>
+          </span>
+        </button>
 
-        {isMobile && showMobilePalette && (
-          <div style={{ minHeight: 420, maxHeight: '70vh' }}>{paletteShell}</div>
+        {showChatDrawer && (
+          <div style={{ minHeight: 0, overflow: 'hidden', padding: '0 24px 16px' }}>
+            {chatPanel}
+          </div>
         )}
       </section>
-
-      {!isMobile && paletteShell}
-
-
-
 
 
       {showFinalizeModal && (
@@ -2063,7 +2476,7 @@ export default function HomePage() {
           >
             <h2 style={{ margin: 0 }}>Create finalized PDF?</h2>
             <p style={{ margin: 0 }}>
-              This will generate a polished three-page PDF with the stitch canvas, a stitch report, and a true-size gridded reference page.
+              This will generate your finalized two-page PDF report.
             </p>
             <div
               style={{
@@ -2084,9 +2497,6 @@ export default function HomePage() {
                 <strong>Mesh:</strong> {lastSettings?.mesh_count ?? 0}
               </div>
               <div>
-                <strong>Requested colors:</strong> {requestedColorCount}
-              </div>
-              <div>
                 <strong>Colors used:</strong> {currentDesignPalette.length}
               </div>
               <div>
@@ -2099,9 +2509,9 @@ export default function HomePage() {
               </p>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowFinalizeModal(false)}>Cancel</button>
-              <button onClick={handleFinalize} disabled={loading || !cells.length || hasPendingPreviewSettings}>
-                Confirm
+              <button onClick={() => setShowFinalizeModal(false)} style={btnSecondary}>Cancel</button>
+              <button onClick={handleFinalize} disabled={loading || !cells.length || hasPendingPreviewSettings || Boolean(finalPdfPath)} style={btnPrimary}>
+                Confirm and generate PDF
               </button>
             </div>
           </div>

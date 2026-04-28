@@ -22,6 +22,7 @@ from app.services.intent import classify_intent
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
+from app.services.email_delivery import send_finalized_report
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview
 from app.data.dmc_colors import DMC_COLORS
 
@@ -31,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 def parse_allowed_origins() -> list[str]:
-    configured = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+    configured = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 app = FastAPI(title="Stitch Preview MVP")
@@ -257,7 +261,7 @@ def visualize(request: VisualizeRequest):
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
     delete_finalized_output(request.previous_pdf_url)
-    pdf_url = generate_preview_pdf(
+    pdf_url, internal_pdf_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
         height_inches=request.height_inches,
@@ -268,9 +272,10 @@ def finalize(request: FinalizeRequest):
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
     )
+    email_sent = send_finalized_report(internal_pdf_path)
 
     return FinalizeResponse(
-        message="Final PDF created successfully.",
+        message="Final PDF report created successfully.",
         pdf_url=pdf_url,
     )
 

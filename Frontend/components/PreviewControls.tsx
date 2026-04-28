@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
 export type PreviewSettings = {
   width_inches: number
@@ -19,9 +19,6 @@ export type PreviewSettings = {
 const MAX_PRINTABLE_SHORT_SIDE = 7
 const MAX_PRINTABLE_LONG_SIDE = 9.5
 
-function formatOneDecimal(value: number) {
-  return value.toFixed(1)
-}
 
 function clampToPrintableArea(width: number, height: number) {
   const safeWidth = Math.max(1, width)
@@ -57,7 +54,6 @@ function clampToPrintableArea(width: number, height: number) {
 type Props = {
   importedAspectRatio: number | null
   settings: PreviewSettings
-  actualColorCount: number
   lockAspectRatio: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
@@ -66,7 +62,6 @@ type Props = {
 export default function PreviewControls({
   importedAspectRatio,
   settings,
-  actualColorCount,
   lockAspectRatio,
   onSettingsChange,
   onLockAspectRatioChange,
@@ -80,13 +75,6 @@ export default function PreviewControls({
     contrast_level: contrastLevel,
     source_type: sourceType,
   } = settings
-
-  const borderInches = 1
-  const canvasWidthInches = widthInches + borderInches * 2
-  const canvasHeightInches = heightInches + borderInches * 2
-
-  const stitchWidth = Math.round(widthInches * meshCount)
-  const stitchHeight = Math.round(heightInches * meshCount)
 
   useEffect(() => {
     if (!lockAspectRatio || !importedAspectRatio) return
@@ -104,18 +92,69 @@ export default function PreviewControls({
     <div
       style={{
         display: 'grid',
-        gap: 6,
-        fontSize: 11.5,
+        gap: 10,
+        fontSize: 12,
         width: '100%',
         minWidth: 0,
         maxWidth: '100%',
       }}
     >
+      {/* Source type */}
+      <div style={{ display: 'grid', gap: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#8a8177', textTransform: 'uppercase' }}>Source type</span>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: 3,
+            padding: 3,
+            border: '1px solid #d7d0c8',
+            borderRadius: 10,
+            background: '#f0ece5',
+          }}
+        >
+          {(
+            [
+              { value: 'photo', label: 'Photo' },
+              { value: 'stitched_photo', label: 'Stitched' },
+              { value: 'graphic_art', label: 'Graphic' },
+            ] as const
+          ).map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onSettingsChange({ ...settings, source_type: value })}
+              style={{
+                padding: '6px 4px',
+                border: 'none',
+                borderRadius: 7,
+                fontFamily: 'inherit',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: sourceType === value ? '#fff' : 'transparent',
+                color: sourceType === value ? '#3f382f' : '#8a8177',
+                boxShadow: sourceType === value ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p style={{ margin: 0, fontSize: 11, color: '#8a8177', lineHeight: 1.35 }}>
+          {sourceType === 'stitched_photo'
+            ? 'For photographed needlepoint where fabric or canvas colors interfere.'
+            : sourceType === 'graphic_art'
+              ? 'For screenshots, logos, and sign art where crisp structure matters.'
+              : 'For regular photos and artwork.'}
+        </p>
+      </div>
+
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap: 6,
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 8,
           alignItems: 'start',
           width: '100%',
           minWidth: 0,
@@ -307,64 +346,6 @@ export default function PreviewControls({
         </label>
       </div>
 
-      <div
-        style={{
-          fontSize: 11.5,
-          color: '#555',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap: 4,
-          paddingTop: 2,
-          borderTop: '1px solid #e4e4e4',
-          width: '100%',
-          minWidth: 0,
-        }}
-      >
-        <div>
-          <strong>Design:</strong> {formatOneDecimal(widthInches)}" x {formatOneDecimal(heightInches)}"
-        </div>
-        <div>
-          <strong>Canvas:</strong> {formatOneDecimal(canvasWidthInches)}" x {formatOneDecimal(canvasHeightInches)}"
-        </div>
-        <div>
-          <strong>Stitches:</strong> {stitchWidth} x {stitchHeight}
-        </div>
-        <div>
-          <strong>Actual colors:</strong> {actualColorCount}
-        </div>
-      </div>
-      <div
-        style={{
-          display: 'grid',
-          gap: 4,
-          paddingTop: 6,
-          borderTop: '1px solid #e4e4e4',
-          fontSize: 11.5,
-          color: '#666',
-        }}
-      >
-        <div>
-          <strong>
-            {sourceType === 'stitched_photo'
-              ? 'Stitched photo:'
-              : sourceType === 'graphic_art'
-                ? 'Graphic / screenshot art:'
-                : 'Photo:'}
-          </strong>{' '}
-          {sourceType === 'stitched_photo'
-            ? 'Best for photographed needlepoint, canvas texture, and thread-defined text or borders.'
-            : sourceType === 'graphic_art'
-              ? 'Best for screenshots, logos, sign art, and stitched reference images where crisp structure matters more than photo realism.'
-              : 'Best for regular photos, artwork, logos, and cleaner source images.'}
-        </div>
-        <div>
-          {sourceType === 'stitched_photo'
-            ? 'Start with fewer colors and only turn Clean background on when canvas tones are stealing the palette.'
-            : sourceType === 'graphic_art'
-              ? 'Use this when Photo blurs detail and Stitched photo over-simplifies. Clean background can help on some screenshots, but keep it optional.'
-              : 'Use Clean background when bright neutral backgrounds are crowding out the main subject.'}
-        </div>
-      </div>
     </div>
   )
 }
