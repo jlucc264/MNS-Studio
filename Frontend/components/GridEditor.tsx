@@ -8,7 +8,7 @@ type Props = {
   highlightSelection: boolean
   meshCount: 13 | 18
   brushDensity: number
-  onSelectionChange?: (selection: DesignSelectionRect | null) => void
+  onSelectionChange?: (selection: DesignSelectionRect[] | null) => void
   onPaintStart: () => void
   onPaintCells: (coords: Array<[number, number]>) => void
 }
@@ -18,6 +18,7 @@ const RULER_THICKNESS = 24
 const PREVIEW_FRAME_WIDTH_UNITS = 13
 const PREVIEW_FRAME_HEIGHT_UNITS = 9
 const ZOOM_BUTTON_STEP = 50
+const BLANK_CELL = '__BLANK__'
 
 export type DesignSelectionRect = {
   startRow: number
@@ -70,6 +71,14 @@ function isWithinSelection(
   return row >= top && row <= bottom && col >= left && col <= right
 }
 
+function isWithinSelections(
+  selections: DesignSelectionRect[],
+  row: number,
+  col: number
+) {
+  return selections.some((selection) => isWithinSelection(selection, row, col))
+}
+
 function drawCanvasCell({
   activeColor,
   context,
@@ -108,9 +117,10 @@ function drawCanvasCell({
       inDesign &&
       (focusRegionActive ? !isInsideFocusRegion : color !== activeColor)
   )
+  const isBlankCell = color === BLANK_CELL
 
   context.clearRect(x, y, cellSize, cellSize)
-  context.fillStyle = color
+  context.fillStyle = isBlankCell ? '#fffdf8' : color
   context.fillRect(x, y, cellSize, cellSize)
 
   if (dimNonSelected) {
@@ -121,6 +131,16 @@ function drawCanvasCell({
   context.strokeStyle = 'rgba(0,0,0,0.08)'
   context.lineWidth = 0.5
   context.strokeRect(x, y, cellSize, cellSize)
+
+  if (isBlankCell) {
+    context.strokeStyle = 'rgba(160, 150, 138, 0.18)'
+    context.lineWidth = 0.75
+    context.beginPath()
+    context.moveTo(x + cellSize * 0.22, y + cellSize * 0.78)
+    context.lineTo(x + cellSize * 0.78, y + cellSize * 0.22)
+    context.stroke()
+    return
+  }
 
   if (displayMode !== 'stitched' || !inDesign) return
 
@@ -236,8 +256,9 @@ export default function GridEditor({
   const [isZooming, setIsZooming] = useState(false)
   const [isPainting, setIsPainting] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
-  const [selectionRect, setSelectionRect] = useState<DesignSelectionRect | null>(null)
+  const [selectionRects, setSelectionRects] = useState<DesignSelectionRect[]>([])
   const [dragSelectionRect, setDragSelectionRect] = useState<DesignSelectionRect | null>(null)
+  const [isAddingSelection, setIsAddingSelection] = useState(false)
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<string | null>(null)
@@ -324,8 +345,8 @@ export default function GridEditor({
 
   useEffect(() => {
     if (!highlightSelection) {
-      setSelectionRect(null)
       setDragSelectionRect(null)
+      setSelectionRects([])
       liveSelectionRectRef.current = null
       onSelectionChange?.(null)
     }
@@ -334,13 +355,17 @@ export default function GridEditor({
   useEffect(() => {
     const stopPainting = () => {
       if (isSelecting && dragSelectionRect) {
-        setSelectionRect(dragSelectionRect)
-        onSelectionChange?.(dragSelectionRect)
+        const nextSelectionRects = isAddingSelection
+          ? [...selectionRects, dragSelectionRect]
+          : [dragSelectionRect]
+        setSelectionRects(nextSelectionRects)
+        onSelectionChange?.(nextSelectionRects)
         liveSelectionRectRef.current = null
       }
 
       setIsPainting(false)
       setIsSelecting(false)
+      setIsAddingSelection(false)
       setDragSelectionRect(null)
       paintingPointerIdRef.current = null
       selectionPointerIdRef.current = null
@@ -354,7 +379,7 @@ export default function GridEditor({
       window.removeEventListener('pointerup', stopPainting)
       window.removeEventListener('pointercancel', stopPainting)
     }
-  }, [dragSelectionRect, isSelecting, onSelectionChange])
+  }, [dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects])
 
   const borderStitches = Math.floor(1 * meshCount)
   const rows = cells.length
@@ -685,6 +710,7 @@ export default function GridEditor({
       if (highlightSelection) {
         event.preventDefault()
         selectionPointerIdRef.current = event.pointerId
+        setIsAddingSelection(event.ctrlKey || event.metaKey)
         setIsSelecting(true)
         const startHit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
         if (!startHit) return
@@ -797,7 +823,16 @@ export default function GridEditor({
     }
   }, [scheduleZoom])
 
-  const renderSelection = selectionRect
+  const renderSelections = useMemo(
+    () =>
+      dragSelectionRect
+        ? isAddingSelection
+          ? [...selectionRects, dragSelectionRect]
+          : [dragSelectionRect]
+        : selectionRects,
+    [dragSelectionRect, isAddingSelection, selectionRects]
+  )
+  const activeRenderSelections = selectionRects
   const effectiveDisplayMode = isZooming && displayMode === 'stitched' ? 'flat' : displayMode
 
   useEffect(() => {
@@ -827,7 +862,7 @@ export default function GridEditor({
     canvas.style.height = `${wrapperHeight}px`
 
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0)
-    const activeFocusRegion = renderSelection
+    const activeFocusRegions = activeRenderSelections
     const renderSignature = [
       wrapperWidth,
       wrapperHeight,
@@ -835,14 +870,16 @@ export default function GridEditor({
       effectiveDisplayMode,
       activeColor ?? '',
       highlightSelection,
-      activeFocusRegion
-        ? [
-            activeFocusRegion.startRow,
-            activeFocusRegion.startCol,
-            activeFocusRegion.endRow,
-            activeFocusRegion.endCol,
+      activeFocusRegions
+        .map((selection) =>
+          [
+            selection.startRow,
+            selection.startCol,
+            selection.endRow,
+            selection.endCol,
           ].join(':')
-        : '',
+        )
+        .join('|'),
       gridOriginX,
       gridOriginY,
       contentOriginCol,
@@ -872,7 +909,7 @@ export default function GridEditor({
           const y = gridOriginY + row * cellSize
 
           if (isZooming) {
-            context.fillStyle = color
+            context.fillStyle = color === BLANK_CELL ? '#fffdf8' : color
             context.fillRect(x, y, cellSize + 0.5, cellSize + 0.5)
             continue
           }
@@ -885,8 +922,8 @@ export default function GridEditor({
             displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign,
-            isInsideFocusRegion: isWithinSelection(activeFocusRegion, sourceRow, sourceCol),
-            focusRegionActive: Boolean(activeFocusRegion),
+            isInsideFocusRegion: isWithinSelections(activeFocusRegions, sourceRow, sourceCol),
+            focusRegionActive: activeFocusRegions.length > 0,
             x,
             y,
           })
@@ -909,8 +946,8 @@ export default function GridEditor({
             displayMode: effectiveDisplayMode,
             highlightSelection,
             inDesign: true,
-            isInsideFocusRegion: isWithinSelection(activeFocusRegion, row, col),
-            focusRegionActive: Boolean(activeFocusRegion),
+            isInsideFocusRegion: isWithinSelections(activeFocusRegions, row, col),
+            focusRegionActive: activeFocusRegions.length > 0,
             x,
             y,
           })
@@ -928,7 +965,7 @@ export default function GridEditor({
     effectiveDisplayMode,
     activeColor,
     highlightSelection,
-    selectionRect,
+    activeRenderSelections,
     gridOriginX,
     gridOriginY,
     contentOriginCol,
@@ -970,25 +1007,26 @@ export default function GridEditor({
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0)
     context.clearRect(0, 0, wrapperWidth, wrapperHeight)
 
-    const overlaySelection = dragSelectionRect ?? selectionRect
-    if (!overlaySelection) return
+    if (!renderSelections.length) return
 
-    const top = Math.min(overlaySelection.startRow, overlaySelection.endRow)
-    const bottom = Math.max(overlaySelection.startRow, overlaySelection.endRow)
-    const left = Math.min(overlaySelection.startCol, overlaySelection.endCol)
-    const right = Math.max(overlaySelection.startCol, overlaySelection.endCol)
-    const x = gridOriginX + (left + borderStitches + contentOriginCol) * cellSize
-    const y = gridOriginY + (top + borderStitches + contentOriginRow) * cellSize
-    const width = (right - left + 1) * cellSize
-    const height = (bottom - top + 1) * cellSize
+    renderSelections.forEach((overlaySelection) => {
+      const top = Math.min(overlaySelection.startRow, overlaySelection.endRow)
+      const bottom = Math.max(overlaySelection.startRow, overlaySelection.endRow)
+      const left = Math.min(overlaySelection.startCol, overlaySelection.endCol)
+      const right = Math.max(overlaySelection.startCol, overlaySelection.endCol)
+      const x = gridOriginX + (left + borderStitches + contentOriginCol) * cellSize
+      const y = gridOriginY + (top + borderStitches + contentOriginRow) * cellSize
+      const width = (right - left + 1) * cellSize
+      const height = (bottom - top + 1) * cellSize
 
-    context.fillStyle = 'rgba(255, 196, 0, 0.12)'
-    context.fillRect(x, y, width, height)
-    context.strokeStyle = 'rgba(255, 196, 0, 0.9)'
-    context.lineWidth = Math.max(1, cellSize * 0.08)
-    context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
-    context.strokeRect(x, y, width, height)
-    context.setLineDash([])
+      context.fillStyle = 'rgba(255, 196, 0, 0.12)'
+      context.fillRect(x, y, width, height)
+      context.strokeStyle = 'rgba(255, 196, 0, 0.9)'
+      context.lineWidth = Math.max(1, cellSize * 0.08)
+      context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
+      context.strokeRect(x, y, width, height)
+      context.setLineDash([])
+    })
   }, [
     borderStitches,
     cellSize,
@@ -997,7 +1035,7 @@ export default function GridEditor({
     dragSelectionRect,
     gridOriginX,
     gridOriginY,
-    selectionRect,
+    renderSelections,
     wrapperHeight,
     wrapperWidth,
     isZooming,

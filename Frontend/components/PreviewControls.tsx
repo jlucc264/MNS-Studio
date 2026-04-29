@@ -342,7 +342,7 @@ export default function PreviewControls({
                 })
               }
             />
-            Clean background
+            Exclude blank canvas
         </label>
       </div>
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, useMemo, useState } from 'react'
 
 type PaletteColor = {
   hex: string
@@ -10,9 +10,7 @@ type PaletteColor = {
 
 type Props = {
   colors: PaletteColor[]
-  colorCount: number
   activeColor: string | null
-  enabledColorHexes: string[]
   colorCountsByHex?: Record<string, number>
   toolMode: 'paint' | 'select'
   onToolModeChange: (mode: 'paint' | 'select') => void
@@ -20,18 +18,13 @@ type Props = {
   onBrushDensityChange: (value: number) => void
   hasSelectedRegion: boolean
   selectedRegionCount: number
-  removalMode: 'fill' | 'blank'
   selectionMergeSuggestions: PaletteColor[]
   selectionOtherColors: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
   onEyedropperSelection: () => void
   onSelect: (color: PaletteColor) => void
-  onToggleColorEnabled: (hex: string, enabled: boolean) => void
-  onEnableAll: () => void
-  onColorCountChange: (nextCount: number) => void
-  onAutoReduceToCount: (targetCount: number) => void
-  onRemovalModeChange: (mode: 'fill' | 'blank') => void
+  onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
 }
 
@@ -39,6 +32,7 @@ const SPECIAL_COLORS: PaletteColor[] = [
   { hex: '#FFFFFF', dmc_code: 'BLANC', dmc_name: 'White' },
   { hex: '#000000', dmc_code: '310', dmc_name: 'Black' },
 ]
+const BLANK_CELL = '__BLANK__'
 
 function hexToRgb(hex: string) {
   const cleaned = hex.replace('#', '')
@@ -57,9 +51,7 @@ function colorDistance(a: string, b: string) {
 
 export default function PalettePanel({
   colors,
-  colorCount,
   activeColor,
-  enabledColorHexes,
   colorCountsByHex = {},
   toolMode,
   onToolModeChange,
@@ -67,23 +59,17 @@ export default function PalettePanel({
   onBrushDensityChange,
   hasSelectedRegion,
   selectedRegionCount,
-  removalMode,
   selectionMergeSuggestions,
   selectionOtherColors,
   onApplyColorToSelection,
   onClearSelection,
   onEyedropperSelection,
   onSelect,
-  onToggleColorEnabled,
-  onEnableAll,
-  onColorCountChange,
-  onAutoReduceToCount,
-  onRemovalModeChange,
+  onSelectBlankCanvas,
   moreColors,
 }: Props) {
   const [showOtherColors, setShowOtherColors] = useState(false)
   const [showSelectionOtherColors, setShowSelectionOtherColors] = useState(false)
-  const [autoReduceTarget, setAutoReduceTarget] = useState(12)
 
   const allOtherColors = useMemo(() => {
     const byHex = new Map<string, PaletteColor>()
@@ -101,23 +87,14 @@ export default function PalettePanel({
       .slice(0, 6)
   }, [activeColor, colors])
 
-  useEffect(() => {
-    if (!colors.length) return
-    setAutoReduceTarget((current) => Math.max(2, Math.min(colors.length, current)))
-  }, [colors.length])
-
   const orderedColors = useMemo(() => {
-    const enabledSet = new Set(enabledColorHexes)
     return [...colors].sort((a, b) => {
-      const aEnabled = enabledSet.has(a.hex) ? 1 : 0
-      const bEnabled = enabledSet.has(b.hex) ? 1 : 0
-      if (aEnabled !== bEnabled) return bEnabled - aEnabled
       const aCount = colorCountsByHex[a.hex] ?? 0
       const bCount = colorCountsByHex[b.hex] ?? 0
       if (aCount !== bCount) return bCount - aCount
       return a.dmc_code.localeCompare(b.dmc_code, undefined, { numeric: true })
     })
-  }, [colorCountsByHex, colors, enabledColorHexes])
+  }, [colorCountsByHex, colors])
 
   const activeColorInfo = useMemo(
     () => colors.find((c) => c.hex === activeColor) ?? null,
@@ -201,7 +178,7 @@ export default function PalettePanel({
                 width: 26,
                 height: 26,
                 borderRadius: 6,
-                background: activeColor ?? '#ddd',
+                background: activeColor === BLANK_CELL ? '#fffdf8' : activeColor ?? '#ddd',
                 border: activeColor === '#FFFFFF' ? '1px solid #ccc' : '1px solid rgba(0,0,0,0.18)',
                 flexShrink: 0,
               }}
@@ -211,6 +188,8 @@ export default function PalettePanel({
               <div style={{ fontSize: 13, fontWeight: 600, color: '#3f382f' }}>
                 {activeColorInfo
                   ? `${activeColorInfo.dmc_code} – ${activeColorInfo.dmc_name}`
+                  : activeColor === BLANK_CELL
+                    ? 'Blank canvas'
                   : activeColor === '#FFFFFF'
                     ? 'BLANC – White'
                     : activeColor
@@ -259,7 +238,7 @@ export default function PalettePanel({
             lineHeight: 1.4,
           }}
         >
-          <span>Drag on the canvas to select a region of the active color, then replace it below.</span>
+          <span>Choose a palette color to replace it everywhere, or drag a smaller region first.</span>
           {hasSelectedRegion && (
             <button
               type="button"
@@ -281,75 +260,12 @@ export default function PalettePanel({
         </div>
       )}
 
-      {/* Color budget + auto reduce */}
-      <div style={{ display: 'grid', gap: 6 }}>
-        <label style={{ display: 'grid', gap: 3, fontSize: 13, color: '#3f382f' }}>
-          <span style={{ fontWeight: 600 }}>Color budget: {colorCount}</span>
-          <input
-            type="range"
-            min={2}
-            max={128}
-            step={1}
-            value={colorCount}
-            onChange={(event) => onColorCountChange(Number(event.target.value))}
-            style={{ width: '100%' }}
-          />
-        </label>
-
-        {colors.length > 2 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#6f665b' }}>
-            <span style={{ flexShrink: 0 }}>Auto reduce to</span>
-            <input
-              type="number"
-              min={2}
-              max={colors.length}
-              step={1}
-              value={autoReduceTarget}
-              onChange={(event) =>
-                setAutoReduceTarget(Math.max(2, Math.min(colors.length, Number(event.target.value) || 2)))
-              }
-              style={{ width: 48, padding: '3px 6px', borderRadius: 6, border: '1px solid #d0c9bf', fontFamily: 'inherit', fontSize: 12 }}
-            />
-            <button
-              type="button"
-              onClick={() => onAutoReduceToCount(autoReduceTarget)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 6,
-                border: '1px solid #d0c9bf',
-                background: '#fff',
-                fontFamily: 'inherit',
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-            >
-              Reduce
-            </button>
-          </div>
-        )}
-      </div>
-
       {/* Color grid section */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Header row */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#8a8177' }}>{colors.length} colors</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={onEnableAll}
-              style={{
-                padding: '3px 8px',
-                borderRadius: 6,
-                border: '1px solid #d0c9bf',
-                background: '#fff',
-                fontFamily: 'inherit',
-                fontSize: 11,
-                cursor: 'pointer',
-              }}
-            >
-              Turn all on
-            </button>
             {allOtherColors.length > 0 && (
               <select
                 value={showOtherColors ? 'other' : ''}
@@ -361,6 +277,8 @@ export default function PalettePanel({
                   background: '#fff',
                   fontFamily: 'inherit',
                   fontSize: 11,
+                  maxWidth: '100%',
+                  minWidth: 0,
                 }}
               >
                 <option value="">+ Add color</option>
@@ -368,29 +286,6 @@ export default function PalettePanel({
               </select>
             )}
           </div>
-        </div>
-
-        {/* Removal mode */}
-        <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#6f665b', flexShrink: 0 }}>
-          <span style={{ flexShrink: 0 }}>When off:</span>
-          <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
-            <input
-              type="radio"
-              name="removal-mode"
-              checked={removalMode === 'fill'}
-              onChange={() => onRemovalModeChange('fill')}
-            />
-            Fill nearby
-          </label>
-          <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
-            <input
-              type="radio"
-              name="removal-mode"
-              checked={removalMode === 'blank'}
-              onChange={() => onRemovalModeChange('blank')}
-            />
-            Blank
-          </label>
         </div>
 
         {/* Other DMC colors expanded */}
@@ -456,8 +351,7 @@ export default function PalettePanel({
         >
           {orderedColors.map((color) => {
             const selected = activeColor === color.hex
-            const enabled = enabledColorHexes.includes(color.hex)
-            const showSelectionTray = selected && hasSelectedRegion && toolMode === 'select'
+            const showSelectionTray = selected && toolMode === 'select'
             const visibleSuggestions =
               selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
 
@@ -467,20 +361,14 @@ export default function PalettePanel({
                 style={{
                   display: 'grid',
                   gap: 6,
+                  gridColumn: showSelectionTray ? '1 / -1' : undefined,
                   border: selected ? '2px solid #3f382f' : '1px solid #d5cec6',
-                  background: enabled ? (selected ? '#f5f3ef' : 'white') : '#f0ece5',
+                  background: selected ? '#f5f3ef' : 'white',
                   borderRadius: 8,
                   padding: '5px 6px',
-                  opacity: enabled ? 1 : 0.65,
                 }}
               >
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <input
-                    type="checkbox"
-                    checked={enabled}
-                    onChange={(event) => onToggleColorEnabled(color.hex, event.target.checked)}
-                    aria-label={`${enabled ? 'Turn off' : 'Turn on'} ${color.dmc_code}`}
-                  />
                   <button
                     type="button"
                     onClick={() => onSelect(color)}
@@ -495,7 +383,7 @@ export default function PalettePanel({
                     }}
                   />
                 </div>
-                <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1, paddingLeft: 20 }}>
+                <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>
                   {color.dmc_code}
                 </div>
 
@@ -508,14 +396,35 @@ export default function PalettePanel({
                       borderTop: '1px solid rgba(0,0,0,0.08)',
                     }}
                   >
-                    <div style={{ fontSize: 10, color: '#6f665b' }}>Replace with</div>
+                    <div style={{ fontSize: 10, color: '#6f665b' }}>
+                      Replace {hasSelectedRegion ? `${selectedRegionCount} selected stitches` : 'all matching stitches'} with
+                    </div>
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                        gap: 4,
+                        gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+                        gap: 6,
                       }}
                     >
+                      <button
+                        type="button"
+                        title="Null / blank canvas"
+                        onClick={() => onApplyColorToSelection(BLANK_CELL)}
+                        style={{
+                          height: 34,
+                          border: '1px solid #b8aea3',
+                          borderRadius: 6,
+                          background:
+                            'linear-gradient(135deg, #fffdf8 0%, #fffdf8 42%, #b23428 43%, #b23428 57%, #fffdf8 58%, #fffdf8 100%)',
+                          color: '#b23428',
+                          fontFamily: 'inherit',
+                          fontSize: 13,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        X
+                      </button>
                       {visibleSuggestions.map((suggestion) => (
                         <button
                           key={`suggestion-${suggestion.hex}`}
@@ -523,10 +432,10 @@ export default function PalettePanel({
                           title={`${suggestion.dmc_code} – ${suggestion.dmc_name}`}
                           onClick={() => onApplyColorToSelection(suggestion.hex)}
                           style={{
-                            height: 22,
+                            height: 34,
                             backgroundColor: suggestion.hex,
                             border: '1px solid #bbb',
-                            borderRadius: 4,
+                            borderRadius: 6,
                             cursor: 'pointer',
                           }}
                         />
@@ -573,9 +482,9 @@ export default function PalettePanel({
                           <div
                             style={{
                               display: 'grid',
-                              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-                              gap: 4,
-                              maxHeight: 100,
+                              gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
+                              gap: 6,
+                              maxHeight: 150,
                               overflow: 'auto',
                             }}
                           >
@@ -586,10 +495,10 @@ export default function PalettePanel({
                                 title={`${c.dmc_code} – ${c.dmc_name}`}
                                 onClick={() => onApplyColorToSelection(c.hex)}
                                 style={{
-                                  height: 20,
+                                  height: 28,
                                   backgroundColor: c.hex,
                                   border: '1px solid #bbb',
-                                  borderRadius: 4,
+                                  borderRadius: 6,
                                   cursor: 'pointer',
                                 }}
                               />
@@ -603,6 +512,51 @@ export default function PalettePanel({
               </div>
             )
           })}
+          <div
+            style={{
+              display: 'grid',
+              gap: 6,
+              border: activeColor === BLANK_CELL ? '2px solid #3f382f' : '1px solid #d5cec6',
+              background: activeColor === BLANK_CELL ? '#f5f3ef' : 'white',
+              borderRadius: 8,
+              padding: '5px 6px',
+            }}
+          >
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={onSelectBlankCanvas}
+                title="Eraser - paint blank canvas"
+                style={{
+                  flex: 1,
+                  height: 26,
+                  border: activeColor === BLANK_CELL ? '2px solid #111' : '1px solid #ccc',
+                  borderRadius: 5,
+                  background: '#fffdf8',
+                  cursor: 'pointer',
+                  display: 'grid',
+                  placeItems: 'center',
+                  padding: 0,
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 18,
+                    height: 11,
+                    borderRadius: 3,
+                    border: '1px solid #6f665b',
+                    background: 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)',
+                    transform: 'rotate(-18deg)',
+                    boxShadow: '0 1px 0 rgba(0,0,0,0.12)',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>
+              Eraser
+            </div>
+          </div>
         </div>
       </div>
     </div>

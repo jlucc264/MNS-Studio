@@ -15,6 +15,7 @@ GRID_COLOR = (180, 180, 180, 255)
 BORDER_INCHES = 1.0
 PAGE_MARGIN = 42
 CARD_RADIUS = 12
+BLANK_CELL = "__BLANK__"
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
@@ -53,7 +54,7 @@ def _render_preview_image_from_cells(
     quantized = Image.new("RGB", (stitch_width, stitch_height), (255, 255, 255))
     if stitch_width and stitch_height:
         quantized.putdata([
-            _hex_to_rgb(cell)
+            (255, 255, 255) if cell == BLANK_CELL else _hex_to_rgb(cell)
             for row in cells
             for cell in row
         ])
@@ -81,7 +82,7 @@ def _build_report_rows(cells: list[list[str]], palette: list[dict]) -> list[dict
         cell
         for row in cells
         for cell in row
-        if cell != "#FFFFFF"
+        if cell != BLANK_CELL
     )
     palette_by_hex = {color["hex"]: color for color in palette}
 
@@ -372,7 +373,7 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-) -> tuple[str, Path]:
+) -> tuple[str, Path, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
 
@@ -427,4 +428,4 @@ def generate_preview_pdf(
 
     # The public URL is returned to the app for completion tracking; the internal file
     # is sent by the finalize endpoint and intentionally not exposed in the UI.
-    return public_url, internal_path
+    return public_url, public_path, internal_path

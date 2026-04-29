@@ -23,6 +23,7 @@ from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import send_finalized_report
+from app.services.supabase_storage import upload_pdf_to_supabase
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview
 from app.data.dmc_colors import DMC_COLORS
 
@@ -261,7 +262,7 @@ def visualize(request: VisualizeRequest):
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
     delete_finalized_output(request.previous_pdf_url)
-    pdf_url, internal_pdf_path = generate_preview_pdf(
+    pdf_url, public_pdf_path, internal_pdf_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
         height_inches=request.height_inches,
@@ -271,6 +272,16 @@ def finalize(request: FinalizeRequest):
         show_grid=request.show_grid,
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
+    )
+    supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
+    if supabase_pdf_url:
+        pdf_url = supabase_pdf_url
+
+    upload_pdf_to_supabase(
+        internal_pdf_path,
+        prefix="internal-finalized",
+        bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET",
+        return_public_url=False,
     )
     email_sent = send_finalized_report(internal_pdf_path)
 

@@ -7,6 +7,7 @@ from app.data.dmc_colors import DMC_COLORS
 
 DISPLAY_CELL_SIZE = 12
 GRID_COLOR = (180, 180, 180, 255)
+BLANK_CELL = "__BLANK__"
 DESPECKLE_DOMINANT_NEIGHBORS = 5
 DESPECKLE_MAX_MATCHING_NEIGHBORS = 1
 LIGHT_COLOR_DESPECKLE_DOMINANT_NEIGHBORS = 4
@@ -128,6 +129,36 @@ CONTRAST_MAP = {
 def _resolve_asset_path(image_url: str) -> Path:
     cleaned = image_url.lstrip("/")
     return ASSETS_DIR.parent / cleaned
+
+
+def flatten_transparency_to_white(img: Image.Image) -> Image.Image:
+    if img.mode in {"RGBA", "LA"} or "transparency" in img.info:
+        rgba = img.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        background.alpha_composite(rgba)
+        return background.convert("RGB")
+
+    return img.convert("RGB")
+
+
+def open_source_image(src_path: Path) -> Image.Image:
+    with Image.open(src_path) as img:
+        return flatten_transparency_to_white(img)
+
+
+def source_transparency_mask(src_path: Path, size: tuple[int, int]) -> set[tuple[int, int]]:
+    with Image.open(src_path) as img:
+        if img.mode not in {"RGBA", "LA"} and "transparency" not in img.info:
+            return set()
+
+        alpha = img.convert("RGBA").getchannel("A").resize(size, Image.Resampling.BILINEAR)
+        pixels = list(alpha.getdata())
+        width, height = size
+        return {
+            (index % width, index // width)
+            for index, value in enumerate(pixels)
+            if value < 16
+        }
 
 
 def rgb_to_hex(rgb: tuple[int, int, int]) -> str:
@@ -577,6 +608,78 @@ def hue_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
 
 def nearest_dmc(rgb: tuple[int, int, int]) -> dict:
     return min(DMC_COLORS, key=lambda dmc: color_distance(rgb, dmc["rgb"]))
+
+
+def remap_image_to_nearest_dmc(img: Image.Image) -> Image.Image:
+    replacement_cache: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    remapped_pixels = []
+
+    for pixel in img.getdata():
+        if pixel not in replacement_cache:
+            replacement_cache[pixel] = nearest_dmc(pixel)["rgb"]
+        remapped_pixels.append(replacement_cache[pixel])
+
+    remapped = Image.new("RGB", img.size)
+    remapped.putdata(remapped_pixels)
+    return remapped
+
+
+def is_blank_canvas_candidate(rgb: tuple[int, int, int]) -> bool:
+    return brightness(rgb) >= 735 and saturation(rgb) <= 20
+
+
+def edge_connected_blank_mask(img: Image.Image) -> set[tuple[int, int]]:
+    width, height = img.size
+    if not width or not height:
+        return set()
+
+    pixels = list(img.getdata())
+    visited: set[tuple[int, int]] = set()
+    blank_cells: set[tuple[int, int]] = set()
+    stack: list[tuple[int, int]] = []
+
+    for x in range(width):
+        stack.append((x, 0))
+        stack.append((x, height - 1))
+    for y in range(height):
+        stack.append((0, y))
+        stack.append((width - 1, y))
+
+    while stack:
+        x, y = stack.pop()
+        if (x, y) in visited:
+            continue
+        visited.add((x, y))
+        if not is_blank_canvas_candidate(pixels[y * width + x]):
+            continue
+
+        blank_cells.add((x, y))
+        if x > 0:
+            stack.append((x - 1, y))
+        if x < width - 1:
+            stack.append((x + 1, y))
+        if y > 0:
+            stack.append((x, y - 1))
+        if y < height - 1:
+            stack.append((x, y + 1))
+
+    return blank_cells
+
+
+def apply_blank_mask_to_cells(
+    cells: list[list[str]],
+    blank_mask: set[tuple[int, int]],
+) -> list[list[str]]:
+    if not blank_mask:
+        return cells
+
+    return [
+        [
+            BLANK_CELL if (x, y) in blank_mask else cell
+            for x, cell in enumerate(row)
+        ]
+        for y, row in enumerate(cells)
+    ]
 
 
 def extract_palette(img: Image.Image) -> list[dict]:
@@ -1400,6 +1503,44 @@ def render_preview_image(
     return out_url
 
 
+def render_preview_image_from_cells(
+    cells: list[list[str]],
+    mesh_count: int,
+    show_grid: bool,
+) -> str:
+    stitch_height = len(cells)
+    stitch_width = len(cells[0]) if stitch_height else 0
+    border_stitches = int(1.0 * mesh_count)
+
+    total_width = stitch_width + (2 * border_stitches)
+    total_height = stitch_height + (2 * border_stitches)
+    canvas = Image.new("RGB", (total_width, total_height), (255, 255, 255))
+
+    if stitch_width and stitch_height:
+        quantized = Image.new("RGB", (stitch_width, stitch_height), (255, 255, 255))
+        quantized.putdata([
+            (255, 255, 255) if cell == BLANK_CELL else hex_to_rgb(cell)
+            for row in cells
+            for cell in row
+        ])
+        canvas.paste(quantized, (border_stitches, border_stitches))
+
+    display_w = total_width * DISPLAY_CELL_SIZE
+    display_h = total_height * DISPLAY_CELL_SIZE
+    preview = canvas.resize((display_w, display_h), Image.Resampling.NEAREST).convert("RGBA")
+
+    if show_grid:
+        draw = ImageDraw.Draw(preview)
+        for x in range(0, display_w + 1, DISPLAY_CELL_SIZE):
+            draw.line([(x, 0), (x, display_h)], fill=GRID_COLOR, width=1)
+        for y in range(0, display_h + 1, DISPLAY_CELL_SIZE):
+            draw.line([(0, y), (display_w, y)], fill=GRID_COLOR, width=1)
+
+    out_path, out_url = preview_output_path()
+    preview.save(out_path, format="PNG")
+    return out_url
+
+
 def generate_stitch_preview(
     image_url: str,
     stitch_width: int,
@@ -1413,9 +1554,9 @@ def generate_stitch_preview(
     mesh_count: int,
     contrast_level: str,
     source_type: str = "photo",
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], list[list[str]]]:
     src_path = _resolve_asset_path(image_url)
-    img = Image.open(src_path).convert("RGB")
+    img = open_source_image(src_path)
 
     resize_resampling = (
         Image.Resampling.LANCZOS if source_type == "graphic_art" else Image.Resampling.BILINEAR
@@ -1507,13 +1648,18 @@ def generate_stitch_preview(
         quantized = despeckle_image(quantized)
         quantized = cleanup_tiny_color_islands(quantized)
 
+    quantized = remap_image_to_nearest_dmc(quantized)
     palette = extract_palette(quantized)
     cells = image_to_cells(quantized)
+    if clean_background:
+        blank_mask = edge_connected_blank_mask(quantized)
+        blank_mask.update(source_transparency_mask(src_path, (stitch_width, stitch_height)))
+        cells = apply_blank_mask_to_cells(cells, blank_mask)
+        used_hexes = {cell for row in cells for cell in row if cell != BLANK_CELL}
+        palette = [color for color in palette if color["hex"] in used_hexes]
 
-    preview_url = render_preview_image(
-        quantized=quantized,
-        stitch_width=stitch_width,
-        stitch_height=stitch_height,
+    preview_url = render_preview_image_from_cells(
+        cells=cells,
         mesh_count=mesh_count,
         show_grid=show_grid,
     )
@@ -1530,7 +1676,7 @@ def recolor_stitch_preview(
     selected_palette: list[dict],
 ) -> tuple[str, list[dict], list[list[str]]]:
     src_path = _resolve_asset_path(image_url)
-    img = Image.open(src_path).convert("RGB")
+    img = open_source_image(src_path)
 
     base = img.resize((stitch_width, stitch_height), Image.Resampling.BILINEAR)
 
@@ -1550,6 +1696,7 @@ def recolor_stitch_preview(
     recolored = despeckle_image(recolored)
     recolored = cleanup_tiny_color_islands(recolored)
 
+    recolored = remap_image_to_nearest_dmc(recolored)
     palette = extract_palette(recolored)
     preview_url = render_preview_image(
         quantized=recolored,

@@ -34,6 +34,7 @@ type ColorEditSnapshot = {
   activePaintColor: string | null
   removalMode: 'fill' | 'blank'
   manualCellOverrides: Record<string, string>
+  finishOutlineBackups: Record<string, string>
 }
 
 type CommandResult = {
@@ -63,6 +64,7 @@ function colorSaturation(hex: string) {
 const DISPLAY_GROUP_DISTANCE = 12
 const MIN_PALETTE_STATE_OVERLAP_RATIO = 0.6
 const MOBILE_BREAKPOINT = 980
+const BLANK_CELL = '__BLANK__'
 
 function cloneCells(source: string[][]) {
   return source.map((row) => [...row])
@@ -72,7 +74,7 @@ function countCellsByHex(source: string[][]) {
   const counts: Record<string, number> = {}
   source.forEach((row) => {
     row.forEach((cell) => {
-      if (cell === '#FFFFFF') return
+      if (cell === BLANK_CELL) return
       counts[cell] = (counts[cell] ?? 0) + 1
     })
   })
@@ -189,8 +191,9 @@ function applyPaletteStateToCells(
   const enabledHexes = enabledPalette.map((color) => color.hex)
   const nextCells = cloneCells(sourceCells).map((row) =>
     row.map((cell) => {
+      if (cell === BLANK_CELL) return BLANK_CELL
       if (enabledSet.has(cell)) return cell
-      if (nextRemovalMode === 'blank') return '#FFFFFF'
+      if (nextRemovalMode === 'blank') return BLANK_CELL
       if (!enabledHexes.length) return '#FFFFFF'
 
       return enabledHexes.reduce((closest, candidate) =>
@@ -199,7 +202,7 @@ function applyPaletteStateToCells(
     })
   )
 
-  const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== '#FFFFFF'))
+  const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== BLANK_CELL))
   const nextPreviewPalette = sourcePalette.filter((color) => usedHexes.has(color.hex))
 
   return {
@@ -275,7 +278,7 @@ function findOutsideBorderCoords(source: string[][], inset = 2) {
     if (visited[row][col]) return
 
     visited[row][col] = true
-    if (source[row][col] === '#FFFFFF') return
+      if (source[row][col] === BLANK_CELL) return
 
     queue.push([row, col])
     const key = `${row}:${col}`
@@ -416,13 +419,17 @@ export default function HomePage() {
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [toolMode, setToolMode] = useState<'paint' | 'select'>('paint')
   const [brushDensity, setBrushDensity] = useState(1)
-  const [selectedRegion, setSelectedRegion] = useState<DesignSelectionRect | null>(null)
+  const [selectedRegions, setSelectedRegions] = useState<DesignSelectionRect[]>([])
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
+  const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
+  const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
+  const [finishShape, setFinishShape] = useState<'circle' | 'square'>('circle')
+  const [finishSizeInches, setFinishSizeInches] = useState(4)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(1280)
@@ -461,22 +468,7 @@ export default function HomePage() {
 
   const shouldShowStitchGrid = viewMode === 'stitch' && cells.length > 0
 
-  const paletteDisplaySource = useMemo(() => {
-    const byHex = new Map<string, PaletteColor>()
-
-    allPalette.forEach((color) => {
-      byHex.set(color.hex, color)
-    })
-    previewPalette.forEach((color) => {
-      if (!byHex.has(color.hex)) {
-        byHex.set(color.hex, color)
-      }
-    })
-
-    return Array.from(byHex.values())
-  }, [allPalette, previewPalette])
-
-  const displayPalette = paletteDisplaySource
+  const displayPalette = previewPalette
 
   const paletteCountsByHex = useMemo(() => countCellsByHex(deferredCells), [deferredCells])
   const displayColorCounts = paletteCountsByHex
@@ -491,27 +483,49 @@ export default function HomePage() {
     () => Object.values(currentDesignColorCounts).reduce((total, count) => total + count, 0),
     [currentDesignColorCounts]
   )
+  const hasManualBlankCells = useMemo(
+    () => Object.values(manualCellOverrides).some((hex) => hex === BLANK_CELL),
+    [manualCellOverrides]
+  )
+  const selectedRegionBounds = useMemo(() => {
+    if (!cells.length || !selectedRegions.length) return []
+    return selectedRegions
+      .map((region) => getClampedSelectionBounds(region, cells.length, cells[0]?.length ?? 0))
+      .filter((bounds): bounds is { top: number; bottom: number; left: number; right: number } =>
+        Boolean(bounds)
+      )
+  }, [cells, selectedRegions])
   const selectedRegionCount = useMemo(() => {
-    if (!activePaintColor || !selectedRegion || !cells.length) return 0
+    if (!activePaintColor || !cells.length) return 0
 
-    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
-    if (!bounds) return 0
+    const boundsList = selectedRegionBounds.length
+      ? selectedRegionBounds
+      : [{
+          top: 0,
+          bottom: cells.length - 1,
+          left: 0,
+          right: (cells[0]?.length ?? 1) - 1,
+        }]
 
-    const { top, bottom, left, right } = bounds
-
+    const counted = new Set<string>()
     let count = 0
-    for (let row = top; row <= bottom; row += 1) {
-      for (let col = left; col <= right; col += 1) {
-        if (cells[row]?.[col] === activePaintColor) {
+    boundsList.forEach(({ top, bottom, left, right }) => {
+      for (let row = top; row <= bottom; row += 1) {
+        for (let col = left; col <= right; col += 1) {
+          const key = makeCellKey(row, col)
+          if (counted.has(key)) continue
+          counted.add(key)
+          if (cells[row]?.[col] === activePaintColor) {
           count += 1
+          }
         }
       }
-    }
+    })
 
     return count
-  }, [activePaintColor, cells, selectedRegion])
+  }, [activePaintColor, cells, selectedRegionBounds])
   const selectionMergeSuggestions = useMemo(() => {
-    if (!activePaintColor || !selectedRegion || !cells.length) return []
+    if (!activePaintColor || !selectedRegionBounds.length || !cells.length) return []
 
     const neighborCounts = new Map<string, number>()
     const directions: Array<[number, number]> = [
@@ -520,28 +534,25 @@ export default function HomePage() {
       [0, 1],
       [0, -1],
     ]
-    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
-    if (!bounds) return []
+    selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
+      for (let row = top; row <= bottom; row += 1) {
+        for (let col = left; col <= right; col += 1) {
+          if (cells[row]?.[col] !== activePaintColor) continue
 
-    const { top, bottom, left, right } = bounds
+          directions.forEach(([rowOffset, colOffset]) => {
+            const nextRow = row + rowOffset
+            const nextCol = col + colOffset
+            if (nextRow < 0 || nextRow >= cells.length || nextCol < 0 || nextCol >= cells[nextRow].length) return
 
-    for (let row = top; row <= bottom; row += 1) {
-      for (let col = left; col <= right; col += 1) {
-        if (cells[row]?.[col] !== activePaintColor) continue
+            const neighborHex = cells[nextRow][nextCol]
+            if (neighborHex === activePaintColor) return
+            if (neighborHex === BLANK_CELL) return
 
-        directions.forEach(([rowOffset, colOffset]) => {
-          const nextRow = row + rowOffset
-          const nextCol = col + colOffset
-          if (nextRow < 0 || nextRow >= cells.length || nextCol < 0 || nextCol >= cells[nextRow].length) return
-          if (nextRow >= top && nextRow <= bottom && nextCol >= left && nextCol <= right) return
-
-          const neighborHex = cells[nextRow][nextCol]
-          if (neighborHex === activePaintColor) return
-
-          neighborCounts.set(neighborHex, (neighborCounts.get(neighborHex) ?? 0) + 1)
-        })
+            neighborCounts.set(neighborHex, (neighborCounts.get(neighborHex) ?? 0) + 1)
+          })
+        }
       }
-    }
+    })
 
     const byHex = new Map<string, PaletteColor>()
     ;[...displayPalette, ...allDmcColors].forEach((color) => {
@@ -555,7 +566,7 @@ export default function HomePage() {
       .map(([hex]) => byHex.get(hex))
       .filter((color): color is PaletteColor => Boolean(color))
       .slice(0, 6)
-  }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegion])
+  }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegionBounds])
   const selectionOtherColors = useMemo(() => {
     const preferredHexOrder = ['#FFFFFF', '#000000']
     const suggestionHexes = new Set(selectionMergeSuggestions.map((color) => color.hex))
@@ -588,6 +599,7 @@ export default function HomePage() {
     setActivePaintColor(null)
     setRemovalMode('fill')
     setManualCellOverrides({})
+    setFinishOutlineBackups({})
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
@@ -618,7 +630,7 @@ export default function HomePage() {
   }, [])
 
   function buildPaletteForCells(nextCells: string[][]) {
-    const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== '#FFFFFF'))
+    const usedHexes = new Set(nextCells.flat().filter((cell) => cell !== BLANK_CELL))
     const byHex = new Map<string, PaletteColor>()
 
     ;[...previewPalette, ...allPalette, ...allDmcColors].forEach((color) => {
@@ -679,6 +691,7 @@ export default function HomePage() {
         activePaintColor,
         removalMode,
         manualCellOverrides: { ...manualCellOverrides },
+        finishOutlineBackups: { ...finishOutlineBackups },
       },
     ])
     setRedoStack([])
@@ -688,6 +701,10 @@ export default function HomePage() {
     if (!activeImagePath) return
     const requestId = latestApplyRequestIdRef.current + 1
     latestApplyRequestIdRef.current = requestId
+    const previewSettings = {
+      ...settings,
+      color_count: 128,
+    }
 
     const previousEnabledColorHexes = [...enabledColorHexes]
     const previousRemovalMode = removalMode
@@ -704,16 +721,16 @@ export default function HomePage() {
     const canAttemptToPreservePaletteState =
       hasGeneratedPreview &&
       lastSettings !== null &&
-      settings.color_count === lastSettings.color_count &&
+      previewSettings.color_count === lastSettings.color_count &&
       previousHadFilteredPalette
 
-    const stitchWidth = Math.max(1, Math.round(settings.width_inches * settings.mesh_count))
-    const stitchHeight = Math.max(1, Math.round(settings.height_inches * settings.mesh_count))
+    const stitchWidth = Math.max(1, Math.round(previewSettings.width_inches * previewSettings.mesh_count))
+    const stitchHeight = Math.max(1, Math.round(previewSettings.height_inches * previewSettings.mesh_count))
     const sameGeometryAsLastSettings = Boolean(
       lastSettings &&
-        settings.width_inches === lastSettings.width_inches &&
-        settings.height_inches === lastSettings.height_inches &&
-        settings.mesh_count === lastSettings.mesh_count
+        previewSettings.width_inches === lastSettings.width_inches &&
+        previewSettings.height_inches === lastSettings.height_inches &&
+        previewSettings.mesh_count === lastSettings.mesh_count
     )
 
     setLoading(true)
@@ -722,15 +739,15 @@ export default function HomePage() {
         image_url: activeImagePath,
         stitch_width: stitchWidth,
         stitch_height: stitchHeight,
-        color_count: settings.color_count,
-        show_grid: settings.show_grid,
-        clean_background: settings.clean_background,
-        simplify_colors: settings.simplify_colors,
-        strengthen_dark_detail: settings.strengthen_dark_detail,
-        preserve_accents: settings.preserve_accents,
-        mesh_count: settings.mesh_count,
-        contrast_level: settings.contrast_level,
-        source_type: settings.source_type,
+        color_count: previewSettings.color_count,
+        show_grid: previewSettings.show_grid,
+        clean_background: previewSettings.clean_background,
+        simplify_colors: previewSettings.simplify_colors,
+        strengthen_dark_detail: previewSettings.strengthen_dark_detail,
+        preserve_accents: previewSettings.preserve_accents,
+        mesh_count: previewSettings.mesh_count,
+        contrast_level: previewSettings.contrast_level,
+        source_type: previewSettings.source_type,
       })
       const collapsed = collapsePaletteShades(result.cells, result.palette)
       const nextAllPalette = collapsed.palette
@@ -775,7 +792,7 @@ export default function HomePage() {
         ? buildPaletteForCells(finalCells)
         : nextPreviewPalette
       const nextActivePaintColor =
-        previousActivePaintColor && previousActivePaintColor !== '#FFFFFF'
+        previousActivePaintColor && previousActivePaintColor !== '#FFFFFF' && previousActivePaintColor !== BLANK_CELL
           ? (finalPreviewPalette.find((color) => color.hex === previousActivePaintColor)?.hex ??
             nextAllPalette.find((color) => color.hex === previousActivePaintColor)?.hex ??
             finalPreviewPalette[0]?.hex ??
@@ -807,15 +824,17 @@ export default function HomePage() {
       setActivePaintColor(nextActivePaintColor)
       setRemovalMode(shouldReapplyPaletteState ? previousRemovalMode : 'fill')
       setManualCellOverrides(shouldReapplyManualOverrides ? previousManualCellOverrides : {})
+      setFinishOutlineBackups({})
       setUndoStack([])
       setRedoStack([])
-      setLastSettings(settings)
-      setDraftSettings(settings)
+      setLastSettings(previewSettings)
+      setDraftSettings(previewSettings)
+      setPaletteReductionTarget(nextFullPaletteHexes.length || 128)
       setFinalPdfPath(null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
       setActiveWorkflowStep(2)
-      setSelectedRegion(null)
+      setSelectedRegions([])
     } finally {
       if (requestId === latestApplyRequestIdRef.current) {
         setLoading(false)
@@ -856,6 +875,7 @@ export default function HomePage() {
       setRemovalMode(nextRemovalMode)
       setActivePaintColor((current) => {
         if (!current) return sourcePalette[0]?.hex ?? '#FFFFFF'
+        if (current === BLANK_CELL) return current
         if (current === '#FFFFFF') return current
         return fullPaletteHexes.includes(current) ? current : sourcePalette[0]?.hex ?? '#FFFFFF'
       })
@@ -882,6 +902,7 @@ export default function HomePage() {
     setRemovalMode(nextRemovalMode)
     setActivePaintColor((current) => {
       if (!current) return collapsed.palette[0]?.hex ?? '#FFFFFF'
+      if (current === BLANK_CELL) return current
       if (current === '#FFFFFF') return current
       return resolvedEnabledColorHexes.includes(current) ? current : collapsed.palette[0]?.hex ?? '#FFFFFF'
     })
@@ -927,15 +948,28 @@ export default function HomePage() {
   }
 
   function handleAutoReduceColors(targetCount: number) {
-    const clampedTarget = Math.max(2, Math.min(displayPalette.length, targetCount))
-    if (!displayPalette.length || clampedTarget >= displayPalette.length) return
-
-    const nextEnabledColorHexes = pickDistinctPaletteHexes(
-      displayPalette,
-      displayColorCounts,
-      clampedTarget,
-      activePaintColor
+    const sourceState = buildEffectiveSourceState()
+    const lockedBlankHexes = new Set(
+      Object.entries(manualCellOverrides)
+        .filter(([, value]) => value === BLANK_CELL)
+        .map(([key]) => {
+          const [rowText, colText] = key.split(':')
+          const row = Number(rowText)
+          const col = Number(colText)
+          return originalCells[row]?.[col]
+        })
+        .filter((hex): hex is string => Boolean(hex) && hex !== BLANK_CELL)
     )
+    const sourcePalette = sourceState.sourcePalette.filter((color) => !lockedBlankHexes.has(color.hex))
+    const sourceCounts = countCellsByHex(sourceState.sourceCells)
+    const clampedTarget = Math.max(2, Math.min(sourcePalette.length, targetCount))
+    setPaletteReductionTarget(clampedTarget)
+
+    if (!sourcePalette.length) return
+    const nextEnabledColorHexes =
+      clampedTarget >= sourcePalette.length
+        ? sourcePalette.map((color) => color.hex)
+        : pickDistinctPaletteHexes(sourcePalette, sourceCounts, clampedTarget, activePaintColor)
 
     if (
       nextEnabledColorHexes.length === enabledColorHexes.length &&
@@ -997,16 +1031,27 @@ export default function HomePage() {
   }
 
   function handleApplyColorToSelection(targetHex: string) {
-    if (!selectedRegion || !activePaintColor) return
+    if (!activePaintColor || !cells.length) return
 
-    const bounds = getClampedSelectionBounds(selectedRegion, cells.length, cells[0]?.length ?? 0)
-    if (!bounds) return
+    const boundsList = selectedRegionBounds.length
+      ? selectedRegionBounds
+      : [{
+          top: 0,
+          bottom: cells.length - 1,
+          left: 0,
+          right: (cells[0]?.length ?? 1) - 1,
+        }]
+    if (!boundsList.length) return
 
-    const { top, bottom, left, right } = bounds
+    const shouldApplyToCell = (rowIndex: number, colIndex: number) =>
+      boundsList.some(
+        ({ top, bottom, left, right }) =>
+          rowIndex >= top && rowIndex <= bottom && colIndex >= left && colIndex <= right
+      )
     let changed = 0
     const nextCells = cells.map((row, rowIndex) =>
       row.map((cell, colIndex) => {
-        if (rowIndex < top || rowIndex > bottom || colIndex < left || colIndex > right) return cell
+        if (!shouldApplyToCell(rowIndex, colIndex)) return cell
         if (cell !== activePaintColor) return cell
         if (cell === targetHex) return cell
         changed += 1
@@ -1021,23 +1066,149 @@ export default function HomePage() {
     refreshPreviewPalette(nextCells)
     setManualCellOverrides((current) => {
       const nextOverrides = { ...current }
-      for (let row = top; row <= bottom; row += 1) {
-        for (let col = left; col <= right; col += 1) {
-          if (cells[row]?.[col] !== activePaintColor) continue
-          nextOverrides[makeCellKey(row, col)] = targetHex
+      boundsList.forEach(({ top, bottom, left, right }) => {
+        for (let row = top; row <= bottom; row += 1) {
+          for (let col = left; col <= right; col += 1) {
+            if (cells[row]?.[col] !== activePaintColor) continue
+            nextOverrides[makeCellKey(row, col)] = targetHex
+          }
         }
-      }
+      })
       return nextOverrides
     })
-    setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
-    setActivePaintColor(targetHex)
-    setSelectedRegion(selectedRegion)
+    if (targetHex !== BLANK_CELL) {
+      setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
+      setActivePaintColor(targetHex)
+    } else {
+      const nextPalette = buildPaletteForCells(nextCells)
+      setActivePaintColor(nextPalette[0]?.hex ?? null)
+      setSelectedRegions([])
+    }
     setFinalPdfPath(null)
     setViewMode('stitch')
   }
 
   function handleClearSelection() {
-    setSelectedRegion(null)
+    setSelectedRegions([])
+  }
+
+  function isInsideFinishShape(
+    rowIndex: number,
+    colIndex: number,
+    rowCount: number,
+    colCount: number,
+    targetStitches: number,
+    shape: 'circle' | 'square'
+  ) {
+    const halfSize = Math.min(targetStitches, rowCount, colCount) / 2
+    const centerRow = rowCount / 2
+    const centerCol = colCount / 2
+    const rowOffset = rowIndex + 0.5 - centerRow
+    const colOffset = colIndex + 0.5 - centerCol
+
+    return shape === 'circle'
+      ? rowOffset * rowOffset + colOffset * colOffset <= halfSize * halfSize
+      : Math.abs(rowOffset) <= halfSize && Math.abs(colOffset) <= halfSize
+  }
+
+  function updateCellsWithManualOverrides(nextCells: string[][]) {
+    setCells(nextCells)
+    refreshPreviewPalette(nextCells)
+    setManualCellOverrides((current) => {
+      const nextOverrides = { ...current }
+      nextCells.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (cells[rowIndex]?.[colIndex] === cell) return
+          nextOverrides[makeCellKey(rowIndex, colIndex)] = cell
+        })
+      })
+      return nextOverrides
+    })
+    setActivePaintColor(buildPaletteForCells(nextCells)[0]?.hex ?? null)
+    setSelectedRegions([])
+    setFinalPdfPath(null)
+    setViewMode('stitch')
+  }
+
+  function applyCenteredFinishMask(shape: 'circle' | 'square', sizeInches: number) {
+    if (!cells.length) return
+    const settings = lastSettings ?? draftSettings
+    const targetStitches = Math.max(1, Math.round(sizeInches * settings.mesh_count))
+    const rowCount = cells.length
+    const colCount = cells[0]?.length ?? 0
+    if (!colCount) return
+
+    let changed = 0
+    const nextCells = cells.map((row, rowIndex) =>
+      row.map((cell, colIndex) => {
+        const inside = isInsideFinishShape(rowIndex, colIndex, rowCount, colCount, targetStitches, shape)
+
+        if (inside || cell === BLANK_CELL) return cell
+        changed += 1
+        return BLANK_CELL
+      })
+    )
+
+    if (!changed) return
+
+    pushUndoSnapshot()
+    setFinishOutlineBackups({})
+    updateCellsWithManualOverrides(nextCells)
+  }
+
+  function applyCenteredFinishOutline(shape: 'circle' | 'square', sizeInches: number) {
+    if (!cells.length) return
+    const settings = lastSettings ?? draftSettings
+    const targetStitches = Math.max(1, Math.round(sizeInches * settings.mesh_count))
+    const rowCount = cells.length
+    const colCount = cells[0]?.length ?? 0
+    if (!colCount) return
+
+    const baseCells = cloneCells(cells)
+    Object.entries(finishOutlineBackups).forEach(([key, previousCell]) => {
+      const [rowText, colText] = key.split(':')
+      const row = Number(rowText)
+      const col = Number(colText)
+      if (!Number.isInteger(row) || !Number.isInteger(col)) return
+      if (baseCells[row]?.[col] === '#000000') {
+        baseCells[row][col] = previousCell
+      }
+    })
+
+    let changed = false
+    const nextOutlineBackups: Record<string, string> = {}
+    const nextCells = baseCells.map((row, rowIndex) =>
+      row.map((cell, colIndex) => {
+        const inside = isInsideFinishShape(rowIndex, colIndex, rowCount, colCount, targetStitches, shape)
+        if (!inside) return cell
+
+        const isInterior = [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ].every(([rowOffset, colOffset]) =>
+          isInsideFinishShape(rowIndex + rowOffset, colIndex + colOffset, rowCount, colCount, targetStitches, shape)
+        )
+
+        if (isInterior || cell === '#000000') return cell
+        const key = makeCellKey(rowIndex, colIndex)
+        nextOutlineBackups[key] = cell
+        changed = true
+        return '#000000'
+      })
+    )
+
+    if (
+      !changed &&
+      Object.keys(finishOutlineBackups).length === Object.keys(nextOutlineBackups).length
+    ) {
+      return
+    }
+
+    pushUndoSnapshot()
+    setFinishOutlineBackups(nextOutlineBackups)
+    updateCellsWithManualOverrides(nextCells)
   }
 
   function handleUndoColorChange() {
@@ -1054,6 +1225,7 @@ export default function HomePage() {
           activePaintColor,
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
+          finishOutlineBackups: { ...finishOutlineBackups },
         },
       ])
       setCells(previous.cells)
@@ -1062,6 +1234,7 @@ export default function HomePage() {
       setActivePaintColor(previous.activePaintColor)
       setRemovalMode(previous.removalMode)
       setManualCellOverrides(previous.manualCellOverrides)
+      setFinishOutlineBackups(previous.finishOutlineBackups)
       setFinalPdfPath(null)
 
       return current.slice(0, -1)
@@ -1082,6 +1255,7 @@ export default function HomePage() {
           activePaintColor,
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
+          finishOutlineBackups: { ...finishOutlineBackups },
         },
       ])
       setCells(next.cells)
@@ -1090,6 +1264,7 @@ export default function HomePage() {
       setActivePaintColor(next.activePaintColor)
       setRemovalMode(next.removalMode)
       setManualCellOverrides(next.manualCellOverrides)
+      setFinishOutlineBackups(next.finishOutlineBackups)
       setFinalPdfPath(null)
 
       return current.slice(0, -1)
@@ -1150,11 +1325,12 @@ export default function HomePage() {
     setActivePaintColor(allPalette[0]?.hex ?? '#FFFFFF')
     setRemovalMode('fill')
     setManualCellOverrides({})
+    setFinishOutlineBackups({})
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
     setViewMode('stitch')
-    setSelectedRegion(null)
+    setSelectedRegions([])
   }
 
   function mergeColorsIntoTarget(sourceHexes: string[], targetHex: string) {
@@ -1223,7 +1399,7 @@ export default function HomePage() {
   }
 
   async function handleEyedropperSelection() {
-    if (!selectedRegion) return
+    if (!selectedRegions.length) return
 
     const EyeDropperApi = (window as typeof window & { EyeDropper?: EyeDropperConstructor }).EyeDropper
     if (!EyeDropperApi) {
@@ -1407,8 +1583,11 @@ export default function HomePage() {
       /(\d{1,2})\s*colors?/,
     ])
     if (colorCountValue !== null) {
-      updateSettings({ color_count: colorCountValue })
-      return { reply: `Set color count to ${colorCountValue}.` }
+      if (displayPalette.length) {
+        handleAutoReduceColors(colorCountValue)
+        return { reply: `Reduced the current palette toward ${colorCountValue} colors.` }
+      }
+      return { reply: 'New previews generate at 128 colors. Generate a preview first, then reduce the current palette.' }
     }
 
     if (
@@ -1437,7 +1616,7 @@ export default function HomePage() {
       lowered.includes('turn clean background on')
     ) {
       updateSettings({ clean_background: true })
-      return { reply: 'Turned Clean background on.' }
+      return { reply: 'Turned Exclude blank canvas on.' }
     }
 
     if (
@@ -1446,7 +1625,7 @@ export default function HomePage() {
       lowered.includes('turn clean background off')
     ) {
       updateSettings({ clean_background: false })
-      return { reply: 'Turned Clean background off.' }
+      return { reply: 'Turned Exclude blank canvas off.' }
     }
 
     if (
@@ -1575,9 +1754,9 @@ export default function HomePage() {
           }`,
           `Size: ${draftSettings.width_inches}" x ${draftSettings.height_inches}"`,
           `Mesh: ${draftSettings.mesh_count}`,
-          `Colors: ${draftSettings.color_count}`,
+          `New preview color budget: 128`,
           `Contrast: ${draftSettings.contrast_level.replaceAll('_', ' ')}`,
-          `Clean background: ${draftSettings.clean_background ? 'on' : 'off'}`,
+          `Exclude blank canvas: ${draftSettings.clean_background ? 'on' : 'off'}`,
           `Simplify colors: ${draftSettings.simplify_colors ? 'on' : 'off'}`,
           `Strengthen dark detail: ${draftSettings.strengthen_dark_detail ? 'on' : 'off'}`,
           `Preserve accents: ${draftSettings.preserve_accents ? 'on' : 'off'}`,
@@ -1655,15 +1834,15 @@ export default function HomePage() {
 
     if (lowered.includes('blank white') || lowered.includes('remove fully')) {
       handleRemovalModeChange('blank')
-      return { reply: 'Color removals will now leave blank/white stitches.' }
+      return { reply: 'Color removals will now leave blank canvas cells.' }
     }
 
     const paintMatch = lowered.match(/(?:paint|use|select)(?: with)? (.+)/)
     if (paintMatch) {
       const query = paintMatch[1].trim()
       if (query === 'blank' || query === 'white') {
-        setActivePaintColor('#FFFFFF')
-        return { reply: 'Selected blank/white as the paint color.' }
+        setActivePaintColor(query === 'blank' ? BLANK_CELL : '#FFFFFF')
+        return { reply: `Selected ${query === 'blank' ? 'blank canvas' : 'white stitch'} as the paint color.` }
       }
 
       const color = findPaletteColor(query)
@@ -1859,6 +2038,72 @@ export default function HomePage() {
     </div>
   )
 
+  const paletteReductionPanel = hasGeneratedPreview && allPalette.length > 2 && (
+    <div
+      style={{
+        display: 'grid',
+        gap: 8,
+        width: '100%',
+        minWidth: 0,
+        padding: 12,
+        boxSizing: 'border-box',
+        border: hasManualBlankCells ? '1px solid #c94f42' : '1px solid #d9d9d9',
+        borderRadius: 12,
+        background: hasManualBlankCells ? '#fff7f5' : '#fbfbfb',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+      }}
+    >
+      <label style={{ display: 'grid', gap: 6, fontSize: 13, color: '#3f382f' }}>
+        <span style={{ fontWeight: 600, color: hasManualBlankCells ? '#b23428' : '#3f382f' }}>
+          Reduce current palette to: {currentDesignPalette.length}
+        </span>
+        <input
+          type="range"
+          min={2}
+          max={allPalette.length}
+          step={1}
+          value={Math.max(2, Math.min(allPalette.length, paletteReductionTarget))}
+          onChange={(event) => handleAutoReduceColors(Number(event.target.value))}
+          style={{ width: '100%' }}
+        />
+      </label>
+      <div style={{ fontSize: 12, color: '#8a8177' }}>
+        {hasManualBlankCells
+          ? 'Null/X removals are reflected in the current color count.'
+          : 'Drag left to reduce colors. Drag back right to restore the generated palette.'}
+      </div>
+    </div>
+  )
+
+  const designWidthInches = lastSettings?.width_inches ?? draftSettings.width_inches
+  const designHeightInches = lastSettings?.height_inches ?? draftSettings.height_inches
+  const designMeshCount = lastSettings?.mesh_count ?? draftSettings.mesh_count
+  const finishSizeLimit = Math.max(1, Number(Math.min(designWidthInches, designHeightInches).toFixed(2)))
+  const resolvedFinishSize = Math.max(1, Math.min(finishSizeLimit, finishSizeInches))
+  const canvasPaddingInches = 2
+  const requiredCanvasWidth =
+    finishShape === 'circle' ? resolvedFinishSize + canvasPaddingInches : Math.min(resolvedFinishSize, designWidthInches) + canvasPaddingInches
+  const requiredCanvasHeight =
+    finishShape === 'circle' ? resolvedFinishSize + canvasPaddingInches : Math.min(resolvedFinishSize, designHeightInches) + canvasPaddingInches
+  const availableCanvasSizes = [
+    { label: '5 x 6', width: 5, height: 6 },
+    { label: '8 x 6', width: 8, height: 6 },
+    { label: '8 x 12', width: 8, height: 12 },
+  ]
+  const canvasFits = (canvas: { width: number; height: number }) =>
+    (requiredCanvasWidth <= canvas.width && requiredCanvasHeight <= canvas.height) ||
+    (requiredCanvasWidth <= canvas.height && requiredCanvasHeight <= canvas.width)
+  const selectedCanvasSize = availableCanvasSizes.find(canvasFits) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
+  const selectedCanvasFits = canvasFits(selectedCanvasSize)
+  const finishingStitchWidth =
+    finishShape === 'circle'
+      ? Math.round(resolvedFinishSize * designMeshCount)
+      : Math.round(Math.min(resolvedFinishSize, designWidthInches) * designMeshCount)
+  const finishingStitchHeight =
+    finishShape === 'circle'
+      ? finishingStitchWidth
+      : Math.round(Math.min(resolvedFinishSize, designHeightInches) * designMeshCount)
+
   const workflowSteps = [
     { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
@@ -2041,10 +2286,11 @@ export default function HomePage() {
             <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
               Design
             </h2>
-            <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
+          <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
               Set size, mesh, and source mode. Paint colors on the right.
             </p>
           </div>
+          {paletteReductionPanel}
           {settingsPanel}
           <button
             type="button"
@@ -2093,6 +2339,98 @@ export default function HomePage() {
           <div><strong>Mesh:</strong> {lastSettings?.mesh_count ?? draftSettings.mesh_count}</div>
           <div><strong>Colors used:</strong> {currentDesignPalette.length}</div>
           <div><strong>Total stitches:</strong> {currentDesignStitchCount}</div>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gap: 10,
+            padding: 16,
+            border: '1px solid #e8e2d7',
+            borderRadius: 14,
+            background: '#fff',
+            fontSize: 14,
+          }}
+        >
+          <strong>Finishing shape</strong>
+          <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
+            Center a finishing area and blank everything outside it.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setFinishShape('circle')}
+              style={finishShape === 'circle' ? btnPrimary : btnSecondary}
+            >
+              Round
+            </button>
+            <button
+              type="button"
+              onClick={() => setFinishShape('square')}
+              style={finishShape === 'square' ? btnPrimary : btnSecondary}
+            >
+              Square
+            </button>
+          </div>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span>
+              {finishShape === 'circle' ? 'Diameter' : 'Width'}: {resolvedFinishSize.toFixed(1)}&quot;
+            </span>
+            <input
+              type="range"
+              min={1}
+              max={finishSizeLimit}
+              step={0.25}
+              value={resolvedFinishSize}
+              onChange={(event) => setFinishSizeInches(Number(event.target.value))}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => applyCenteredFinishMask(finishShape, resolvedFinishSize)}
+            disabled={!cells.length}
+            style={btnSecondary}
+          >
+            Crop outside shape
+          </button>
+          <button
+            type="button"
+            onClick={() => applyCenteredFinishOutline(finishShape, resolvedFinishSize)}
+            disabled={!cells.length}
+            style={btnSecondary}
+          >
+            Draw 1-stitch black outline
+          </button>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gap: 8,
+            padding: 16,
+            border: '1px solid #e8e2d7',
+            borderRadius: 14,
+            background: '#fff',
+            fontSize: 14,
+          }}
+        >
+          <strong>Canvas recommendation</strong>
+          <div>
+            <strong>Design area:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot; on {designMeshCount} mesh
+          </div>
+          <div>
+            <strong>Finishing area:</strong>{' '}
+            {finishShape === 'circle'
+              ? `${resolvedFinishSize.toFixed(1)}" round`
+              : `${resolvedFinishSize.toFixed(1)}" square`}
+            {' '}({finishingStitchWidth} x {finishingStitchHeight} stitches)
+          </div>
+          <div>
+            <strong>Canvas size:</strong> {selectedCanvasSize.label}
+          </div>
+          <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
+            {selectedCanvasFits
+              ? `Chosen from 5 x 6, 8 x 6, and 8 x 12 with about 1" working canvas on each side.`
+              : `This design needs about ${requiredCanvasWidth.toFixed(1)}" x ${requiredCanvasHeight.toFixed(1)}", which is larger than the available sizes.`}
+          </div>
         </div>
         <button
           type="button"
@@ -2311,7 +2649,7 @@ export default function HomePage() {
                   highlightSelection={toolMode === 'select'}
                   meshCount={lastSettings?.mesh_count ?? 13}
                   brushDensity={brushDensity}
-                  onSelectionChange={setSelectedRegion}
+                  onSelectionChange={(selection) => setSelectedRegions(selection ?? [])}
                   onPaintStart={pushUndoSnapshot}
                   onPaintCells={handlePaintCells}
                 />
@@ -2378,31 +2716,24 @@ export default function HomePage() {
           >
             <PalettePanel
               colors={displayPalette}
-              colorCount={draftSettings.color_count}
               activeColor={activePaintColor}
-              enabledColorHexes={displayEnabledColorHexes}
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
                 setToolMode(mode)
-                if (mode === 'paint') setSelectedRegion(null)
+                if (mode === 'paint') setSelectedRegions([])
               }}
               brushDensity={brushDensity}
               onBrushDensityChange={setBrushDensity}
-              hasSelectedRegion={Boolean(selectedRegion)}
+              hasSelectedRegion={selectedRegions.length > 0}
               selectedRegionCount={selectedRegionCount}
-              removalMode={removalMode}
               selectionMergeSuggestions={selectionMergeSuggestions}
               selectionOtherColors={selectionOtherColors}
               onApplyColorToSelection={handleApplyColorToSelection}
               onClearSelection={handleClearSelection}
               onEyedropperSelection={() => void handleEyedropperSelection()}
               onSelect={(color) => setActivePaintColor(color.hex)}
-              onToggleColorEnabled={handleToggleColorEnabled}
-              onEnableAll={handleEnableAllColors}
-              onColorCountChange={(nextCount) => updateSettings({ color_count: nextCount })}
-              onAutoReduceToCount={handleAutoReduceColors}
-              onRemovalModeChange={handleRemovalModeChange}
+              onSelectBlankCanvas={() => setActivePaintColor(BLANK_CELL)}
               moreColors={allDmcColors.filter(
                 (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
               )}
