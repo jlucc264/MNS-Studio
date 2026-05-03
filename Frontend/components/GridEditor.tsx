@@ -2,15 +2,21 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
+type ShapeCell = { row: number; col: number; color: string }
+
 type Props = {
   cells: string[][]
   activeColor: string | null
-  highlightSelection: boolean
+  toolMode: 'paint' | 'select' | 'shape'
   meshCount: 13 | 18
   brushDensity: number
   onSelectionChange?: (selection: DesignSelectionRect[] | null) => void
   onPaintStart: () => void
   onPaintCells: (coords: Array<[number, number]>) => void
+  shapeType?: 'box' | 'semicircle' | 'line'
+  shapeFillColor?: string | null
+  shapeBorderColor?: string | null
+  onApplyShapeCells?: (cells: ShapeCell[]) => void
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
@@ -19,6 +25,7 @@ const PREVIEW_FRAME_WIDTH_UNITS = 13
 const PREVIEW_FRAME_HEIGHT_UNITS = 9
 const ZOOM_BUTTON_STEP = 50
 const BLANK_CELL = '__BLANK__'
+const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
 
 export type DesignSelectionRect = {
   startRow: number
@@ -26,6 +33,114 @@ export type DesignSelectionRect = {
   endRow: number
   endCol: number
 }
+
+// ── Shape helpers ────────────────────────────────────────────────────────────
+
+function getBoxCells(
+  r1: number, c1: number, r2: number, c2: number,
+  fillColor: string | null, borderColor: string | null,
+  totalRows: number, totalCols: number
+): Array<{ row: number; col: number; color: string }> {
+  const top = Math.max(0, Math.min(r1, r2))
+  const bottom = Math.min(totalRows - 1, Math.max(r1, r2))
+  const left = Math.max(0, Math.min(c1, c2))
+  const right = Math.min(totalCols - 1, Math.max(c1, c2))
+  const result: Array<{ row: number; col: number; color: string }> = []
+  for (let row = top; row <= bottom; row++) {
+    for (let col = left; col <= right; col++) {
+      const isBorder = row === top || row === bottom || col === left || col === right
+      if (isBorder) {
+        if (borderColor) result.push({ row, col, color: borderColor })
+      } else {
+        if (fillColor) result.push({ row, col, color: fillColor })
+      }
+    }
+  }
+  return result
+}
+
+function getLineCells(
+  r1: number, c1: number, r2: number, c2: number,
+  borderColor: string | null, fillColor: string | null,
+  totalRows: number, totalCols: number
+): Array<{ row: number; col: number; color: string }> {
+  const color = borderColor ?? fillColor
+  if (!color) return []
+  const result: Array<{ row: number; col: number; color: string }> = []
+  let row = r1, col = c1
+  const dr = Math.abs(r2 - r1), dc = Math.abs(c2 - c1)
+  const sr = r1 < r2 ? 1 : -1, sc = c1 < c2 ? 1 : -1
+  let err = dr - dc
+  for (;;) {
+    if (row >= 0 && row < totalRows && col >= 0 && col < totalCols) {
+      result.push({ row, col, color })
+    }
+    if (row === r2 && col === c2) break
+    const e2 = 2 * err
+    if (e2 > -dc) { err -= dc; row += sr }
+    if (e2 < dr) { err += dr; col += sc }
+  }
+  return result
+}
+
+function getSemicircleCells(
+  r1: number, c1: number, r2: number, c2: number,
+  fillColor: string | null, borderColor: string | null,
+  totalRows: number, totalCols: number
+): Array<{ row: number; col: number; color: string }> {
+  const topRow = Math.min(r1, r2)
+  const botRow = Math.max(r1, r2)
+  const leftCol = Math.min(c1, c2)
+  const rightCol = Math.max(c1, c2)
+  const cx = (leftCol + rightCol) / 2
+  const cy = topRow
+  const width = rightCol - leftCol
+  const height = botRow - topRow
+  const a = width / 2 + 0.5
+  const b = height + 0.5
+  const result: Array<{ row: number; col: number; color: string }> = []
+  for (let row = Math.max(0, topRow); row <= Math.min(totalRows - 1, botRow); row++) {
+    for (let col = Math.max(0, leftCol); col <= Math.min(totalCols - 1, rightCol); col++) {
+      const nx = (col + 0.5 - cx) / a
+      const ny = (row + 0.5 - cy) / b
+      const inside = nx * nx + ny * ny <= 1 && row >= topRow
+      if (!inside) continue
+      // check if border: any neighbor outside
+      const neighbors = [
+        [row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]
+      ]
+      const isBorder = row === topRow || neighbors.some(([nr, nc]) => {
+        if (nr < topRow) return true
+        const nnx = (nc + 0.5 - cx) / a
+        const nny = (nr + 0.5 - cy) / b
+        return nnx * nnx + nny * nny > 1 || nr < topRow
+      })
+      if (isBorder) {
+        if (borderColor) result.push({ row, col, color: borderColor })
+      } else {
+        if (fillColor) result.push({ row, col, color: fillColor })
+      }
+    }
+  }
+  return result
+}
+
+function computeShapeCells(
+  shapeType: 'box' | 'semicircle' | 'line',
+  r1: number, c1: number, r2: number, c2: number,
+  fillColor: string | null, borderColor: string | null,
+  totalRows: number, totalCols: number
+): Array<{ row: number; col: number; color: string }> {
+  const cr1 = Math.max(0, Math.min(totalRows - 1, r1))
+  const cc1 = Math.max(0, Math.min(totalCols - 1, c1))
+  const cr2 = Math.max(0, Math.min(totalRows - 1, r2))
+  const cc2 = Math.max(0, Math.min(totalCols - 1, c2))
+  if (shapeType === 'box') return getBoxCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols)
+  if (shapeType === 'line') return getLineCells(cr1, cc1, cr2, cc2, borderColor, fillColor, totalRows, totalCols)
+  return getSemicircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols)
+}
+
+// ── End shape helpers ────────────────────────────────────────────────────────
 
 function stitchStroke(hex: string) {
   if (hex === '#FFFFFF') {
@@ -118,9 +233,10 @@ function drawCanvasCell({
       (focusRegionActive ? !isInsideFocusRegion : color !== activeColor)
   )
   const isBlankCell = color === BLANK_CELL
+  const renderColor = color === FINISH_OUTLINE_CELL ? '#000000' : color
 
   context.clearRect(x, y, cellSize, cellSize)
-  context.fillStyle = isBlankCell ? '#fffdf8' : color
+  context.fillStyle = isBlankCell ? '#fffdf8' : renderColor
   context.fillRect(x, y, cellSize, cellSize)
 
   if (dimNonSelected) {
@@ -152,49 +268,49 @@ function drawCanvasCell({
 
   context.lineCap = 'round'
 
-  context.strokeStyle = stitchShadow(color)
+  context.strokeStyle = stitchShadow(renderColor)
   context.lineWidth = Math.max(1.5, cellSize * 0.22)
   context.beginPath()
   context.moveTo(left + width * 0.18, top + height * 0.22)
   context.lineTo(left + width * 0.82, top + height * 0.78)
   context.stroke()
 
-  context.strokeStyle = color
+  context.strokeStyle = renderColor
   context.lineWidth = Math.max(1.25, cellSize * 0.18)
   context.beginPath()
   context.moveTo(left + width * 0.17, top + height * 0.24)
   context.lineTo(left + width * 0.8, top + height * 0.77)
   context.stroke()
 
-  context.strokeStyle = stitchHighlight(color)
+  context.strokeStyle = stitchHighlight(renderColor)
   context.lineWidth = Math.max(0.75, cellSize * 0.05)
   context.beginPath()
   context.moveTo(left + width * 0.22, top + height * 0.25)
   context.lineTo(left + width * 0.76, top + height * 0.7)
   context.stroke()
 
-  context.strokeStyle = stitchShadow(color)
+  context.strokeStyle = stitchShadow(renderColor)
   context.lineWidth = Math.max(1.5, cellSize * 0.22)
   context.beginPath()
   context.moveTo(left + width * 0.82, top + height * 0.22)
   context.lineTo(left + width * 0.18, top + height * 0.78)
   context.stroke()
 
-  context.strokeStyle = stitchStroke(color)
+  context.strokeStyle = stitchStroke(renderColor)
   context.lineWidth = Math.max(1.35, cellSize * 0.2)
   context.beginPath()
   context.moveTo(left + width * 0.8, top + height * 0.23)
   context.lineTo(left + width * 0.18, top + height * 0.8)
   context.stroke()
 
-  context.strokeStyle = stitchHighlight(color)
+  context.strokeStyle = stitchHighlight(renderColor)
   context.lineWidth = Math.max(0.75, cellSize * 0.05)
   context.beginPath()
   context.moveTo(left + width * 0.76, top + height * 0.26)
   context.lineTo(left + width * 0.23, top + height * 0.75)
   context.stroke()
 
-  context.fillStyle = color === '#FFFFFF' ? 'rgba(246, 246, 246, 0.88)' : 'rgba(255, 255, 255, 0.12)'
+  context.fillStyle = renderColor === '#FFFFFF' ? 'rgba(246, 246, 246, 0.88)' : 'rgba(255, 255, 255, 0.12)'
   context.beginPath()
   context.ellipse(
     x + cellSize / 2,
@@ -231,14 +347,20 @@ function drawCanvasCell({
 export default function GridEditor({
   cells,
   activeColor,
-  highlightSelection,
+  toolMode,
   meshCount,
   brushDensity,
   onSelectionChange,
   onPaintStart,
   onPaintCells,
+  shapeType,
+  shapeFillColor,
+  shapeBorderColor,
+  onApplyShapeCells,
 }: Props) {
   if (!cells.length) return null
+
+  const highlightSelection = toolMode === 'select'
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
@@ -259,6 +381,9 @@ export default function GridEditor({
   const [selectionRects, setSelectionRects] = useState<DesignSelectionRect[]>([])
   const [dragSelectionRect, setDragSelectionRect] = useState<DesignSelectionRect | null>(null)
   const [isAddingSelection, setIsAddingSelection] = useState(false)
+  const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
+  const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
+  const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<string | null>(null)
@@ -354,6 +479,24 @@ export default function GridEditor({
 
   useEffect(() => {
     const stopPainting = () => {
+      if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
+        const start = shapeStartCellRef.current
+        if (shapeType && onApplyShapeCells) {
+          const shapeCells = computeShapeCells(
+            shapeType,
+            start.row, start.col,
+            shapeEndCell.row, shapeEndCell.col,
+            shapeFillColor ?? null,
+            shapeBorderColor ?? null,
+            cells.length, cells[0]?.length ?? 0
+          )
+          if (shapeCells.length) onApplyShapeCells(shapeCells)
+        }
+        shapeStartCellRef.current = null
+        setShapeStartCell(null)
+        setShapeEndCell(null)
+      }
+
       if (isSelecting && dragSelectionRect) {
         const nextSelectionRects = isAddingSelection
           ? [...selectionRects, dragSelectionRect]
@@ -379,7 +522,11 @@ export default function GridEditor({
       window.removeEventListener('pointerup', stopPainting)
       window.removeEventListener('pointercancel', stopPainting)
     }
-  }, [dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects])
+  }, [
+    toolMode, shapeEndCell, shapeType, shapeFillColor, shapeBorderColor,
+    onApplyShapeCells, cells,
+    dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects,
+  ])
 
   const borderStitches = Math.floor(1 * meshCount)
   const rows = cells.length
@@ -726,6 +873,16 @@ export default function GridEditor({
         return
       }
 
+      if (toolMode === 'shape') {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        event.preventDefault()
+        shapeStartCellRef.current = { row: hit.row, col: hit.col }
+        setShapeStartCell({ row: hit.row, col: hit.col })
+        setShapeEndCell({ row: hit.row, col: hit.col })
+        return
+      }
+
       if (!activeColorRef.current) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
@@ -738,7 +895,7 @@ export default function GridEditor({
       setIsPainting(true)
       paintCell(hit.row, hit.col)
     },
-    [getCellFromClientPoint, highlightSelection, onPaintStart, paintCell]
+    [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell]
   )
 
   const handleCanvasPointerMove = useCallback(
@@ -761,6 +918,13 @@ export default function GridEditor({
         return
       }
 
+      if (toolMode === 'shape' && shapeStartCellRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        setShapeEndCell({ row: hit.row, col: hit.col })
+        return
+      }
+
       if (!isPainting || paintingPointerIdRef.current !== event.pointerId) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
@@ -768,7 +932,7 @@ export default function GridEditor({
 
       paintCell(hit.row, hit.col)
     },
-    [getCellFromClientPoint, highlightSelection, isPainting, isSelecting, paintCell]
+    [getCellFromClientPoint, highlightSelection, toolMode, isPainting, isSelecting, paintCell]
   )
 
   useEffect(() => {
@@ -909,7 +1073,7 @@ export default function GridEditor({
           const y = gridOriginY + row * cellSize
 
           if (isZooming) {
-            context.fillStyle = color === BLANK_CELL ? '#fffdf8' : color
+            context.fillStyle = color === BLANK_CELL ? '#fffdf8' : color === FINISH_OUTLINE_CELL ? '#000000' : color
             context.fillRect(x, y, cellSize + 0.5, cellSize + 0.5)
             continue
           }
@@ -1007,6 +1171,31 @@ export default function GridEditor({
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0)
     context.clearRect(0, 0, wrapperWidth, wrapperHeight)
 
+    // Shape drag preview
+    if (toolMode === 'shape' && shapeStartCell && shapeEndCell && shapeType) {
+      const previewCells = computeShapeCells(
+        shapeType,
+        shapeStartCell.row, shapeStartCell.col,
+        shapeEndCell.row, shapeEndCell.col,
+        shapeFillColor ?? null,
+        shapeBorderColor ?? null,
+        rows, cols
+      )
+      for (const cell of previewCells) {
+        const stageRow = cell.row + contentOriginRow + borderStitches
+        const stageCol = cell.col + contentOriginCol + borderStitches
+        const x = gridOriginX + stageCol * cellSize
+        const y = gridOriginY + stageRow * cellSize
+        context.globalAlpha = 0.7
+        context.fillStyle = cell.color
+        context.fillRect(x, y, cellSize, cellSize)
+        context.globalAlpha = 1
+        context.strokeStyle = 'rgba(0,0,0,0.25)'
+        context.lineWidth = 0.5
+        context.strokeRect(x, y, cellSize, cellSize)
+      }
+    }
+
     if (!renderSelections.length) return
 
     renderSelections.forEach((overlaySelection) => {
@@ -1030,12 +1219,20 @@ export default function GridEditor({
   }, [
     borderStitches,
     cellSize,
+    cols,
     contentOriginCol,
     contentOriginRow,
     dragSelectionRect,
     gridOriginX,
     gridOriginY,
     renderSelections,
+    rows,
+    shapeBorderColor,
+    shapeFillColor,
+    shapeEndCell,
+    shapeStartCell,
+    shapeType,
+    toolMode,
     wrapperHeight,
     wrapperWidth,
     isZooming,

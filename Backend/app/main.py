@@ -4,7 +4,10 @@ import os
 import re
 from pathlib import Path
 from urllib.request import Request, urlopen
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -17,13 +20,27 @@ from app.models import (
     FinalizeResponse,
     RecolorRequest,
     RecolorResponse,
+    ProjectSaveRequest,
+    ProjectResponse,
+    GalleryCreateRequest,
+    GalleryItemResponse,
 )
 from app.services.intent import classify_intent
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import send_finalized_report
+from app.services.auth import get_current_user_id, get_optional_user_id
 from app.services.supabase_storage import upload_pdf_to_supabase
+from app.services.supabase_db import (
+    list_projects,
+    create_project,
+    update_project,
+    delete_project,
+    list_gallery_items,
+    create_gallery_item,
+    toggle_gallery_like,
+)
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview
 from app.data.dmc_colors import DMC_COLORS
 
@@ -37,7 +54,14 @@ def parse_allowed_origins() -> list[str]:
         "ALLOWED_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000",
     )
-    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    # allow any localhost port in dev so port changes don't break CORS
+    for port in range(3000, 3010):
+        for host in ("localhost", "127.0.0.1"):
+            origin = f"http://{host}:{port}"
+            if origin not in origins:
+                origins.append(origin)
+    return origins
 
 app = FastAPI(title="Stitch Preview MVP")
 
@@ -283,7 +307,7 @@ def finalize(request: FinalizeRequest):
         bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET",
         return_public_url=False,
     )
-    email_sent = send_finalized_report(internal_pdf_path)
+    send_finalized_report(internal_pdf_path)
 
     return FinalizeResponse(
         message="Final PDF report created successfully.",
@@ -313,3 +337,88 @@ def recolor(request: RecolorRequest):
         palette=[p for p in palette],
         cells=cells,
     )
+
+
+# ── Projects ──────────────────────────────────────────────────────────────────
+
+@app.get("/projects", response_model=list[ProjectResponse])
+def get_projects(user_id: str = Depends(get_current_user_id)):
+    return list_projects(user_id)
+
+
+MAX_DRAFTS = 3
+
+@app.post("/projects", response_model=ProjectResponse, status_code=201)
+def save_project(request: ProjectSaveRequest, user_id: str = Depends(get_current_user_id)):
+    existing = list_projects(user_id)
+    if len(existing) >= MAX_DRAFTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Draft limit reached ({MAX_DRAFTS}). Delete a saved design before saving a new one."
+        )
+    data = request.model_dump(exclude_none=True)
+    if "palette" in data and data["palette"] is not None:
+        data["palette"] = [c if isinstance(c, dict) else c.model_dump() for c in (request.palette or [])]
+    result = create_project(data, user_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not save project to database.")
+    return result
+
+
+@app.patch("/projects/{project_id}", response_model=ProjectResponse)
+def patch_project(project_id: str, request: ProjectSaveRequest, user_id: str = Depends(get_current_user_id)):
+    data = request.model_dump(exclude_none=True)
+    if "palette" in data and data["palette"] is not None:
+        data["palette"] = [c if isinstance(c, dict) else c.model_dump() for c in (request.palette or [])]
+    result = update_project(project_id, data, user_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not update project.")
+    return result
+
+
+@app.delete("/projects/{project_id}", status_code=204)
+def remove_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    ok = delete_project(project_id, user_id)
+    if not ok:
+        raise HTTPException(status_code=502, detail="Could not delete project.")
+
+
+# ── Gallery ───────────────────────────────────────────────────────────────────
+
+@app.get("/gallery", response_model=list[GalleryItemResponse])
+def get_gallery(search: str = "", sort: str = "recent", user_id: str | None = Depends(get_optional_user_id)):
+    if sort not in {"recent", "popular"}:
+        raise HTTPException(status_code=400, detail="Sort must be recent or popular.")
+    return list_gallery_items(search=search, sort=sort, user_id=user_id)
+
+
+@app.post("/gallery", response_model=GalleryItemResponse, status_code=201)
+def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(get_current_user_id)):
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Gallery title is required.")
+
+    tags = []
+    seen_tags = set()
+    for tag in request.tags:
+        normalized = tag.strip().lower().replace("#", "")
+        if not normalized or normalized in seen_tags:
+            continue
+        seen_tags.add(normalized)
+        tags.append(normalized[:32])
+
+    data = request.model_dump(exclude_none=True)
+    data["title"] = title
+    data["tags"] = tags[:8]
+    result = create_gallery_item(data, user_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not publish to gallery.")
+    return result
+
+
+@app.post("/gallery/{item_id}/like", response_model=GalleryItemResponse)
+def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id)):
+    result = toggle_gallery_like(item_id, user_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not update gallery like.")
+    return result

@@ -21,6 +21,84 @@ type Props = {
   sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
+type ChatAction = {
+  id: string
+  label: string
+  description: string
+  command?: string
+  draftCommand?: string
+  special?: 'upload' | 'generate'
+}
+
+const ACTION_GROUPS: Array<{ label: string; actions: ChatAction[] }> = [
+  {
+    label: 'Import',
+    actions: [
+      {
+        id: 'upload',
+        label: 'Upload an image',
+        description: 'Choose a local image file and bring it into the canvas.',
+        special: 'upload',
+      },
+      {
+        id: 'import-url',
+        label: 'Import from URL',
+        description: 'Paste a direct image URL into the advanced command field.',
+        draftCommand: 'import https://',
+      },
+    ],
+  },
+  {
+    label: 'Preview setup',
+    actions: [
+      { id: 'source-photo', label: 'Use photo mode', description: 'Best for regular artwork and photos.', command: 'use photo' },
+      { id: 'source-stitched', label: 'Use stitched photo mode', description: 'Best for photos of existing stitched work.', command: 'use stitched photo' },
+      { id: 'source-graphic', label: 'Use graphic / screenshot mode', description: 'Best for logos, screenshots, text, and crisp reference art.', command: 'use graphic art' },
+      { id: 'set-width', label: 'Set width', description: 'Enter a width in inches in the advanced command field.', draftCommand: 'set width to ' },
+      { id: 'set-height', label: 'Set height', description: 'Enter a height in inches in the advanced command field.', draftCommand: 'set height to ' },
+      { id: 'mesh-13', label: 'Use 13 mesh', description: 'Switch the design to 13 mesh.', command: 'use 13 mesh' },
+      { id: 'mesh-18', label: 'Use 18 mesh', description: 'Switch the design to 18 mesh.', command: 'use 18 mesh' },
+      { id: 'generate-preview', label: 'Generate preview', description: 'Generate or refresh the stitch preview from the current settings.', special: 'generate' },
+    ],
+  },
+  {
+    label: 'Cleanup',
+    actions: [
+      { id: 'clean-on', label: 'Exclude blank canvas', description: 'Treat likely blank background as unpainted canvas.', command: 'clean background on' },
+      { id: 'clean-off', label: 'Include background colors', description: 'Turn blank canvas exclusion off.', command: 'clean background off' },
+      { id: 'simplify-on', label: 'Simplify colors', description: 'Reduce noisy variation before generating a preview.', command: 'simplify colors on' },
+      { id: 'dark-on', label: 'Strengthen dark detail', description: 'Preserve dark edges, lines, and lettering better.', command: 'strengthen dark detail on' },
+      { id: 'accents-on', label: 'Preserve accents', description: 'Help small bright accent colors survive conversion.', command: 'preserve accents on' },
+    ],
+  },
+  {
+    label: 'Palette editing',
+    actions: [
+      { id: 'reduce-palette', label: 'Reduce current palette', description: 'Enter a target color count.', draftCommand: 'set colors to ' },
+      { id: 'analyze-palette', label: 'Analyze palette', description: 'Show the main colors and stitch counts.', command: 'analyze palette' },
+      { id: 'paint-color', label: 'Paint with color', description: 'Enter a DMC code or color name.', draftCommand: 'paint ' },
+      { id: 'remove-color', label: 'Remove a color', description: 'Enter a DMC code or color name to remove.', draftCommand: 'turn off ' },
+      { id: 'restore-color', label: 'Restore a color', description: 'Enter a DMC code or color name to restore.', draftCommand: 'turn on ' },
+      { id: 'merge-colors', label: 'Merge colors', description: 'Merge one or more colors into a target color.', draftCommand: 'merge 907 and 3052 into 907' },
+      { id: 'blank-removal', label: 'Remove to blank canvas', description: 'Color removals leave blank canvas cells.', command: 'remove fully' },
+      { id: 'nearby-removal', label: 'Fill removals nearby', description: 'Color removals fill with nearby colors.', command: 'fill with nearby' },
+    ],
+  },
+  {
+    label: 'History and view',
+    actions: [
+      { id: 'undo', label: 'Undo last edit', description: 'Undo the last preview edit.', command: 'undo' },
+      { id: 'redo', label: 'Redo last edit', description: 'Redo the last undone preview edit.', command: 'redo' },
+      { id: 'reset', label: 'Reset preview edits', description: 'Return to the generated base preview.', command: 'reset preview' },
+      { id: 'expand', label: 'Expand preview', description: 'Give the preview more room.', command: 'expand preview' },
+      { id: 'show-chat', label: 'Show chat and panels', description: 'Bring the side panels back.', command: 'show chat' },
+      { id: 'settings', label: 'Show current settings', description: 'Review source mode, size, mesh, color budget, and toggles.', command: 'show settings' },
+    ],
+  },
+]
+
+const ACTIONS = ACTION_GROUPS.flatMap((group) => group.actions)
+
 export default function ChatPanel({
   onSubmitMessage,
   onUploadFile,
@@ -42,7 +120,8 @@ export default function ChatPanel({
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [dragActive, setDragActive] = useState(false)
-  const [showGuide, setShowGuide] = useState(false)
+  const [selectedActionId, setSelectedActionId] = useState('')
+  const [showAdvancedCommand, setShowAdvancedCommand] = useState(false)
 
   useEffect(() => {
     const node = logRef.current
@@ -50,58 +129,21 @@ export default function ChatPanel({
     node.scrollTop = node.scrollHeight
   }, [messages])
 
-  const guideContent = (() => {
-    if (sourceType === 'graphic_art') {
-      return {
-        title: 'Graphic / screenshot workflow',
-        lines: [
-          'Best for screenshots, logos, stitched reference art, and crisp sign-style images.',
-          'Start with a high color budget, then use Auto reduce to trim the palette without losing accents.',
-          'If tiny details are still getting lost, try `preserve accents on` before pushing contrast higher.',
-        ],
-      }
-    }
+  const selectedAction = ACTIONS.find((action) => action.id === selectedActionId)
+  const activeModeLabel =
+    sourceType === 'graphic_art'
+      ? 'Graphic / screenshot mode'
+      : sourceType === 'stitched_photo'
+        ? 'Stitched photo mode'
+        : 'Photo mode'
 
-    if (sourceType === 'stitched_photo') {
-      return {
-        title: 'Stitched photo workflow',
-        lines: [
-          'Best for photographed stitched work where fabric or canvas colors interfere with the design.',
-          'Use this when you want cleaner palette discipline and less screenshot-style sharpness.',
-          'Try `clean background on` only when neutral canvas tones are stealing too much color budget.',
-        ],
-      }
+  function openFilePicker() {
+    if (busy) return
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+      fileInputRef.current.click()
     }
-
-    return {
-      title: 'Photo workflow',
-      lines: [
-        'Best for regular photos, artwork, and cases where text continuity needs softer preservation.',
-        'If the preview feels noisy, try `simplify colors on` before changing source modes.',
-        'If dark edges or lettering feel weak, try `strengthen dark detail on` before raising contrast.',
-      ],
-    }
-  })()
-
-  const quickSuggestions = (() => {
-    if (!canGeneratePreview) {
-      return ['help', 'import https://...', 'use graphic art']
-    }
-
-    if (!hasPreview) {
-      return ['generate preview', 'show settings', 'preserve accents on']
-    }
-
-    if (sourceType === 'graphic_art') {
-      return ['preserve accents on', 'simplify colors on', 'show settings']
-    }
-
-    if (sourceType === 'stitched_photo') {
-      return ['clean background on', 'show settings', 'generate preview']
-    }
-
-    return ['strengthen dark detail on', 'simplify colors on', 'show settings']
-  })()
+  }
 
   async function runQuickCommand(command: string) {
     if (busy) return
@@ -123,6 +165,30 @@ export default function ChatPanel({
       ])
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function runSelectedAction() {
+    if (!selectedAction || busy) return
+
+    if (selectedAction.special === 'upload') {
+      openFilePicker()
+      return
+    }
+
+    if (selectedAction.special === 'generate') {
+      onGeneratePreview()
+      return
+    }
+
+    if (selectedAction.command) {
+      await runQuickCommand(selectedAction.command)
+      return
+    }
+
+    if (selectedAction.draftCommand) {
+      setInput(selectedAction.draftCommand)
+      setShowAdvancedCommand(true)
     }
   }
 
@@ -178,7 +244,10 @@ export default function ChatPanel({
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
-    if (!file || busy) return
+    if (!file || busy) {
+      event.target.value = ''
+      return
+    }
 
     await handleUpload(file)
     event.target.value = ''
@@ -222,12 +291,12 @@ export default function ChatPanel({
       onDrop={(event) => void handleDrop(event)}
       style={{
         display: 'grid',
-        gridTemplateRows: 'auto minmax(0, 1fr) auto',
+        gridTemplateRows: 'auto minmax(72px, 1fr) auto',
         gap: 0,
         height: '100%',
         minHeight: 0,
         border: '1px solid #d9d9d9',
-        borderRadius: 14,
+        borderRadius: 10,
         background: dragActive ? '#f3f7ff' : '#ffffff',
         boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
         overflow: 'hidden',
@@ -242,56 +311,96 @@ export default function ChatPanel({
           background: '#ffffff',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <strong style={{ fontSize: 14 }}>Quick guide</strong>
-          <button
-            type="button"
-            onClick={() => setShowGuide((current) => !current)}
-            style={{
-              border: '1px solid #d0d0d0',
-              background: '#fff',
-              borderRadius: 8,
-              padding: '4px 8px',
-              font: 'inherit',
-              cursor: 'pointer',
-            }}
-          >
-            {showGuide ? 'Hide' : 'Show'}
-          </button>
+        <div style={{ display: 'grid', gap: 3 }}>
+          <strong style={{ fontSize: 14 }}>Canvas assistant</strong>
+          <span style={{ fontSize: 12.5, color: '#6f675f' }}>
+            Choose a guided action. Current source: {activeModeLabel}.
+          </span>
         </div>
 
-        {showGuide && (
+        <select
+          value={selectedActionId}
+          onChange={(event) => setSelectedActionId(event.target.value)}
+          style={{
+            width: '100%',
+            border: '1px solid #d0c8bd',
+            borderRadius: 8,
+            padding: '9px 10px',
+            font: 'inherit',
+            color: '#3f382f',
+            background: '#fffdf8',
+          }}
+        >
+          <option value="">Choose an action...</option>
+          {ACTION_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.actions.map((action) => (
+                <option key={action.id} value={action.id}>
+                  {action.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+
+        {selectedAction && (
           <div
             style={{
               display: 'grid',
-              gap: 6,
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              alignItems: 'center',
+              gap: 10,
               padding: 10,
-              border: '1px solid #e5e5e5',
-              borderRadius: 10,
-              background: '#fafafa',
+              border: '1px solid #e7e1d8',
+              borderRadius: 8,
+              background: '#fffdf8',
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{guideContent.title}</div>
-            {guideContent.lines.map((line) => (
-              <div key={line} style={{ fontSize: 12.5, color: '#555', lineHeight: 1.35 }}>
-                {line}
-              </div>
-            ))}
+            <div style={{ display: 'grid', gap: 3 }}>
+              <strong style={{ fontSize: 13 }}>{selectedAction.label}</strong>
+              <span style={{ fontSize: 12.5, color: '#6f675f', lineHeight: 1.3 }}>
+                {selectedAction.description}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runSelectedAction()}
+              disabled={busy || (selectedAction.special === 'generate' && !canGeneratePreview)}
+              style={{
+                justifySelf: 'start',
+                border: '1px solid #5c7856',
+                background: '#6e8d67',
+                color: '#fff',
+                borderRadius: 8,
+                padding: '7px 10px',
+                font: 'inherit',
+                fontSize: 12.5,
+                fontWeight: 700,
+                cursor: busy ? 'default' : 'pointer',
+                opacity: busy || (selectedAction.special === 'generate' && !canGeneratePreview) ? 0.55 : 1,
+              }}
+            >
+              {selectedAction.draftCommand ? 'Fill command' : selectedAction.special === 'upload' ? 'Choose file' : 'Run action'}
+            </button>
           </div>
         )}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {quickSuggestions.map((command) => (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {[
+            hasPreview ? 'analyze palette' : 'show settings',
+            canGeneratePreview && !hasPreview ? 'generate preview' : 'use graphic art',
+            sourceType === 'graphic_art' ? 'preserve accents on' : 'simplify colors on',
+          ].filter(Boolean).map((command) => (
             <button
-              key={command}
+              key={String(command)}
               type="button"
-              onClick={() => void runQuickCommand(command)}
+              onClick={() => void runQuickCommand(String(command))}
               disabled={busy}
               style={{
                 border: '1px solid #d0d0d0',
                 background: '#f8f8f8',
                 borderRadius: 999,
-                padding: '6px 10px',
+                padding: '5px 9px',
                 font: 'inherit',
                 fontSize: 12,
                 cursor: busy ? 'default' : 'pointer',
@@ -332,14 +441,6 @@ export default function ChatPanel({
         ))} 
       </div>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        onChange={handleFileChange}
-        style={{ display: 'none' }}
-      />
-
       <form
         onSubmit={handleSubmit}
         style={{
@@ -350,26 +451,45 @@ export default function ChatPanel({
           background: 'transparent',
         }}
       >
-        <textarea
-          rows={2}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type a command or drop an image here."
+        <button
+          type="button"
+          onClick={() => setShowAdvancedCommand((current) => !current)}
           style={{
-            resize: 'none',
-            border: '1px solid #d0d0d0',
-            borderRadius: 10,
-            padding: '10px 12px',
+            justifySelf: 'start',
+            border: 0,
+            background: 'transparent',
+            padding: 0,
+            color: '#6e8d67',
             font: 'inherit',
-            lineHeight: 1.4,
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: 'pointer',
           }}
-        />
+        >
+          {showAdvancedCommand ? 'Hide advanced command' : 'Advanced command'}
+        </button>
+        {showAdvancedCommand && (
+          <textarea
+            rows={2}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a command or drop an image here."
+            style={{
+              resize: 'none',
+              border: '1px solid #d0d0d0',
+              borderRadius: 10,
+              padding: '10px 12px',
+              font: 'inherit',
+              lineHeight: 1.4,
+            }}
+          />
+        )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={openFilePicker}
               disabled={busy}
               style={{
                 border: '1px solid #d0d0d0',
@@ -383,8 +503,8 @@ export default function ChatPanel({
               Upload file
             </button>
             <button
-              type="button"
-              onClick={onGeneratePreview}
+              type={showAdvancedCommand ? 'submit' : 'button'}
+              onClick={showAdvancedCommand ? undefined : onGeneratePreview}
               disabled={busy || !canGeneratePreview}
               style={{
                 border: '1px solid #d0d0d0',
@@ -395,11 +515,18 @@ export default function ChatPanel({
                 cursor: busy || !canGeneratePreview ? 'default' : 'pointer',
               }}
             >
-              Generate stitch preview
+              {showAdvancedCommand ? 'Send command' : 'Generate stitch preview'}
             </button>
           </div>
         </div>
       </form>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/*"
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+      />
     </div>
   )
 }

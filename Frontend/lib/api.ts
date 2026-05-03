@@ -11,6 +11,17 @@ function resolveApiBase() {
 
 const API_BASE = resolveApiBase()
 
+function jsonHeaders(accessToken?: string | null): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+  }
+}
+
+function authHeaders(accessToken?: string | null): Record<string, string> {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+}
+
 export type VisualizePayload = {
   image_url: string
   stitch_width: number
@@ -143,7 +154,7 @@ export function assetUrl(path: string | null) {
 }
 
 export type FinalizePayload = {
-  preview_url: string
+  preview_url?: string | null
   width_inches: number
   height_inches: number
   mesh_count: number
@@ -195,5 +206,135 @@ export async function recolorPreview(payload: RecolorPayload): Promise<RecolorRe
   })
 
   if (!res.ok) throw new Error('Recolor failed')
+  return res.json()
+}
+
+export type Project = {
+  id: string
+  created_at: string
+  updated_at: string
+  name: string
+  finalized: boolean
+  width_inches: number | null
+  height_inches: number | null
+  mesh_count: number | null
+  color_count: number | null
+  contrast_level: string | null
+  source_type: string | null
+  show_grid: boolean | null
+  clean_background: boolean | null
+  palette: PaletteColor[] | null
+  cells: string[][] | null
+  source_image_url: string | null
+  preview_image_url: string | null
+  pdf_url: string | null
+}
+
+export type ProjectSavePayload = Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>> & {
+  name: string
+}
+
+export async function listProjects(accessToken?: string | null): Promise<Project[]> {
+  const res = await fetch(`${API_BASE}/projects`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load projects')
+  return res.json()
+}
+
+export async function saveProject(payload: ProjectSavePayload, accessToken?: string | null): Promise<Project> {
+  const res = await fetch(`${API_BASE}/projects`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not save project')
+  }
+  return res.json()
+}
+
+export async function updateProject(id: string, payload: Partial<ProjectSavePayload>, accessToken?: string | null): Promise<Project> {
+  const res = await fetch(`${API_BASE}/projects/${id}`, {
+    method: 'PATCH',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Could not update project')
+  return res.json()
+}
+
+export async function deleteProject(id: string, accessToken?: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/projects/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not delete project')
+}
+
+export type GalleryItem = {
+  id: string
+  created_at: string
+  user_id: string
+  title: string
+  tags: string[]
+  preview_image_url: string | null
+  pdf_url: string
+  width_inches: number | null
+  height_inches: number | null
+  mesh_count: number | null
+  color_count: number | null
+  like_count: number
+  liked_by_me: boolean
+}
+
+export type GalleryCreatePayload = {
+  title: string
+  tags: string[]
+  preview_image_url?: string | null
+  pdf_url: string
+  width_inches?: number | null
+  height_inches?: number | null
+  mesh_count?: number | null
+  color_count?: number | null
+}
+
+export async function listGalleryItems(
+  options: { search?: string; sort?: 'recent' | 'popular'; accessToken?: string | null } = {},
+): Promise<GalleryItem[]> {
+  const params = new URLSearchParams()
+  if (options.search) params.set('search', options.search)
+  if (options.sort) params.set('sort', options.sort)
+  const query = params.toString()
+  const res = await fetch(`${API_BASE}/gallery${query ? `?${query}` : ''}`, {
+    headers: authHeaders(options.accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load gallery')
+  return res.json()
+}
+
+export async function publishGalleryItem(payload: GalleryCreatePayload, accessToken?: string | null): Promise<GalleryItem> {
+  const res = await fetch(`${API_BASE}/gallery`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not publish to gallery')
+  }
+  return res.json()
+}
+
+export async function toggleGalleryLike(id: string, accessToken?: string | null): Promise<GalleryItem> {
+  const res = await fetch(`${API_BASE}/gallery/${id}/like`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not update like')
+  }
   return res.json()
 }

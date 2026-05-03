@@ -16,6 +16,7 @@ BORDER_INCHES = 1.0
 PAGE_MARGIN = 42
 CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
+FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
@@ -54,7 +55,11 @@ def _render_preview_image_from_cells(
     quantized = Image.new("RGB", (stitch_width, stitch_height), (255, 255, 255))
     if stitch_width and stitch_height:
         quantized.putdata([
-            (255, 255, 255) if cell == BLANK_CELL else _hex_to_rgb(cell)
+            (255, 255, 255)
+            if cell == BLANK_CELL
+            else (0, 0, 0)
+            if cell == FINISH_OUTLINE_CELL
+            else _hex_to_rgb(cell)
             for row in cells
             for cell in row
         ])
@@ -82,7 +87,7 @@ def _build_report_rows(cells: list[list[str]], palette: list[dict]) -> list[dict
         cell
         for row in cells
         for cell in row
-        if cell != BLANK_CELL
+        if cell not in {BLANK_CELL, FINISH_OUTLINE_CELL}
     )
     palette_by_hex = {color["hex"]: color for color in palette}
 
@@ -198,14 +203,13 @@ def _draw_report_page(
     pdf.line(margin, y, margin + content_width, y)
     y -= 16
 
-    row_height = 24
-    swatch_size = 14
-    row_background_height = 20
-    row_text_offset = 5
+    row_height = 26
+    swatch_size = 16
+    row_background_height = 22
     pdf.setFont("Helvetica", 10)
 
     for index, row in enumerate(rows):
-        if y < margin + 24:
+        if y < margin + row_height:
             pdf.showPage()
             pdf.setFillColor(colors.HexColor("#F7F5F0"))
             pdf.roundRect(margin, page_height - 74, content_width, 40, 8, fill=1, stroke=0)
@@ -223,11 +227,19 @@ def _draw_report_page(
             y -= 16
             pdf.setFont("Helvetica", 10)
 
+        row_center_y = y - row_height / 2
+        text_y = row_center_y - 3.5
+
         if index % 2 == 0:
             pdf.setFillColor(colors.HexColor("#FBFBFB"))
-            pdf.rect(margin, y - row_text_offset - row_background_height / 2, content_width, row_background_height, fill=1, stroke=0)
-
-        row_center_y = y - row_text_offset
+            pdf.rect(
+                margin,
+                row_center_y - row_background_height / 2,
+                content_width,
+                row_background_height,
+                fill=1,
+                stroke=0,
+            )
 
         pdf.setFillColor(_rgb_to_reportlab(row["hex"]))
         pdf.rect(swatch_x, row_center_y - swatch_size / 2, swatch_size, swatch_size, fill=1, stroke=0)
@@ -235,9 +247,9 @@ def _draw_report_page(
         pdf.rect(swatch_x, row_center_y - swatch_size / 2, swatch_size, swatch_size, fill=0, stroke=1)
 
         pdf.setFillColor(table_text_color)
-        pdf.drawString(code_x, y, row["dmc_code"])
-        pdf.drawString(name_x, y, _truncate_text(row["dmc_name"], 42))
-        pdf.drawRightString(page_width - margin, y, str(row["count"]))
+        pdf.drawString(code_x, text_y, row["dmc_code"])
+        pdf.drawString(name_x, text_y, _truncate_text(row["dmc_name"], 42))
+        pdf.drawRightString(page_width - margin, text_y, str(row["count"]))
         y -= row_height
 
 

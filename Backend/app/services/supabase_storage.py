@@ -34,7 +34,14 @@ def upload_pdf_to_supabase(
     bucket = os.getenv(bucket_env) or os.getenv("SUPABASE_STORAGE_BUCKET")
 
     if not supabase_url or not service_role_key or not bucket:
-        logger.info("Supabase storage is not configured; keeping PDF on local filesystem.")
+        logger.warning(
+            "Supabase storage is not configured; keeping PDF on local filesystem. "
+            "SUPABASE_URL=%s SUPABASE_SERVICE_ROLE_KEY=%s %s=%s",
+            "set" if supabase_url else "missing",
+            "set" if service_role_key else "missing",
+            bucket_env,
+            "set" if bucket else "missing",
+        )
         return None
 
     object_path = _storage_object_path(prefix, local_path)
@@ -64,6 +71,12 @@ def upload_pdf_to_supabase(
     except (OSError, URLError) as exc:
         logger.warning("Supabase PDF upload failed: %s", exc)
         return None
+
+    logger.warning(
+        "Supabase PDF upload succeeded: bucket=%s object=%s",
+        bucket,
+        object_path,
+    )
 
     if not return_public_url:
         return object_path

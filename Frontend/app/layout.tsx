@@ -1,3 +1,5 @@
+import { AuthProvider } from '../components/AuthProvider'
+
 export const metadata = {
   title: 'MNS Studio',
   description: 'MNS Studio',
@@ -18,7 +20,7 @@ export default function RootLayout({
           background: '#f5f1ea',
         }}
       >
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   )

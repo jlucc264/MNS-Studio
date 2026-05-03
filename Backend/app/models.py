@@ -47,7 +47,7 @@ class AppResponse(BaseModel):
     metadata: dict = {}
 
 class FinalizeRequest(BaseModel):
-    preview_url: str
+    preview_url: Optional[str] = None
     width_inches: float
     height_inches: float
     mesh_count: int
@@ -79,3 +79,69 @@ class RecolorResponse(BaseModel):
 
 class GridCellResponse(BaseModel):
     cells: list[list[str]]
+
+
+class ProjectSaveRequest(BaseModel):
+    name: str = "Untitled"
+    width_inches: Optional[float] = None
+    height_inches: Optional[float] = None
+    mesh_count: Optional[int] = None
+    color_count: Optional[int] = None
+    contrast_level: Optional[str] = None
+    source_type: Optional[str] = None
+    show_grid: Optional[bool] = None
+    clean_background: Optional[bool] = None
+    palette: Optional[list[PaletteColor]] = None
+    cells: Optional[list[list[str]]] = None
+    source_image_url: Optional[str] = None
+    preview_image_url: Optional[str] = None
+    pdf_url: Optional[str] = None
+    finalized: bool = False
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    created_at: str
+    updated_at: str
+    name: str
+    finalized: bool
+    width_inches: Optional[float] = None
+    height_inches: Optional[float] = None
+    mesh_count: Optional[int] = None
+    color_count: Optional[int] = None
+    contrast_level: Optional[str] = None
+    source_type: Optional[str] = None
+    show_grid: Optional[bool] = None
+    clean_background: Optional[bool] = None
+    palette: Optional[list] = None
+    cells: Optional[list] = None
+    source_image_url: Optional[str] = None
+    preview_image_url: Optional[str] = None
+    pdf_url: Optional[str] = None
+
+
+class GalleryCreateRequest(BaseModel):
+    title: str
+    tags: list[str] = []
+    preview_image_url: Optional[str] = None
+    pdf_url: str
+    width_inches: Optional[float] = None
+    height_inches: Optional[float] = None
+    mesh_count: Optional[int] = None
+    color_count: Optional[int] = None
+
+
+class GalleryItemResponse(BaseModel):
+    id: str
+    created_at: str
+    user_id: str
+    title: str
+    tags: list[str] = []
+    preview_image_url: Optional[str] = None
+    pdf_url: str
+    width_inches: Optional[float] = None
+    height_inches: Optional[float] = None
+    mesh_count: Optional[int] = None
+    color_count: Optional[int] = None
+    like_count: int = 0
+    liked_by_me: bool = False
