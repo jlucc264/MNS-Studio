@@ -79,6 +79,15 @@ export default function DraftsPage() {
     setConfirmDelete(null)
   }
 
+  async function handleSignOut() {
+    setShowLogoutConfirm(false)
+    setConfirmDelete(null)
+    setProjects([])
+    setError('')
+    setLoading(false)
+    await signOut()
+  }
+
   return (
     <div
       style={{
@@ -206,7 +215,7 @@ export default function DraftsPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
-              <button type="button" onClick={() => { setShowLogoutConfirm(false); void signOut() }} style={btnPrimary}>Log out</button>
+              <button type="button" onClick={() => void handleSignOut()} style={btnPrimary}>Log out</button>
             </div>
           </div>
         </div>

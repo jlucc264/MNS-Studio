@@ -537,6 +537,14 @@ function StudioPage() {
     finishFinalizeFlow()
   }, [finishFinalizeFlow, galleryStatus])
 
+  const handleLogoutAndReturnToGallery = useCallback(async () => {
+    setShowLogoutConfirm(false)
+    setAuthPrompt(null)
+    clearActiveCanvas()
+    await signOut()
+    router.push('/gallery')
+  }, [clearActiveCanvas, router, signOut])
+
   const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts') => {
     setAuthPrompt(null)
     setShowLogoutConfirm(false)
@@ -544,6 +552,10 @@ function StudioPage() {
     setShowDraftNameModal(false)
     setShowFinalizeModal(false)
     setShowGalleryPublishModal(false)
+    if (typeof window !== 'undefined') {
+      window.location.assign(href)
+      return
+    }
     router.push(href)
   }, [router])
 
@@ -2857,9 +2869,10 @@ function StudioPage() {
     <main
       style={{
         display: 'grid',
-        gridTemplateRows: '72px minmax(0, 1fr) auto',
+        gridTemplateRows: 'minmax(0, 1fr) auto',
         minHeight: '100vh',
         height: '100vh',
+        paddingTop: 72,
         overflow: 'hidden',
         boxSizing: 'border-box',
         width: '100%',
@@ -2879,8 +2892,13 @@ function StudioPage() {
           padding: '14px 24px',
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
-          position: 'relative',
-          zIndex: 100,
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 72,
+          boxSizing: 'border-box',
+          zIndex: 10000,
           pointerEvents: 'auto',
         }}
       >
@@ -3367,9 +3385,7 @@ function StudioPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setShowLogoutConfirm(false)
-                  void signOut()
-                  setAuthPrompt('login')
+                  void handleLogoutAndReturnToGallery()
                 }}
                 style={btnPrimary}
               >
