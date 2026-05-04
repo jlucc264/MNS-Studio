@@ -2501,6 +2501,9 @@ function StudioPage() {
       )}`
     : 'N/A'
   const previewMeshLabel = previewStatsSettings ? `${previewStatsSettings.mesh_count}ct` : 'N/A'
+  const isFinalized = Boolean(finalPdfPath)
+  const isFinalizeReview = activeWorkflowStep === 3
+  const shouldAllowCanvasEditing = !isFinalizeReview && activeWorkflowStep === 2
 
   const previewToolbar = (
     <div
@@ -2683,6 +2686,52 @@ function StudioPage() {
       )
     }
 
+    if (isFinalized) {
+      return (
+        <>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
+              Finalized
+            </h2>
+            <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
+              This design is locked. Use the buttons below to download the PDF or finish sharing it.
+            </p>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              padding: 16,
+              border: '1px solid #e8e2d7',
+              borderRadius: 14,
+              background: '#fff',
+              fontSize: 14,
+            }}
+          >
+            <strong>Canvas summary</strong>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+              <div><strong>Design:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot;</div>
+              <div><strong>Mesh:</strong> {designMeshCount}</div>
+              <div><strong>Colors:</strong> {currentDesignPalette.length}</div>
+              <div><strong>Stitches:</strong> {currentDesignStitchCount}</div>
+            </div>
+          </div>
+          <a
+            href={assetUrl(finalPdfPath) ?? '#'}
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...btnPrimary, textAlign: 'center', textDecoration: 'none' }}
+          >
+            Download PDF report
+          </a>
+          <button type="button" onClick={finishFinalizeFlow} style={btnSecondary}>
+            Go to Gallery
+          </button>
+          {statusBlock}
+        </>
+      )
+    }
+
     return (
       <>
         <div>
@@ -2816,6 +2865,7 @@ function StudioPage() {
         width: '100%',
         background: '#f5f1ea',
         color: '#3f382f',
+        isolation: 'isolate',
       }}
     >
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
@@ -2830,7 +2880,8 @@ function StudioPage() {
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
           position: 'relative',
-          zIndex: 10,
+          zIndex: 100,
+          pointerEvents: 'auto',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 14, minWidth: 0, flexWrap: 'wrap' }}>
@@ -2941,6 +2992,8 @@ function StudioPage() {
                   : 'minmax(300px, 380px) minmax(0, 1fr)',
           minHeight: 0,
           overflow: 'hidden',
+          position: 'relative',
+          zIndex: 1,
         }}
       >
         {!isPreviewExpanded && (
@@ -2952,6 +3005,9 @@ function StudioPage() {
             background: '#fffdf8',
             minWidth: 0,
             minHeight: 0,
+            position: 'relative',
+            zIndex: 30,
+            pointerEvents: 'auto',
           }}
         >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
@@ -3020,6 +3076,8 @@ function StudioPage() {
             minWidth: 0,
             overflow: 'hidden',
             background: '#ebe6dd',
+            position: 'relative',
+            zIndex: 0,
           }}
         >
           {previewToolbar}
@@ -3033,6 +3091,7 @@ function StudioPage() {
               position: 'relative',
               padding: 12,
               boxSizing: 'border-box',
+              zIndex: 0,
             }}
           >
             {cells.length > 0 && (
@@ -3043,12 +3102,12 @@ function StudioPage() {
                   width: '100%',
                   height: '100%',
                   visibility: shouldShowStitchGrid ? 'visible' : 'hidden',
-                  pointerEvents: shouldShowStitchGrid ? 'auto' : 'none',
+                  pointerEvents: shouldShowStitchGrid && shouldAllowCanvasEditing ? 'auto' : 'none',
                 }}
               >
                 <GridEditor
                   cells={cells}
-                  activeColor={activePaintColor}
+                  activeColor={shouldAllowCanvasEditing ? activePaintColor : null}
                   toolMode={toolMode}
                   meshCount={lastSettings?.mesh_count ?? 13}
                   brushDensity={brushDensity}
@@ -3080,34 +3139,39 @@ function StudioPage() {
             </div>
           </div>
 
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              flexWrap: 'wrap',
-              justifyContent: 'center',
-              padding: '10px 14px',
-              borderTop: '1px solid #ded8cf',
-              background: '#fffdf8',
-            }}
-          >
-            <button type="button" onClick={() => setViewMode('original')} style={btnSecondary}>Original</button>
-            <button type="button" onClick={() => setViewMode('stitch')} disabled={!previewImagePath} style={btnSecondary}>
-              Stitch preview
-            </button>
-            <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>
-              Undo
-            </button>
-            <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>
-              Redo
-            </button>
-            <button type="button" onClick={handleResetColorChanges} disabled={!previewImagePath} style={btnSecondary}>
-              Reset
-            </button>
-          </div>
+          {!isFinalizeReview && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                padding: '10px 14px',
+                borderTop: '1px solid #ded8cf',
+                background: '#fffdf8',
+                position: 'relative',
+                zIndex: 35,
+                pointerEvents: 'auto',
+              }}
+            >
+              <button type="button" onClick={() => setViewMode('original')} style={btnSecondary}>Original</button>
+              <button type="button" onClick={() => setViewMode('stitch')} disabled={!previewImagePath} style={btnSecondary}>
+                Stitch preview
+              </button>
+              <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>
+                Undo
+              </button>
+              <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>
+                Redo
+              </button>
+              <button type="button" onClick={handleResetColorChanges} disabled={!previewImagePath} style={btnSecondary}>
+                Reset
+              </button>
+            </div>
+          )}
         </section>
 
-        {!isMobile && activeWorkflowStep === 2 && (
+        {!isMobile && activeWorkflowStep === 2 && !isFinalizeReview && (
           <aside
             style={{
               display: 'grid',
@@ -3119,6 +3183,9 @@ function StudioPage() {
               overflow: 'hidden',
               padding: '14px 12px',
               boxSizing: 'border-box',
+              position: 'relative',
+              zIndex: 30,
+              pointerEvents: 'auto',
             }}
           >
             <PalettePanel
@@ -3170,6 +3237,9 @@ function StudioPage() {
           minHeight: 0,
           overflow: 'hidden',
           transition: 'height 160ms ease',
+          position: 'relative',
+          zIndex: 40,
+          pointerEvents: 'auto',
         }}
       >
         <button
