@@ -12,7 +12,6 @@ import {
 } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
-import Link from 'next/link'
 import ChatPanel from '../../components/ChatPanel'
 import GuideDialog from '../../components/GuideDialog'
 import GridEditor, { type DesignSelectionRect } from '../../components/GridEditor'
@@ -443,6 +442,7 @@ function StudioPage() {
   const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
+  const [finalizeError, setFinalizeError] = useState('')
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
   const [finalPreviewImagePath, setFinalPreviewImagePath] = useState<string | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
@@ -2209,6 +2209,7 @@ function StudioPage() {
     }
 
     setLoading(true)
+    setFinalizeError('')
     try {
       const result = await finalizePreview({
         preview_url: previewImagePath,
@@ -2234,6 +2235,8 @@ function StudioPage() {
       setGalleryError('')
       setShowGalleryPublishModal(true)
       setShowFinalizeModal(false)
+    } catch (err) {
+      setFinalizeError(err instanceof Error ? err.message : 'Something went wrong generating the PDF.')
     } finally {
       setLoading(false)
     }
@@ -2416,10 +2419,6 @@ function StudioPage() {
     (requiredCanvasWidth <= canvas.height && requiredCanvasHeight <= canvas.width)
   const selectedCanvasSize = availableCanvasSizes.find(canvasFits) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
   const selectedCanvasFits = canvasFits(selectedCanvasSize)
-  const finishingStitchWidth =
-    finishShape === 'circle'
-      ? Math.round(resolvedFinishSize * designMeshCount)
-      : Math.round(Math.min(resolvedFinishSize, designWidthInches) * designMeshCount)
   const workflowSteps = [
     { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
@@ -2859,6 +2858,7 @@ function StudioPage() {
               setAuthPrompt('finalize')
               return
             }
+            setFinalizeError('')
             setShowFinalizeModal(true)
           }}
           disabled={!cells.length || (!!activeImagePath && !previewImagePath) || hasPendingPreviewSettings || loading || Boolean(finalPdfPath)}
@@ -3130,7 +3130,7 @@ function StudioPage() {
                   width: '100%',
                   height: '100%',
                   visibility: shouldShowStitchGrid ? 'visible' : 'hidden',
-                  pointerEvents: shouldShowStitchGrid && shouldAllowCanvasEditing ? 'auto' : 'none',
+                  pointerEvents: shouldShowStitchGrid ? 'auto' : 'none',
                 }}
               >
                 <GridEditor
@@ -3593,6 +3593,7 @@ function StudioPage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
+            zIndex: 100,
           }}
         >
           <div
@@ -3637,6 +3638,11 @@ function StudioPage() {
             {hasPendingPreviewSettings && (
               <p style={{ margin: 0, color: '#8a5a00', fontSize: 14 }}>
                 There are unapplied settings changes. Wait for the preview to refresh before finalizing.
+              </p>
+            )}
+            {finalizeError && (
+              <p style={{ margin: 0, color: '#b00020', fontSize: 14 }}>
+                {finalizeError}
               </p>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

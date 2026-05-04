@@ -364,6 +364,9 @@ export default function GridEditor({
 
   const highlightSelection = toolMode === 'select'
 
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  useEffect(() => { onSelectionChangeRef.current = onSelectionChange })
+
   const containerRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -475,9 +478,9 @@ export default function GridEditor({
       setDragSelectionRect(null)
       setSelectionRects([])
       liveSelectionRectRef.current = null
-      onSelectionChange?.(null)
+      onSelectionChangeRef.current?.(null)
     }
-  }, [highlightSelection, onSelectionChange])
+  }, [highlightSelection])
 
   useEffect(() => {
     const stopPainting = () => {
