@@ -53,6 +53,14 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
 
 You can copy the template from [Backend/.env.example](/Users/johnlucciola/MNS/Backend/.env.example).
 
+### Supabase table permissions
+
+The backend writes drafts and gallery posts through Supabase REST with the
+service role key. If those requests return a 502 and the backend log says
+`permission denied for table gallery_items`, run
+[Backend/supabase/grants.sql](/Users/johnlucciola/MNS/Backend/supabase/grants.sql)
+in the Supabase SQL editor.
+
 ## Important note about files
 
 This app stores uploads, previews, and finalized PDFs on the backend filesystem under:
