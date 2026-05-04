@@ -92,6 +92,9 @@ class ProjectSaveRequest(BaseModel):
     source_type: Optional[str] = None
     show_grid: Optional[bool] = None
     clean_background: Optional[bool] = None
+    simplify_colors: Optional[bool] = None
+    strengthen_dark_detail: Optional[bool] = None
+    preserve_accents: Optional[bool] = None
     palette: Optional[list[PaletteColor]] = None
     cells: Optional[list[list[str]]] = None
     source_image_url: Optional[str] = None
@@ -114,6 +117,9 @@ class ProjectResponse(BaseModel):
     source_type: Optional[str] = None
     show_grid: Optional[bool] = None
     clean_background: Optional[bool] = None
+    simplify_colors: Optional[bool] = None
+    strengthen_dark_detail: Optional[bool] = None
+    preserve_accents: Optional[bool] = None
     palette: Optional[list] = None
     cells: Optional[list] = None
     source_image_url: Optional[str] = None

@@ -614,6 +614,9 @@ function StudioPage() {
           source_type: (project.source_type as PreviewSettings['source_type']) ?? DEFAULT_SETTINGS.source_type,
           show_grid: project.show_grid ?? DEFAULT_SETTINGS.show_grid,
           clean_background: project.clean_background ?? DEFAULT_SETTINGS.clean_background,
+          simplify_colors: project.simplify_colors ?? DEFAULT_SETTINGS.simplify_colors,
+          strengthen_dark_detail: project.strengthen_dark_detail ?? DEFAULT_SETTINGS.strengthen_dark_detail,
+          preserve_accents: project.preserve_accents ?? DEFAULT_SETTINGS.preserve_accents,
         }
         setDraftSettings(settings)
         setLastSettings(settings)
@@ -2444,6 +2447,9 @@ function StudioPage() {
         source_type: draftSettings.source_type,
         show_grid: draftSettings.show_grid,
         clean_background: draftSettings.clean_background,
+        simplify_colors: draftSettings.simplify_colors,
+        strengthen_dark_detail: draftSettings.strengthen_dark_detail,
+        preserve_accents: draftSettings.preserve_accents,
         palette: previewPalette,
         cells: cells.length ? cells : undefined,
         source_image_url: activeImagePath,

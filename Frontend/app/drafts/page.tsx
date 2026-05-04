@@ -32,6 +32,10 @@ const btnSecondary = {
   color: '#3f382f',
 } as const
 
+function isLocalAssetUrl(value: string | null | undefined) {
+  return Boolean(value && value.startsWith('/assets/'))
+}
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
@@ -263,12 +267,12 @@ function DraftCard({
           overflow: 'hidden',
         }}
       >
-        {project.preview_image_url ? (
+        {project.preview_image_url && !isLocalAssetUrl(project.preview_image_url) ? (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={project.preview_image_url.startsWith('http') ? project.preview_image_url : assetUrl(project.preview_image_url) ?? ''}
             alt={project.name}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#f8f4ec' }}
           />
         ) : (
           <div

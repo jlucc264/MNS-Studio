@@ -4,6 +4,11 @@
 alter table public.gallery_items
 add column if not exists submitter_name text;
 
+alter table public.projects
+add column if not exists simplify_colors boolean,
+add column if not exists strengthen_dark_detail boolean,
+add column if not exists preserve_accents boolean;
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;

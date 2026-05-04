@@ -224,6 +224,9 @@ export type Project = {
   source_type: string | null
   show_grid: boolean | null
   clean_background: boolean | null
+  simplify_colors: boolean | null
+  strengthen_dark_detail: boolean | null
+  preserve_accents: boolean | null
   palette: PaletteColor[] | null
   cells: string[][] | null
   source_image_url: string | null
