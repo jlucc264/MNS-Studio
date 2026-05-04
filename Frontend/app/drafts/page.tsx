@@ -32,10 +32,6 @@ const btnSecondary = {
   color: '#3f382f',
 } as const
 
-function isLocalAssetUrl(value: string | null | undefined) {
-  return Boolean(value && value.startsWith('/assets/'))
-}
-
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
@@ -267,37 +263,7 @@ function DraftCard({
           overflow: 'hidden',
         }}
       >
-        {project.preview_image_url && !isLocalAssetUrl(project.preview_image_url) ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={project.preview_image_url.startsWith('http') ? project.preview_image_url : assetUrl(project.preview_image_url) ?? ''}
-            alt={project.name}
-            style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#f8f4ec' }}
-          />
-        ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(8, 12px)',
-              gap: 3,
-              opacity: 0.25,
-            }}
-          >
-            {Array.from({ length: 48 }, (_, i) => (
-              <span
-                key={i}
-                style={{
-                  width: 12,
-                  height: 12,
-                  border: '1.5px solid #5a5348',
-                  borderRadius: 2,
-                  background: i % 7 === 0 ? '#c8b89a' : i % 5 === 0 ? '#8a6a52' : 'transparent',
-                  boxSizing: 'border-box',
-                }}
-              />
-            ))}
-          </div>
-        )}
+        <DraftThumbnail project={project} />
         {project.finalized && (
           <div
             style={{
@@ -363,6 +329,56 @@ function DraftCard({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function DraftThumbnail({ project }: { project: Project }) {
+  const [loadFailed, setLoadFailed] = useState(false)
+  const thumbnailUrl = project.preview_image_url
+    ? project.preview_image_url.startsWith('http')
+      ? project.preview_image_url
+      : assetUrl(project.preview_image_url)
+    : null
+
+  if (thumbnailUrl && !loadFailed) {
+    return (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img
+        src={thumbnailUrl}
+        alt={project.name}
+        onError={() => setLoadFailed(true)}
+        style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#f8f4ec' }}
+      />
+    )
+  }
+
+  return <DraftThumbnailPlaceholder />
+}
+
+function DraftThumbnailPlaceholder() {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(8, 12px)',
+        gap: 3,
+        opacity: 0.25,
+      }}
+    >
+      {Array.from({ length: 48 }, (_, i) => (
+        <span
+          key={i}
+          style={{
+            width: 12,
+            height: 12,
+            border: '1.5px solid #5a5348',
+            borderRadius: 2,
+            background: i % 7 === 0 ? '#c8b89a' : i % 5 === 0 ? '#8a6a52' : 'transparent',
+            boxSizing: 'border-box',
+          }}
+        />
+      ))}
     </div>
   )
 }

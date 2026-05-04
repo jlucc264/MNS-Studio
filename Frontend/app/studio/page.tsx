@@ -2201,7 +2201,6 @@ function StudioPage() {
     const settingsForFinalize = lastSettings
     if (
       finalPdfPath ||
-      !previewImagePath ||
       !settingsForFinalize ||
       !cells.length ||
       hasPendingPreviewSettings
@@ -2426,6 +2425,7 @@ function StudioPage() {
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
     { id: 3 as const, label: 'Finalize', complete: Boolean(finalPdfPath) },
   ]
+  const activeDraftProjectId = savedProjectId ?? searchParams.get('project')
 
   async function handleSaveDraft() {
     if (saveStatus === 'saving') return
@@ -2457,7 +2457,7 @@ function StudioPage() {
         pdf_url: finalPdfPath,
         finalized: Boolean(finalPdfPath),
       }
-      const existingId = savedProjectId ?? searchParams.get('project')
+      const existingId = activeDraftProjectId
       if (existingId) {
         await updateProject(existingId, payload, session.access_token)
         if (!savedProjectId) setSavedProjectId(existingId)
@@ -2988,6 +2988,10 @@ function StudioPage() {
                 setAuthPrompt('save')
                 return
               }
+              if (activeDraftProjectId) {
+                void handleSaveDraft()
+                return
+              }
               setShowDraftNameModal(true)
             }}
             disabled={!activeImagePath || saveStatus === 'saving'}
@@ -3513,7 +3517,6 @@ function StudioPage() {
 
       {showDraftNameModal && (
         <div
-          onClick={() => setShowDraftNameModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
@@ -3524,6 +3527,7 @@ function StudioPage() {
           }}
         >
           <div
+            onClick={(event) => event.stopPropagation()}
             style={{
               background: 'white',
               padding: 24,

@@ -92,6 +92,28 @@ def health():
     return {"status": "ok"}
 
 
+def local_asset_path(asset_url: str | None) -> Path | None:
+    if not asset_url or not asset_url.startswith("/assets/"):
+        return None
+
+    candidate = (BASE_DIR / asset_url.lstrip("/")).resolve()
+    try:
+        candidate.relative_to(ASSETS_DIR.resolve())
+    except ValueError:
+        return None
+
+    return candidate if candidate.exists() else None
+
+
+def durable_preview_url(preview_url: str, prefix: str = "previews") -> str:
+    preview_path = local_asset_path(preview_url)
+    if preview_path is None:
+        return preview_url
+
+    supabase_preview_url = upload_png_to_supabase(preview_path, prefix=prefix)
+    return supabase_preview_url or preview_url
+
+
 @app.get("/dmc-colors")
 def dmc_colors():
     return {"colors": DMC_COLORS}
@@ -272,27 +294,28 @@ def visualize(request: VisualizeRequest):
         raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
 
     preview_url, palette, cells = generate_stitch_preview(
-    image_url=request.image_url,
-    stitch_width=request.stitch_width,
-    stitch_height=request.stitch_height,
-    color_count=request.color_count,
-    show_grid=request.show_grid,
-    clean_background=request.clean_background,
-    simplify_colors=request.simplify_colors,
-    strengthen_dark_detail=request.strengthen_dark_detail,
-    preserve_accents=request.preserve_accents,
-    mesh_count=request.mesh_count,
-    contrast_level=request.contrast_level,
-    source_type=request.source_type,
-)
+        image_url=request.image_url,
+        stitch_width=request.stitch_width,
+        stitch_height=request.stitch_height,
+        color_count=request.color_count,
+        show_grid=request.show_grid,
+        clean_background=request.clean_background,
+        simplify_colors=request.simplify_colors,
+        strengthen_dark_detail=request.strengthen_dark_detail,
+        preserve_accents=request.preserve_accents,
+        mesh_count=request.mesh_count,
+        contrast_level=request.contrast_level,
+        source_type=request.source_type,
+    )
+    preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
     return {
-    "message": "Preview generated successfully.",
-    "stitch_preview_url": preview_url,
-    "palette": palette,
-    "settings": request.model_dump(),
-    "cells": cells,
-}
+        "message": "Preview generated successfully.",
+        "stitch_preview_url": preview_url,
+        "palette": palette,
+        "settings": request.model_dump(),
+        "cells": cells,
+    }
 
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
@@ -346,6 +369,7 @@ def recolor(request: RecolorRequest):
         show_grid=request.show_grid,
         selected_palette=[color.model_dump() for color in request.selected_palette],
     )
+    preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
     return RecolorResponse(
         message="Preview recolored successfully.",
