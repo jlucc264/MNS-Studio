@@ -236,10 +236,11 @@ export default function GalleryPage() {
                         padding: 0,
                         background: 'transparent',
                         cursor: 'zoom-in',
-                        display: 'grid',
-                        placeItems: 'center',
+                        display: 'block',
+                        position: 'relative',
                         minWidth: 0,
                         minHeight: 0,
+                        overflow: 'hidden',
                       }}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -248,10 +249,12 @@ export default function GalleryPage() {
                         alt={item.title}
                         style={{
                           display: 'block',
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          width: 'auto',
-                          height: 'auto',
+                          position: 'absolute',
+                          inset: 0,
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'contain',
+                          objectPosition: 'center center',
                         }}
                       />
                     </button>
@@ -360,6 +363,7 @@ export default function GalleryPage() {
                 overflow: 'hidden',
                 padding: 16,
                 boxSizing: 'border-box',
+                position: 'relative',
               }}
             >
               {resolveMaybeAssetUrl(selectedPreview.preview_image_url) && (
@@ -369,10 +373,12 @@ export default function GalleryPage() {
                   alt={selectedPreview.title}
                   style={{
                     display: 'block',
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                    width: 'auto',
-                    height: 'auto',
+                    position: 'absolute',
+                    inset: 16,
+                    width: 'calc(100% - 32px)',
+                    height: 'calc(100% - 32px)',
+                    objectFit: 'contain',
+                    objectPosition: 'center center',
                   }}
                 />
               )}

@@ -321,7 +321,14 @@ export async function listGalleryItems(
   const res = await fetch(`${API_BASE}/gallery${query ? `?${query}` : ''}`, {
     headers: authHeaders(options.accessToken),
   })
-  if (!res.ok) throw new Error('Could not load gallery')
+  if (!res.ok && options.accessToken) {
+    const retry = await fetch(`${API_BASE}/gallery${query ? `?${query}` : ''}`)
+    if (retry.ok) return retry.json()
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not load gallery')
+  }
   return res.json()
 }
 

@@ -537,6 +537,16 @@ function StudioPage() {
     finishFinalizeFlow()
   }, [finishFinalizeFlow, galleryStatus])
 
+  const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts') => {
+    setAuthPrompt(null)
+    setShowLogoutConfirm(false)
+    setShowProfileModal(false)
+    setShowDraftNameModal(false)
+    setShowFinalizeModal(false)
+    setShowGalleryPublishModal(false)
+    router.push(href)
+  }, [router])
+
   useEffect(() => {
     const updateViewportWidth = () => {
       setViewportWidth(window.innerWidth || 1280)
@@ -2824,7 +2834,11 @@ function StudioPage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 14, minWidth: 0, flexWrap: 'wrap' }}>
-          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, textDecoration: 'none' }}>
+          <button
+            type="button"
+            onClick={() => navigateAwayFromStudio('/gallery')}
+            style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
+          >
             <div
               aria-hidden="true"
               style={{
@@ -2848,15 +2862,23 @@ function StudioPage() {
               ))}
             </div>
             <strong style={{ fontSize: isMobile ? 20 : 25, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
-          </Link>
+          </button>
           <span style={{ color: '#d8d0c4' }}>|</span>
           <div style={{ display: 'flex', gap: isMobile ? 12 : 28, color: '#7f776d', fontWeight: 600, fontSize: isMobile ? 13 : undefined, whiteSpace: 'nowrap', position: 'relative', zIndex: 2 }}>
-            <Link href="/gallery" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
+            <button
+              type="button"
+              onClick={() => navigateAwayFromStudio('/gallery')}
+              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+            >
               Gallery
-            </Link>
-            <Link href="/drafts" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateAwayFromStudio('/drafts')}
+              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+            >
               Projects
-            </Link>
+            </button>
             {!isMobile && (
               <span style={{ color: '#3f382f', fontWeight: 700 }}>
                 Active Canvas

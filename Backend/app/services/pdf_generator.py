@@ -388,7 +388,7 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-) -> tuple[str, Path, Path, str]:
+) -> tuple[str, Path, Path, str, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
     preview_path, preview_url = preview_output_path()
@@ -445,4 +445,4 @@ def generate_preview_pdf(
 
     # The public URL is returned to the app for completion tracking; the internal file
     # is sent by the finalize endpoint and intentionally not exposed in the UI.
-    return public_url, public_path, internal_path, preview_url
+    return public_url, public_path, internal_path, preview_url, preview_path

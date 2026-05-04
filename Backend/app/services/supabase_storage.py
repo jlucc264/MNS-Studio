@@ -22,12 +22,13 @@ def _storage_object_path(prefix: str, local_path: Path) -> str:
     return f"{cleaned_prefix}/{filename}"
 
 
-def upload_pdf_to_supabase(
+def upload_file_to_supabase(
     local_path: Path,
     *,
     prefix: str = "finalized",
     bucket_env: str = "SUPABASE_STORAGE_BUCKET",
     return_public_url: bool = True,
+    content_type: str = "application/octet-stream",
 ) -> str | None:
     supabase_url = _clean_supabase_url(os.getenv("SUPABASE_URL"))
     service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -35,7 +36,7 @@ def upload_pdf_to_supabase(
 
     if not supabase_url or not service_role_key or not bucket:
         logger.warning(
-            "Supabase storage is not configured; keeping PDF on local filesystem. "
+            "Supabase storage is not configured; keeping file on local filesystem. "
             "SUPABASE_URL=%s SUPABASE_SERVICE_ROLE_KEY=%s %s=%s",
             "set" if supabase_url else "missing",
             "set" if service_role_key else "missing",
@@ -58,7 +59,7 @@ def upload_pdf_to_supabase(
             headers={
                 "apikey": service_role_key,
                 "Authorization": f"Bearer {service_role_key}",
-                "Content-Type": "application/pdf",
+                "Content-Type": content_type,
                 "x-upsert": "true",
             },
         )
@@ -66,14 +67,14 @@ def upload_pdf_to_supabase(
             pass
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        logger.warning("Supabase PDF upload failed: %s %s", exc.code, detail)
+        logger.warning("Supabase file upload failed: %s %s", exc.code, detail)
         return None
     except (OSError, URLError) as exc:
-        logger.warning("Supabase PDF upload failed: %s", exc)
+        logger.warning("Supabase file upload failed: %s", exc)
         return None
 
     logger.warning(
-        "Supabase PDF upload succeeded: bucket=%s object=%s",
+        "Supabase file upload succeeded: bucket=%s object=%s",
         bucket,
         object_path,
     )
@@ -82,3 +83,35 @@ def upload_pdf_to_supabase(
         return object_path
 
     return f"{supabase_url}/storage/v1/object/public/{encoded_bucket}/{encoded_object_path}"
+
+
+def upload_pdf_to_supabase(
+    local_path: Path,
+    *,
+    prefix: str = "finalized",
+    bucket_env: str = "SUPABASE_STORAGE_BUCKET",
+    return_public_url: bool = True,
+) -> str | None:
+    return upload_file_to_supabase(
+        local_path,
+        prefix=prefix,
+        bucket_env=bucket_env,
+        return_public_url=return_public_url,
+        content_type="application/pdf",
+    )
+
+
+def upload_png_to_supabase(
+    local_path: Path,
+    *,
+    prefix: str = "previews",
+    bucket_env: str = "SUPABASE_STORAGE_BUCKET",
+    return_public_url: bool = True,
+) -> str | None:
+    return upload_file_to_supabase(
+        local_path,
+        prefix=prefix,
+        bucket_env=bucket_env,
+        return_public_url=return_public_url,
+        content_type="image/png",
+    )

@@ -75,4 +75,8 @@ def get_optional_user_id(authorization: str | None = Header(default=None)) -> st
         return None
 
     token = authorization.split(" ", 1)[1].strip()
-    return _decode_user_id(token)
+    try:
+        return _decode_user_id(token)
+    except HTTPException as exc:
+        logger.warning("Ignoring optional auth failure: %s", exc.detail)
+        return None

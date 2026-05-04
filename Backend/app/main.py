@@ -31,7 +31,7 @@ from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import send_finalized_report
 from app.services.auth import get_current_user_id, get_optional_user_id
-from app.services.supabase_storage import upload_pdf_to_supabase
+from app.services.supabase_storage import upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
     list_projects,
     create_project,
@@ -55,19 +55,30 @@ def parse_allowed_origins() -> list[str]:
         "http://localhost:3000,http://127.0.0.1:3000",
     )
     origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
-    # allow any localhost port in dev so port changes don't break CORS
+    # allow common local dev hostnames so port/host changes don't break CORS
     for port in range(3000, 3010):
-        for host in ("localhost", "127.0.0.1"):
+        for host in ("localhost", "127.0.0.1", "0.0.0.0"):
             origin = f"http://{host}:{port}"
             if origin not in origins:
                 origins.append(origin)
     return origins
+
+
+LOCAL_DEV_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|0\.0\.0\.0|"
+    r"192\.168\.\d{1,3}\.\d{1,3}|"
+    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+    r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?$"
+)
 
 app = FastAPI(title="Stitch Preview MVP")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_allowed_origins(),
+    allow_origin_regex=LOCAL_DEV_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -286,7 +297,7 @@ def visualize(request: VisualizeRequest):
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
     delete_finalized_output(request.previous_pdf_url)
-    pdf_url, public_pdf_path, internal_pdf_path, preview_image_url = generate_preview_pdf(
+    pdf_url, public_pdf_path, internal_pdf_path, preview_image_url, preview_image_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
         height_inches=request.height_inches,
@@ -300,6 +311,10 @@ def finalize(request: FinalizeRequest):
     supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
     if supabase_pdf_url:
         pdf_url = supabase_pdf_url
+
+    supabase_preview_url = upload_png_to_supabase(preview_image_path, prefix="public-previews")
+    if supabase_preview_url:
+        preview_image_url = supabase_preview_url
 
     upload_pdf_to_supabase(
         internal_pdf_path,
