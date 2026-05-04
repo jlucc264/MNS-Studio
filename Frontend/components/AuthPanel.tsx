@@ -27,11 +27,12 @@ const buttonStyle = {
   color: '#fff',
 } as const
 
-export function AuthPanel({ title = 'Log in to view drafts' }: { title?: string }) {
-  const { signIn, signUp, configured } = useAuth()
+export function AuthPanel({ title = 'Log in to view drafts', onSuccess }: { title?: string; onSuccess?: () => void }) {
+  const { signIn, signUp, sendPasswordReset, configured } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
+  const [name, setName] = useState('')
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login')
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -40,10 +41,15 @@ export function AuthPanel({ title = 'Log in to view drafts' }: { title?: string 
     setSubmitting(true)
     setMessage('')
     try {
-      if (mode === 'login') {
+      if (mode === 'reset') {
+        await sendPasswordReset(email)
+        setMessage('Password reset email sent. Check your inbox.')
+      } else if (mode === 'login') {
         await signIn(email, password)
+        onSuccess?.()
       } else {
-        await signUp(email, password)
+        await signUp(email, password, name)
+        onSuccess?.()
         setMessage('Account created. Check your email if confirmation is enabled.')
       }
     } catch (err) {
@@ -84,6 +90,16 @@ export function AuthPanel({ title = 'Log in to view drafts' }: { title?: string 
           Save and access projects with your MNS Studio account.
         </p>
       </div>
+      {mode === 'signup' && (
+        <input
+          type="text"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Display name"
+          autoComplete="name"
+          style={inputStyle}
+        />
+      )}
       <input
         type="email"
         value={email}
@@ -99,12 +115,12 @@ export function AuthPanel({ title = 'Log in to view drafts' }: { title?: string 
         onChange={(event) => setPassword(event.target.value)}
         placeholder="Password"
         autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-        required
+        required={mode !== 'reset'}
         minLength={6}
-        style={inputStyle}
+        style={{ ...inputStyle, display: mode === 'reset' ? 'none' : 'block' }}
       />
       <button type="submit" disabled={submitting} style={{ ...buttonStyle, opacity: submitting ? 0.65 : 1 }}>
-        {submitting ? 'Working...' : mode === 'login' ? 'Log in' : 'Create account'}
+        {submitting ? 'Working...' : mode === 'reset' ? 'Send reset link' : mode === 'login' ? 'Log in' : 'Create account'}
       </button>
       <button
         type="button"
@@ -123,7 +139,30 @@ export function AuthPanel({ title = 'Log in to view drafts' }: { title?: string 
       >
         {mode === 'login' ? 'Create an account' : 'Log in instead'}
       </button>
-      {message && <p style={{ margin: 0, fontSize: 13, color: message.includes('created') ? '#5c7856' : '#b0453a' }}>{message}</p>}
+      {mode === 'login' && (
+        <button
+          type="button"
+          onClick={() => {
+            setMode('reset')
+            setMessage('')
+          }}
+          style={{
+            border: 0,
+            background: 'transparent',
+            color: '#7f776d',
+            fontFamily: 'inherit',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          Reset password
+        </button>
+      )}
+      {message && (
+        <p style={{ margin: 0, fontSize: 13, color: message.includes('sent') || message.includes('created') ? '#5c7856' : '#b0453a' }}>
+          {message}
+        </p>
+      )}
     </form>
   )
 }

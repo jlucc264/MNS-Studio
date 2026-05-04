@@ -10,6 +10,8 @@ import {
   useState,
   useTransition,
 } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 import Link from 'next/link'
 import ChatPanel from '../../components/ChatPanel'
 import GuideDialog from '../../components/GuideDialog'
@@ -18,6 +20,8 @@ import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
+import { ProfileModal } from '../../components/ProfileModal'
+import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
 import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
@@ -25,6 +29,7 @@ import {
   createPreview,
   fetchDmcColors,
   finalizePreview,
+  getProject,
   importImageFromUrl,
   PaletteColor,
   publishGalleryItem,
@@ -322,14 +327,6 @@ function normalizeCommandText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-function getUserInitials(email?: string | null) {
-  if (!email) return 'MS'
-  const namePart = email.split('@')[0] ?? ''
-  const parts = namePart.split(/[._\-\s]+/).filter(Boolean)
-  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
-  return namePart.slice(0, 2).toUpperCase() || 'MS'
-}
-
 function extractCommandNumber(text: string, patterns: RegExp[]) {
   for (const pattern of patterns) {
     const match = text.match(pattern)
@@ -414,8 +411,9 @@ function applySourceTypeDefaults(
   }
 }
 
-export default function HomePage() {
+function StudioPage() {
   const { session, user, signOut } = useAuth()
+  const router = useRouter()
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
@@ -446,6 +444,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
+  const [finalPreviewImagePath, setFinalPreviewImagePath] = useState<string | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
   const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
@@ -460,17 +459,83 @@ export default function HomePage() {
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('Untitled')
   const [showDraftNameModal, setShowDraftNameModal] = useState(false)
-  const [authPrompt, setAuthPrompt] = useState<'save' | 'finalize' | 'gallery' | null>(null)
+  const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
   const [galleryStatus, setGalleryStatus] = useState<'idle' | 'posting' | 'posted' | 'error'>('idle')
-  const [postedGalleryItemId, setPostedGalleryItemId] = useState<string | null>(null)
+  const [galleryError, setGalleryError] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
+  const [draftSaveError, setDraftSaveError] = useState('')
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
   const stagedUploadInputRef = useRef<HTMLInputElement | null>(null)
+  const projectLoadedRef = useRef(false)
+  const searchParams = useSearchParams()
+
+  const clearActiveCanvas = useCallback(() => {
+    latestApplyRequestIdRef.current += 1
+    setActiveImagePath(null)
+    setImportedAspectRatio(null)
+    setLockAspectRatio(true)
+    setUploadError(null)
+    setPreviewImagePath(null)
+    setOriginalPreviewImagePath(null)
+    setLastVisibleImageUrl(null)
+    setAllPalette([])
+    setPreviewPalette([])
+    setOriginalCells([])
+    setEnabledColorHexes([])
+    setCells([])
+    setActivePaintColor(null)
+    setRemovalMode('fill')
+    setUndoStack([])
+    setRedoStack([])
+    setViewMode('original')
+    setIsPreviewExpanded(false)
+    setToolMode('paint')
+    setShapeType('box')
+    setShapeFillColor(null)
+    setShapeBorderColor(null)
+    setBrushDensity(1)
+    setSelectedRegions([])
+    setManualCellOverrides({})
+    setFinishOutlineBackups({})
+    setLoading(false)
+    setShowFinalizeModal(false)
+    setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
+    setLastSettings(null)
+    setDraftSettings(DEFAULT_SETTINGS)
+    setPaletteReductionTarget(128)
+    setFinishShape('circle')
+    setFinishSizeInches(4)
+    setHasGeneratedPreview(false)
+    setActiveWorkflowStep(1)
+    setSavedProjectId(null)
+    setDraftName('Untitled')
+    setShowDraftNameModal(false)
+    setShowGalleryPublishModal(false)
+    setGalleryTitle('')
+    setGalleryTags('')
+    setGalleryStatus('idle')
+    setGalleryError('')
+    setSaveStatus('idle')
+    setDraftSaveError('')
+  }, [])
+
+  const finishFinalizeFlow = useCallback(() => {
+    clearActiveCanvas()
+    router.push('/gallery')
+  }, [clearActiveCanvas, router])
+
+  const skipGalleryPublish = useCallback(() => {
+    if (galleryStatus === 'posting') return
+    finishFinalizeFlow()
+  }, [finishFinalizeFlow, galleryStatus])
 
   useEffect(() => {
     const updateViewportWidth = () => {
@@ -483,10 +548,62 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
-    if (session?.access_token) {
+    if (session?.access_token && authPrompt !== 'login') {
       setAuthPrompt(null)
     }
-  }, [session?.access_token])
+  }, [authPrompt, session?.access_token])
+
+  useEffect(() => {
+    const projectId = searchParams.get('project')
+    if (!projectId || !session?.access_token || projectLoadedRef.current) return
+    projectLoadedRef.current = true
+
+    getProject(projectId, session.access_token).then((project) => {
+      setSavedProjectId(project.id)
+      setDraftName(project.name)
+
+      const loadedPalette = project.palette ?? []
+      setAllPalette(loadedPalette)
+      setPreviewPalette(loadedPalette)
+      setEnabledColorHexes(loadedPalette.map((c) => c.hex))
+      setActivePaintColor(loadedPalette[0]?.hex ?? null)
+
+      const loadedCells = project.cells ?? []
+      setCells(loadedCells)
+      setOriginalCells(loadedCells)
+
+      if (project.source_image_url) setActiveImagePath(project.source_image_url)
+      if (project.preview_image_url) {
+        setPreviewImagePath(project.preview_image_url)
+        setOriginalPreviewImagePath(project.preview_image_url)
+        setLastVisibleImageUrl(project.preview_image_url)
+      }
+      if (project.pdf_url) setFinalPdfPath(project.pdf_url)
+      if (project.finalized && project.preview_image_url) setFinalPreviewImagePath(project.preview_image_url)
+
+      if (loadedCells.length > 0) {
+        const settings: PreviewSettings = {
+          ...DEFAULT_SETTINGS,
+          width_inches: project.width_inches ?? DEFAULT_SETTINGS.width_inches,
+          height_inches: project.height_inches ?? DEFAULT_SETTINGS.height_inches,
+          mesh_count: (project.mesh_count as PreviewSettings['mesh_count']) ?? DEFAULT_SETTINGS.mesh_count,
+          color_count: project.color_count ?? DEFAULT_SETTINGS.color_count,
+          contrast_level: (project.contrast_level as PreviewSettings['contrast_level']) ?? DEFAULT_SETTINGS.contrast_level,
+          source_type: (project.source_type as PreviewSettings['source_type']) ?? DEFAULT_SETTINGS.source_type,
+          show_grid: project.show_grid ?? DEFAULT_SETTINGS.show_grid,
+          clean_background: project.clean_background ?? DEFAULT_SETTINGS.clean_background,
+        }
+        setDraftSettings(settings)
+        setLastSettings(settings)
+        setImportedAspectRatio(settings.width_inches / settings.height_inches)
+        setHasGeneratedPreview(true)
+        setViewMode('stitch')
+        setActiveWorkflowStep(project.pdf_url ? 3 : 2)
+      }
+    }).catch(() => {
+      // project load failed silently — user starts fresh
+    })
+  }, [searchParams, session?.access_token])
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
@@ -509,7 +626,6 @@ export default function HomePage() {
 
   const paletteCountsByHex = useMemo(() => countCellsByHex(deferredCells), [deferredCells])
   const displayColorCounts = paletteCountsByHex
-  const displayEnabledColorHexes = enabledColorHexes
   const hasPendingPreviewSettings = useMemo(
     () => hasGeneratedPreview && getSettingsKey(draftSettings) !== getSettingsKey(lastSettings),
     [draftSettings, hasGeneratedPreview, lastSettings]
@@ -521,8 +637,17 @@ export default function HomePage() {
     [currentDesignColorCounts]
   )
   const hasManualBlankCells = useMemo(
-    () => Object.values(manualCellOverrides).some((hex) => hex === BLANK_CELL),
-    [manualCellOverrides]
+    () => {
+      if (Object.values(manualCellOverrides).some((hex) => hex === BLANK_CELL)) return true
+
+      return cells.some((row, rowIndex) =>
+        row.some((cell, colIndex) => {
+          if (cell !== BLANK_CELL) return false
+          return originalCells[rowIndex]?.[colIndex] !== BLANK_CELL
+        })
+      )
+    },
+    [cells, manualCellOverrides, originalCells]
   )
   const selectedRegionBounds = useMemo(() => {
     if (!cells.length || !selectedRegions.length) return []
@@ -640,6 +765,7 @@ export default function HomePage() {
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setLastSettings(null)
     setDraftSettings(DEFAULT_SETTINGS)
     setLockAspectRatio(true)
@@ -671,7 +797,7 @@ export default function HomePage() {
     const h = Math.max(1, Math.round(DEFAULT_SETTINGS.height_inches * DEFAULT_SETTINGS.mesh_count))
     const blankGrid = Array.from({ length: h }, () => Array(w).fill(BLANK_CELL))
     setActiveImagePath(null)
-    setImportedAspectRatio(null)
+    setImportedAspectRatio(DEFAULT_SETTINGS.width_inches / DEFAULT_SETTINGS.height_inches)
     setPreviewImagePath(null)
     setOriginalPreviewImagePath(null)
     setLastVisibleImageUrl(null)
@@ -686,6 +812,7 @@ export default function HomePage() {
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setLastSettings(DEFAULT_SETTINGS)
     setDraftSettings(DEFAULT_SETTINGS)
     setLockAspectRatio(true)
@@ -899,6 +1026,7 @@ export default function HomePage() {
       setDraftSettings(previewSettings)
       setPaletteReductionTarget(nextFullPaletteHexes.length || 128)
       setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
       setActiveWorkflowStep(2)
@@ -949,6 +1077,7 @@ export default function HomePage() {
       })
       setViewMode('stitch')
       setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
       return
     }
 
@@ -976,6 +1105,7 @@ export default function HomePage() {
     })
     setViewMode('stitch')
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
   }
 
   function disableColorHex(hex: string) {
@@ -1050,15 +1180,6 @@ export default function HomePage() {
     applyEnabledPalette(nextEnabledColorHexes)
   }
 
-  function handleToggleColorEnabled(hex: string, enabled: boolean) {
-    if (enabled) {
-      enableColorHex(hex)
-      return
-    }
-
-    disableColorHex(hex)
-  }
-
   function handleApplyShapeCells(shapeCells: Array<{row: number, col: number, color: string}>) {
     if (!shapeCells.length) return
     pushUndoSnapshot()
@@ -1121,6 +1242,7 @@ export default function HomePage() {
     }
 
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
   }
 
   function handleApplyColorToSelection(targetHex: string) {
@@ -1178,6 +1300,7 @@ export default function HomePage() {
       setSelectedRegions([])
     }
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setViewMode('stitch')
   }
 
@@ -1220,6 +1343,7 @@ export default function HomePage() {
     setActivePaintColor(buildPaletteForCells(nextCells)[0]?.hex ?? null)
     setSelectedRegions([])
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setViewMode('stitch')
   }
 
@@ -1329,6 +1453,7 @@ export default function HomePage() {
       setManualCellOverrides(previous.manualCellOverrides)
       setFinishOutlineBackups(previous.finishOutlineBackups)
       setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
 
       return current.slice(0, -1)
     })
@@ -1359,6 +1484,7 @@ export default function HomePage() {
       setManualCellOverrides(next.manualCellOverrides)
       setFinishOutlineBackups(next.finishOutlineBackups)
       setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
 
       return current.slice(0, -1)
     })
@@ -1422,6 +1548,7 @@ export default function HomePage() {
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setViewMode('stitch')
     setSelectedRegions([])
   }
@@ -1447,7 +1574,7 @@ export default function HomePage() {
     setManualCellOverrides((current) => {
       const nextOverrides = { ...current }
       nextCells.forEach((row, rowIndex) => {
-        row.forEach((cell, colIndex) => {
+        row.forEach((_cell, colIndex) => {
           if (!normalizedSources.includes(cells[rowIndex][colIndex])) return
           nextOverrides[makeCellKey(rowIndex, colIndex)] = targetHex
         })
@@ -1460,6 +1587,7 @@ export default function HomePage() {
     )
     setActivePaintColor((current) => (current && normalizedSources.includes(current) ? targetHex : current))
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setViewMode('stitch')
 
     return changed
@@ -1555,6 +1683,7 @@ export default function HomePage() {
     setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
     setActivePaintColor((current) => current ?? targetHex)
     setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
     setViewMode('stitch')
 
     return changed
@@ -2071,11 +2200,16 @@ export default function HomePage() {
       })
 
       setFinalPdfPath(result.pdf_url)
-      setShowFinalizeModal(false)
+      setFinalPreviewImagePath(result.preview_image_url)
+      setPreviewImagePath(result.preview_image_url)
+      setOriginalPreviewImagePath(result.preview_image_url)
+      setLastVisibleImageUrl(result.preview_image_url)
       setActiveWorkflowStep(3)
       setGalleryTitle(draftName.trim() === 'Untitled' ? '' : draftName.trim())
       setGalleryStatus('idle')
-      setPostedGalleryItemId(null)
+      setGalleryError('')
+      setShowGalleryPublishModal(true)
+      setShowFinalizeModal(false)
     } finally {
       setLoading(false)
     }
@@ -2092,19 +2226,22 @@ export default function HomePage() {
     const title = galleryTitle.trim()
     if (!title) {
       setGalleryStatus('error')
+      setGalleryError('Add a piece name and try again.')
       return
     }
 
     setGalleryStatus('posting')
+    setGalleryError('')
     try {
-      const item = await publishGalleryItem(
+      await publishGalleryItem(
         {
           title,
           tags: galleryTags
             .split(',')
             .map((tag) => tag.trim())
             .filter(Boolean),
-          preview_image_url: previewImagePath,
+          submitter_name: userDisplayName(user),
+          preview_image_url: finalPreviewImagePath ?? previewImagePath,
           pdf_url: finalPdfPath,
           width_inches: lastSettings?.width_inches ?? null,
           height_inches: lastSettings?.height_inches ?? null,
@@ -2113,10 +2250,11 @@ export default function HomePage() {
         },
         session.access_token,
       )
-      setPostedGalleryItemId(item.id)
       setGalleryStatus('posted')
-      setShowGalleryPublishModal(false)
-    } catch {
+      finishFinalizeFlow()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : ''
+      setGalleryError(message || 'Gallery post failed. Please try again.')
       setGalleryStatus('error')
     }
   }
@@ -2133,36 +2271,24 @@ export default function HomePage() {
 
       {finalPdfPath && !loading && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => {
-              if (!session?.access_token) {
-                setAuthPrompt('gallery')
-                return
-              }
-              setGalleryTitle((current) => current || (draftName === 'Untitled' ? '' : draftName))
-              setShowGalleryPublishModal(true)
-            }}
-            disabled={galleryStatus === 'posting' || Boolean(postedGalleryItemId)}
+          <a
+            href={assetUrl(finalPdfPath) ?? '#'}
+            target="_blank"
+            rel="noreferrer"
             style={{
-              padding: '10px 20px',
+              padding: '7px 14px',
+              border: '1px solid #d7d0c8',
               borderRadius: 8,
-              border: '1px solid #5c7856',
-              background: '#6e8d67',
-              color: '#fff',
               fontFamily: 'inherit',
-              fontSize: 14,
-              cursor: galleryStatus === 'posting' || postedGalleryItemId ? 'default' : 'pointer',
-              opacity: galleryStatus === 'posting' || postedGalleryItemId ? 0.65 : 1,
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#fff',
+              color: '#3f382f',
+              textDecoration: 'none',
             }}
           >
-            {postedGalleryItemId ? 'Posted to Gallery' : galleryStatus === 'posting' ? 'Posting...' : 'Post to Gallery'}
-          </button>
-          {postedGalleryItemId && (
-            <Link href="/gallery" style={{ color: '#6e8d67', fontWeight: 700, textDecoration: 'none' }}>
-              View gallery
-            </Link>
-          )}
+            Download PDF report
+          </a>
         </div>
       )}
     </>
@@ -2270,11 +2396,6 @@ export default function HomePage() {
     finishShape === 'circle'
       ? Math.round(resolvedFinishSize * designMeshCount)
       : Math.round(Math.min(resolvedFinishSize, designWidthInches) * designMeshCount)
-  const finishingStitchHeight =
-    finishShape === 'circle'
-      ? finishingStitchWidth
-      : Math.round(Math.min(resolvedFinishSize, designHeightInches) * designMeshCount)
-
   const workflowSteps = [
     { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
@@ -2287,6 +2408,7 @@ export default function HomePage() {
       setAuthPrompt('save')
       return
     }
+    setDraftSaveError('')
     setSaveStatus('saving')
     try {
       const normalizedDraftName = draftName.trim() || 'Untitled'
@@ -2307,8 +2429,10 @@ export default function HomePage() {
         pdf_url: finalPdfPath,
         finalized: Boolean(finalPdfPath),
       }
-      if (savedProjectId) {
-        await updateProject(savedProjectId, payload, session.access_token)
+      const existingId = savedProjectId ?? searchParams.get('project')
+      if (existingId) {
+        await updateProject(existingId, payload, session.access_token)
+        if (!savedProjectId) setSavedProjectId(existingId)
       } else {
         const project = await saveProject(payload, session.access_token)
         setSavedProjectId(project.id)
@@ -2319,6 +2443,11 @@ export default function HomePage() {
       setTimeout(() => setSaveStatus('idle'), 2500)
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
+      setDraftSaveError(
+        msg.toLowerCase().includes('limit')
+          ? 'Draft limit reached. Delete a saved design before saving a new one.'
+          : 'File not saved. Please check your connection and try again.'
+      )
       setSaveStatus(msg.toLowerCase().includes('limit') ? 'limit' : 'error')
       setTimeout(() => setSaveStatus('idle'), 4000)
     }
@@ -2557,7 +2686,7 @@ export default function HomePage() {
         <div
           style={{
             display: 'grid',
-            gap: 8,
+            gap: 10,
             padding: 16,
             border: '1px solid #e8e2d7',
             borderRadius: 14,
@@ -2565,10 +2694,25 @@ export default function HomePage() {
             fontSize: 14,
           }}
         >
-          <div><strong>Size:</strong> {lastSettings?.width_inches ?? draftSettings.width_inches}" x {lastSettings?.height_inches ?? draftSettings.height_inches}"</div>
-          <div><strong>Mesh:</strong> {lastSettings?.mesh_count ?? draftSettings.mesh_count}</div>
-          <div><strong>Colors used:</strong> {currentDesignPalette.length}</div>
-          <div><strong>Total stitches:</strong> {currentDesignStitchCount}</div>
+          <strong>Canvas summary</strong>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+            <div><strong>Design:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot;</div>
+            <div><strong>Mesh:</strong> {designMeshCount}</div>
+            <div><strong>Colors:</strong> {currentDesignPalette.length}</div>
+            <div><strong>Stitches:</strong> {currentDesignStitchCount}</div>
+            <div>
+              <strong>Finishing:</strong>{' '}
+              {finishShape === 'circle'
+                ? `${resolvedFinishSize.toFixed(1)}" round`
+                : `${resolvedFinishSize.toFixed(1)}" square`}
+            </div>
+            <div><strong>Canvas:</strong> {selectedCanvasSize.label}</div>
+          </div>
+          <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
+            {selectedCanvasFits
+              ? `Chosen from 5 x 6, 8 x 6, and 8 x 12 with about 1" working canvas on each side.`
+              : `This design needs about ${requiredCanvasWidth.toFixed(1)}" x ${requiredCanvasHeight.toFixed(1)}", which is larger than the available sizes.`}
+          </div>
         </div>
         <div
           style={{
@@ -2583,7 +2727,7 @@ export default function HomePage() {
         >
           <strong>Finishing shape</strong>
           <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            Center a finishing area and blank everything outside it.
+            Crop out unwanted background and add a perimeter circle for ornaments.
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <button
@@ -2631,37 +2775,6 @@ export default function HomePage() {
             Draw 1-stitch black outline
           </button>
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gap: 8,
-            padding: 16,
-            border: '1px solid #e8e2d7',
-            borderRadius: 14,
-            background: '#fff',
-            fontSize: 14,
-          }}
-        >
-          <strong>Canvas recommendation</strong>
-          <div>
-            <strong>Design area:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot; on {designMeshCount} mesh
-          </div>
-          <div>
-            <strong>Finishing area:</strong>{' '}
-            {finishShape === 'circle'
-              ? `${resolvedFinishSize.toFixed(1)}" round`
-              : `${resolvedFinishSize.toFixed(1)}" square`}
-            {' '}({finishingStitchWidth} x {finishingStitchHeight} stitches)
-          </div>
-          <div>
-            <strong>Canvas size:</strong> {selectedCanvasSize.label}
-          </div>
-          <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            {selectedCanvasFits
-              ? `Chosen from 5 x 6, 8 x 6, and 8 x 12 with about 1" working canvas on each side.`
-              : `This design needs about ${requiredCanvasWidth.toFixed(1)}" x ${requiredCanvasHeight.toFixed(1)}", which is larger than the available sizes.`}
-          </div>
-        </div>
         <button
           type="button"
           onClick={() => {
@@ -2706,77 +2819,67 @@ export default function HomePage() {
           padding: '14px 24px',
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
+          position: 'relative',
+          zIndex: 10,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-          <div
-            aria-hidden="true"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 10px)',
-              gap: 3,
-              padding: 2,
-            }}
-          >
-            {Array.from({ length: 9 }, (_, index) => (
-              <span
-                key={index}
-                style={{
-                  width: 10,
-                  height: 10,
-                  border: '2px solid #111',
-                  borderRadius: 2,
-                  boxSizing: 'border-box',
-                }}
-              />
-            ))}
-          </div>
-          <strong style={{ fontSize: 25, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
-          {!isMobile && <span style={{ color: '#d8d0c4' }}>|</span>}
-          {!isMobile && (
-            <div style={{ display: 'flex', gap: 28, color: '#7f776d', fontWeight: 600 }}>
-              <Link href="/drafts" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
-                Projects
-              </Link>
-              <Link href="/gallery" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
-                Gallery
-              </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 14, minWidth: 0, flexWrap: 'wrap' }}>
+          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, textDecoration: 'none' }}>
+            <div
+              aria-hidden="true"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 10px)',
+                gap: 3,
+                padding: 2,
+              }}
+            >
+              {Array.from({ length: 9 }, (_, index) => (
+                <span
+                  key={index}
+                  style={{
+                    width: 10,
+                    height: 10,
+                    border: '2px solid #111',
+                    borderRadius: 2,
+                    boxSizing: 'border-box',
+                  }}
+                />
+              ))}
+            </div>
+            <strong style={{ fontSize: isMobile ? 20 : 25, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
+          </Link>
+          <span style={{ color: '#d8d0c4' }}>|</span>
+          <div style={{ display: 'flex', gap: isMobile ? 12 : 28, color: '#7f776d', fontWeight: 600, fontSize: isMobile ? 13 : undefined, whiteSpace: 'nowrap', position: 'relative', zIndex: 2 }}>
+            <Link href="/gallery" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
+              Gallery
+            </Link>
+            <Link href="/drafts" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none', fontWeight: 600 }}>
+              Projects
+            </Link>
+            {!isMobile && (
               <span style={{ color: '#3f382f', fontWeight: 700 }}>
                 Active Canvas
               </span>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           {session ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div
-                title={user?.email ?? 'Signed in'}
-                aria-label={user?.email ?? 'Signed in'}
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: '50%',
-                  display: 'grid',
-                  placeItems: 'center',
-                  border: '1px solid #d8d0c4',
-                  background: '#f0ece5',
-                  color: '#3f382f',
-                  fontSize: 13,
-                  fontWeight: 800,
-                }}
-              >
-                {getUserInitials(user?.email)}
-              </div>
-              <button type="button" onClick={() => void signOut()} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
+              <UserAvatar user={user} />
+              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
+                {userDisplayName(user)}
+              </button>
+              <button type="button" onClick={() => setShowLogoutConfirm(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
                 Log out
               </button>
             </div>
           ) : (
-            <Link href="/drafts" style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', textDecoration: 'none' }}>
+            <button type="button" onClick={() => setAuthPrompt('login')} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
               Log in
-            </Link>
+            </button>
           )}
           <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
             Mission
@@ -3087,7 +3190,7 @@ export default function HomePage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
-            zIndex: 30,
+            zIndex: 80,
             padding: 18,
           }}
           onClick={() => setAuthPrompt(null)}
@@ -3106,8 +3209,11 @@ export default function HomePage() {
                   ? 'Log in to save drafts'
                   : authPrompt === 'gallery'
                     ? 'Log in to post to gallery'
-                    : 'Log in to finalize'
+                    : authPrompt === 'finalize'
+                      ? 'Log in to finalize'
+                      : 'Log in to MNS Studio'
               }
+              onSuccess={() => setAuthPrompt(null)}
             />
             <button
               type="button"
@@ -3122,8 +3228,62 @@ export default function HomePage() {
                 cursor: 'pointer',
               }}
             >
-              Continue editing
+              Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {showLogoutConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'grid',
+            placeItems: 'center',
+            zIndex: 31,
+            padding: 18,
+          }}
+          onClick={() => setShowLogoutConfirm(false)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              background: 'white',
+              padding: 24,
+              borderRadius: 12,
+              width: 360,
+              maxWidth: '100%',
+              display: 'grid',
+              gap: 14,
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Log out?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You will need to log back in to save drafts, finalize designs, or post to the gallery.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLogoutConfirm(false)
+                  void signOut()
+                  setAuthPrompt('login')
+                }}
+                style={btnPrimary}
+              >
+                Log out
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3141,7 +3301,7 @@ export default function HomePage() {
             zIndex: 25,
             padding: 18,
           }}
-          onClick={() => setShowGalleryPublishModal(false)}
+          onClick={skipGalleryPublish}
         >
           <div
             onClick={(event) => event.stopPropagation()}
@@ -3157,11 +3317,31 @@ export default function HomePage() {
             }}
           >
             <div style={{ display: 'grid', gap: 6 }}>
-              <h2 style={{ margin: 0 }}>Post to gallery</h2>
+              <h2 style={{ margin: 0 }}>Post to gallery?</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                Add a name and searchable tags before sharing this finalized design.
+                Your PDF report is ready. Add a name and searchable tags if you want to share this finalized design in the gallery.
               </p>
             </div>
+            {finalPdfPath && (
+              <a
+                href={assetUrl(finalPdfPath) ?? '#'}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  justifySelf: 'start',
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  font: 'inherit',
+                  fontWeight: 700,
+                  color: '#3f382f',
+                  background: '#fff',
+                  textDecoration: 'none',
+                }}
+              >
+                Download PDF report
+              </a>
+            )}
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
               Piece name
               <input
@@ -3169,6 +3349,7 @@ export default function HomePage() {
                 onChange={(event) => {
                   setGalleryTitle(event.target.value)
                   setGalleryStatus('idle')
+                  setGalleryError('')
                 }}
                 placeholder="Canvas name"
                 autoFocus
@@ -3185,7 +3366,10 @@ export default function HomePage() {
               Tags
               <input
                 value={galleryTags}
-                onChange={(event) => setGalleryTags(event.target.value)}
+                onChange={(event) => {
+                  setGalleryTags(event.target.value)
+                  setGalleryError('')
+                }}
                 placeholder="ornament, floral, beginner"
                 style={{
                   border: '1px solid #d7d0c8',
@@ -3198,12 +3382,12 @@ export default function HomePage() {
             </label>
             {galleryStatus === 'error' && (
               <p style={{ margin: 0, color: '#b0453a', fontSize: 13 }}>
-                Add a piece name and try again.
+                {galleryError || 'Gallery post failed. Please try again.'}
               </p>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" onClick={() => setShowGalleryPublishModal(false)} style={btnSecondary}>
-                Cancel
+              <button type="button" onClick={skipGalleryPublish} disabled={galleryStatus === 'posting'} style={btnSecondary}>
+                Skip
               </button>
               <button type="button" onClick={() => void handlePublishGalleryItem()} disabled={galleryStatus === 'posting'} style={btnPrimary}>
                 {galleryStatus === 'posting' ? 'Posting...' : 'Post to Gallery'}
@@ -3215,6 +3399,7 @@ export default function HomePage() {
 
       {showDraftNameModal && (
         <div
+          onClick={() => setShowDraftNameModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
@@ -3244,7 +3429,10 @@ export default function HomePage() {
             </div>
             <input
               value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
+              onChange={(event) => {
+                setDraftName(event.target.value)
+                setDraftSaveError('')
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void handleSaveDraft()
                 if (event.key === 'Escape') setShowDraftNameModal(false)
@@ -3262,6 +3450,11 @@ export default function HomePage() {
                 color: '#3f382f',
               }}
             />
+            {draftSaveError && (
+              <p style={{ margin: 0, color: '#b0453a', fontSize: 13, lineHeight: 1.35 }}>
+                {draftSaveError}
+              </p>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setShowDraftNameModal(false)} style={btnSecondary}>
                 Cancel
@@ -3294,7 +3487,7 @@ export default function HomePage() {
               gap: 16,
             }}
           >
-            <h2 style={{ margin: 0 }}>Create finalized PDF?</h2>
+            <h2 style={{ margin: 0 }}>Finalize & Export PDF</h2>
             <p style={{ margin: 0 }}>
               This will generate your finalized two-page PDF report.
             </p>
@@ -3337,6 +3530,15 @@ export default function HomePage() {
           </div>
         </div>
       )}
+      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
     </main>
+  )
+}
+
+export default function HomePage() {
+  return (
+    <Suspense>
+      <StudioPage />
+    </Suspense>
   )
 }

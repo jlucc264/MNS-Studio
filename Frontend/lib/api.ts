@@ -169,6 +169,7 @@ export type FinalizePayload = {
 export type FinalizeResponse = {
   message: string
   pdf_url: string
+  preview_image_url: string
 }
 
 export async function finalizePreview(payload: FinalizePayload): Promise<FinalizeResponse> {
@@ -234,6 +235,14 @@ export type ProjectSavePayload = Partial<Omit<Project, 'id' | 'created_at' | 'up
   name: string
 }
 
+export async function getProject(id: string, accessToken?: string | null): Promise<Project> {
+  const res = await fetch(`${API_BASE}/projects/${id}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load project')
+  return res.json()
+}
+
 export async function listProjects(accessToken?: string | null): Promise<Project[]> {
   const res = await fetch(`${API_BASE}/projects`, {
     headers: authHeaders(accessToken),
@@ -279,6 +288,7 @@ export type GalleryItem = {
   user_id: string
   title: string
   tags: string[]
+  submitter_name: string | null
   preview_image_url: string | null
   pdf_url: string
   width_inches: number | null
@@ -292,6 +302,7 @@ export type GalleryItem = {
 export type GalleryCreatePayload = {
   title: string
   tags: string[]
+  submitter_name?: string | null
   preview_image_url?: string | null
   pdf_url: string
   width_inches?: number | null

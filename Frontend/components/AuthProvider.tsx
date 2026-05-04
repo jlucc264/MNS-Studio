@@ -10,7 +10,10 @@ type AuthContextValue = {
   session: Session | null
   user: User | null
   signIn: (email: string, password: string) => Promise<void>
-  signUp: (email: string, password: string) => Promise<void>
+  signUp: (email: string, password: string, name?: string) => Promise<void>
+  sendPasswordReset: (email: string) => Promise<void>
+  updatePassword: (password: string) => Promise<void>
+  updateProfile: (data: { full_name?: string }) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -57,10 +60,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw new Error(error.message)
       },
-      async signUp(email, password) {
+      async signUp(email, password, name) {
         const supabase = getSupabaseClient()
         if (!supabase) throw new Error('Supabase Auth is not configured.')
-        const { error } = await supabase.auth.signUp({ email, password })
+        const emailRedirectTo = typeof window !== 'undefined' ? `${window.location.origin}/auth-confirmed` : undefined
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo,
+            data: name ? { full_name: name.trim() } : undefined,
+          },
+        })
+        if (error) throw new Error(error.message)
+      },
+      async sendPasswordReset(email) {
+        const supabase = getSupabaseClient()
+        if (!supabase) throw new Error('Supabase Auth is not configured.')
+        const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/reset-password` : undefined
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
+        if (error) throw new Error(error.message)
+      },
+      async updatePassword(password) {
+        const supabase = getSupabaseClient()
+        if (!supabase) throw new Error('Supabase Auth is not configured.')
+        const { error } = await supabase.auth.updateUser({ password })
+        if (error) throw new Error(error.message)
+      },
+      async updateProfile(data) {
+        const supabase = getSupabaseClient()
+        if (!supabase) throw new Error('Supabase Auth is not configured.')
+        const { error } = await supabase.auth.updateUser({ data })
         if (error) throw new Error(error.message)
       },
       async signOut() {

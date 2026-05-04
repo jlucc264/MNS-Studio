@@ -286,7 +286,7 @@ def visualize(request: VisualizeRequest):
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
     delete_finalized_output(request.previous_pdf_url)
-    pdf_url, public_pdf_path, internal_pdf_path = generate_preview_pdf(
+    pdf_url, public_pdf_path, internal_pdf_path, preview_image_url = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
         height_inches=request.height_inches,
@@ -312,6 +312,7 @@ def finalize(request: FinalizeRequest):
     return FinalizeResponse(
         message="Final PDF report created successfully.",
         pdf_url=pdf_url,
+        preview_image_url=preview_image_url,
     )
 
 @app.post("/recolor", response_model=RecolorResponse)
@@ -344,6 +345,15 @@ def recolor(request: RecolorRequest):
 @app.get("/projects", response_model=list[ProjectResponse])
 def get_projects(user_id: str = Depends(get_current_user_id)):
     return list_projects(user_id)
+
+
+@app.get("/projects/{project_id}", response_model=ProjectResponse)
+def get_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    from app.services.supabase_db import get_project as db_get_project
+    result = db_get_project(project_id, user_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return result
 
 
 MAX_DRAFTS = 3
@@ -410,6 +420,8 @@ def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(g
     data = request.model_dump(exclude_none=True)
     data["title"] = title
     data["tags"] = tags[:8]
+    if "submitter_name" in data:
+        data["submitter_name"] = data["submitter_name"].strip()[:80] or None
     result = create_gallery_item(data, user_id)
     if result is None:
         raise HTTPException(status_code=502, detail="Could not publish to gallery.")

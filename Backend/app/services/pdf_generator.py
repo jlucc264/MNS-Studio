@@ -8,7 +8,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from PIL import Image, ImageDraw
 
-from .storage import finalized_output_path, ASSETS_DIR
+from .storage import finalized_output_path, preview_output_path, ASSETS_DIR
 
 DISPLAY_CELL_SIZE = 12
 GRID_COLOR = (180, 180, 180, 255)
@@ -144,21 +144,25 @@ def _draw_report_page(
     pdf.setFillColor(colors.HexColor("#5B635C"))
     pdf.drawString(margin + 18, page_height - 88, "Stitch canvas summary, palette, and production counts")
 
-    thumb_width = 94
-    thumb_height = 94
+    thumb_size = 82
+    thumb_x = page_width - margin - thumb_size - 14
+    thumb_y = page_height - 52 - thumb_size
     thumb_buffer = BytesIO()
     preview_image.save(thumb_buffer, format="PNG")
     thumb_buffer.seek(0)
     thumb = ImageReader(thumb_buffer)
     pdf.drawImage(
         thumb,
-        page_width - margin - thumb_width - 18,
-        page_height - 132,
-        width=thumb_width,
-        height=thumb_height,
+        thumb_x,
+        thumb_y,
+        width=thumb_size,
+        height=thumb_size,
         preserveAspectRatio=True,
         mask='auto',
     )
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColor(colors.HexColor("#7A817A"))
+    pdf.drawRightString(thumb_x + thumb_size, thumb_y - 10, f"Exported {export_date}")
 
     summary_x = margin + 18
     summary_y = page_height - 112
@@ -169,7 +173,6 @@ def _draw_report_page(
         ("Colors used", str(used_colors)),
         ("Total stitches", str(total_stitches)),
         ("Contrast", contrast_level.replace('_', ' ')),
-        ("Exported", export_date),
     ]
 
     pdf.setFont("Helvetica-Bold", 10)
@@ -385,12 +388,14 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-) -> tuple[str, Path, Path]:
+) -> tuple[str, Path, Path, str]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
+    preview_path, preview_url = preview_output_path()
 
     page_size = landscape(letter) if width_inches > height_inches else letter
     preview_image = _render_preview_image_from_cells(cells, mesh_count, show_grid)
+    preview_image.save(preview_path, format="PNG")
     report_rows = _build_report_rows(cells, palette)
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
@@ -440,4 +445,4 @@ def generate_preview_pdf(
 
     # The public URL is returned to the app for completion tracking; the internal file
     # is sent by the finalize endpoint and intentionally not exposed in the UI.
-    return public_url, public_path, internal_path
+    return public_url, public_path, internal_path, preview_url

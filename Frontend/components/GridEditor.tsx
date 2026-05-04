@@ -92,29 +92,31 @@ function getSemicircleCells(
   const botRow = Math.max(r1, r2)
   const leftCol = Math.min(c1, c2)
   const rightCol = Math.max(c1, c2)
+  const opensDown = r2 >= r1
   const cx = (leftCol + rightCol) / 2
-  const cy = topRow
-  const width = rightCol - leftCol
-  const height = botRow - topRow
+  const cy = opensDown ? topRow : botRow
+  const width = Math.max(1, rightCol - leftCol)
+  const height = Math.max(1, botRow - topRow)
   const a = width / 2 + 0.5
   const b = height + 0.5
   const result: Array<{ row: number; col: number; color: string }> = []
+
+  function isInsideSemicircle(row: number, col: number) {
+    if (row < 0 || row >= totalRows || col < 0 || col >= totalCols) return false
+    const isOnOpenSide = opensDown ? row >= cy : row <= cy
+    if (!isOnOpenSide) return false
+    const nx = (col + 0.5 - cx) / a
+    const ny = (row + 0.5 - cy) / b
+    return nx * nx + ny * ny <= 1
+  }
+
   for (let row = Math.max(0, topRow); row <= Math.min(totalRows - 1, botRow); row++) {
     for (let col = Math.max(0, leftCol); col <= Math.min(totalCols - 1, rightCol); col++) {
-      const nx = (col + 0.5 - cx) / a
-      const ny = (row + 0.5 - cy) / b
-      const inside = nx * nx + ny * ny <= 1 && row >= topRow
-      if (!inside) continue
-      // check if border: any neighbor outside
+      if (!isInsideSemicircle(row, col)) continue
       const neighbors = [
         [row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]
       ]
-      const isBorder = row === topRow || neighbors.some(([nr, nc]) => {
-        if (nr < topRow) return true
-        const nnx = (nc + 0.5 - cx) / a
-        const nny = (nr + 0.5 - cy) / b
-        return nnx * nnx + nny * nny > 1 || nr < topRow
-      })
+      const isBorder = row === cy || neighbors.some(([nr, nc]) => !isInsideSemicircle(nr, nc))
       if (isBorder) {
         if (borderColor) result.push({ row, col, color: borderColor })
       } else {

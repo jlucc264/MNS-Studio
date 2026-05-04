@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
+import { ProfileModal } from '../../components/ProfileModal'
+import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
 import { assetUrl, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 
 const btnPrimary = {
@@ -40,6 +42,17 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+function currentUserDisplayName(user: ReturnType<typeof useAuth>['user']) {
+  return user ? userDisplayName(user) : null
+}
+
+function submitterLabel(item: GalleryItem, user: ReturnType<typeof useAuth>['user']) {
+  const storedName = item.submitter_name?.trim()
+  if (storedName) return storedName
+  if (user?.id === item.user_id) return currentUserDisplayName(user) ?? 'You'
+  return 'MNS stitcher'
+}
+
 export default function GalleryPage() {
   const { session, user, signOut } = useAuth()
   const [items, setItems] = useState<GalleryItem[]>([])
@@ -48,6 +61,9 @@ export default function GalleryPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -91,7 +107,7 @@ export default function GalleryPage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Link href="/studio" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}>
+          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}>
             <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
               {Array.from({ length: 9 }, (_, i) => (
                 <span key={i} style={{ width: 9, height: 9, border: '2px solid #111', borderRadius: 2, boxSizing: 'border-box' }} />
@@ -100,15 +116,29 @@ export default function GalleryPage() {
             <strong style={{ fontSize: 22, color: '#111' }}>MNS Studio</strong>
           </Link>
           <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>Gallery</span>
+          <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
+            <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Projects</Link>
+            <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Link href="/drafts" style={{ ...btnSecondary, textDecoration: 'none' }}>Projects</Link>
-          <Link href="/studio" style={{ ...btnPrimary, textDecoration: 'none' }}>Create</Link>
           {session ? (
-            <button type="button" onClick={() => void signOut()} style={btnSecondary}>
-              {user?.email ? 'Log out' : 'Signed in'}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowProfileModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
+              >
+                <UserAvatar user={user} />
+                <span style={{ color: '#7f776d', fontSize: 13, fontWeight: 600 }}>
+                {userDisplayName(user)}
+                </span>
+              </button>
+              <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
+                Log out
+              </button>
+            </>
           ) : (
             <button type="button" onClick={() => setShowAuthPrompt(true)} style={btnSecondary}>Log in</button>
           )}
@@ -174,7 +204,7 @@ export default function GalleryPage() {
                 key={item.id}
                 style={{
                   display: 'grid',
-                  gridTemplateRows: '190px 1fr',
+                  gridTemplateRows: '220px 1fr',
                   border: '1px solid #e7e1d8',
                   borderRadius: 10,
                   overflow: 'hidden',
@@ -182,10 +212,49 @@ export default function GalleryPage() {
                   boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                 }}
               >
-                <div style={{ background: '#ede8df', display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    background: '#ede8df',
+                    display: 'grid',
+                    placeItems: 'center',
+                    overflow: 'hidden',
+                    padding: 12,
+                    boxSizing: 'border-box',
+                    minWidth: 0,
+                    minHeight: 0,
+                  }}
+                >
                   {resolveMaybeAssetUrl(item.preview_image_url) ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={resolveMaybeAssetUrl(item.preview_image_url) ?? ''} alt={item.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPreview(item)}
+                      aria-label={`Open larger preview for ${item.title}`}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        border: 0,
+                        padding: 0,
+                        background: 'transparent',
+                        cursor: 'zoom-in',
+                        display: 'grid',
+                        placeItems: 'center',
+                        minWidth: 0,
+                        minHeight: 0,
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={resolveMaybeAssetUrl(item.preview_image_url) ?? ''}
+                        alt={item.title}
+                        style={{
+                          display: 'block',
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          width: 'auto',
+                          height: 'auto',
+                        }}
+                      />
+                    </button>
                   ) : (
                     <span style={{ color: '#8a8177' }}>No preview</span>
                   )}
@@ -193,10 +262,13 @@ export default function GalleryPage() {
                 <div style={{ padding: 14, display: 'grid', gap: 10 }}>
                   <div style={{ display: 'grid', gap: 4 }}>
                     <strong style={{ fontSize: 16 }}>{item.title}</strong>
+                    <span style={{ fontSize: 12, color: '#6f675f' }}>
+                      By {submitterLabel(item, user)} · {formatDate(item.created_at)}
+                    </span>
                     <span style={{ fontSize: 12, color: '#8a8177' }}>
                       {[item.width_inches && item.height_inches ? `${item.width_inches.toFixed(1)}" x ${item.height_inches.toFixed(1)}"` : null, item.mesh_count ? `${item.mesh_count} mesh` : null, item.color_count ? `${item.color_count} colors` : null]
                         .filter(Boolean)
-                        .join(' · ') || `Shared ${formatDate(item.created_at)}`}
+                        .join(' · ') || 'Finalized stitch design'}
                     </span>
                   </div>
                   {item.tags.length > 0 && (
@@ -224,15 +296,107 @@ export default function GalleryPage() {
       </main>
 
       {showAuthPrompt && (
-        <div role="dialog" aria-modal="true" onClick={() => setShowAuthPrompt(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+        <div role="dialog" aria-modal="true" onClick={() => setShowAuthPrompt(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 80, padding: 18 }}>
           <div onClick={(event) => event.stopPropagation()} style={{ display: 'grid', gap: 12, width: 'min(460px, 100%)' }}>
-            <AuthPanel title="Log in to like designs" />
+            <AuthPanel title="Log in to like designs" onSuccess={() => setShowAuthPrompt(false)} />
             <button type="button" onClick={() => setShowAuthPrompt(false)} style={{ justifySelf: 'center', border: 0, background: 'transparent', color: '#fff', font: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
-              Keep browsing
+              Cancel
             </button>
           </div>
         </div>
       )}
+      {selectedPreview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setSelectedPreview(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.72)',
+            display: 'grid',
+            placeItems: 'center',
+            zIndex: 90,
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: 'min(980px, 100%)',
+              maxHeight: '92vh',
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', color: '#fff' }}>
+              <div style={{ display: 'grid', gap: 2 }}>
+                <strong style={{ fontSize: 18 }}>{selectedPreview.title}</strong>
+                <span style={{ fontSize: 13, color: '#eee2d4' }}>
+                  By {submitterLabel(selectedPreview, user)} · {formatDate(selectedPreview.created_at)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPreview(null)}
+                style={{
+                  ...btnSecondary,
+                  borderColor: 'rgba(255,255,255,0.55)',
+                  background: 'rgba(255,255,255,0.12)',
+                  color: '#fff',
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <div
+              style={{
+                minHeight: 280,
+                height: 'min(76vh, 780px)',
+                display: 'grid',
+                placeItems: 'center',
+                background: '#f8f4ec',
+                borderRadius: 10,
+                overflow: 'hidden',
+                padding: 16,
+                boxSizing: 'border-box',
+              }}
+            >
+              {resolveMaybeAssetUrl(selectedPreview.preview_image_url) && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={resolveMaybeAssetUrl(selectedPreview.preview_image_url) ?? ''}
+                  alt={selectedPreview.title}
+                  style={{
+                    display: 'block',
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    width: 'auto',
+                    height: 'auto',
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {showLogoutConfirm && (
+        <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 41, padding: 18 }}>
+          <div onClick={(event) => event.stopPropagation()} style={{ background: 'white', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Log out?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You will need to log back in to like designs or post to the gallery.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); void signOut(); setShowAuthPrompt(true) }} style={btnPrimary}>Log out</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
     </div>
   )
 }

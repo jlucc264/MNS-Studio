@@ -4,7 +4,9 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
-import { deleteProject, listProjects, type Project } from '../../lib/api'
+import { assetUrl, deleteProject, listProjects, type Project } from '../../lib/api'
+import { ProfileModal } from '../../components/ProfileModal'
+import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -47,6 +49,8 @@ export default function DraftsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
 
   useEffect(() => {
     if (authLoading) return
@@ -99,7 +103,7 @@ export default function DraftsPage() {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Link
-            href="/"
+            href="/gallery"
             style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}
           >
             <div
@@ -122,22 +126,27 @@ export default function DraftsPage() {
             <strong style={{ fontSize: 22, color: '#111' }}>MNS Studio</strong>
           </Link>
           <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#3f382f' }}>Projects</span>
+          <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
+            <span style={{ color: '#3f382f', fontWeight: 700 }}>Projects</span>
+            <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          {user?.email && <span style={{ color: '#8a8177', fontSize: 13 }}>{user.email}</span>}
           {session && (
-            <button type="button" onClick={() => void signOut()} style={btnSecondary}>
+            <>
+              <UserAvatar user={user} />
+              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, color: '#8a8177', cursor: 'pointer' }}>
+                {userDisplayName(user)}
+              </button>
+            </>
+          )}
+          {session && (
+            <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
               Log out
             </button>
           )}
-          <Link href="/studio" style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1 }}>
-            + New design
-          </Link>
-          <Link href="/gallery" style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1 }}>
-            Gallery
-          </Link>
         </div>
       </nav>
 
@@ -186,6 +195,23 @@ export default function DraftsPage() {
           )}
         </div>
       </main>
+      {showLogoutConfirm && (
+        <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+          <div onClick={(event) => event.stopPropagation()} style={{ background: 'white', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Log out?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You will need to log back in to access saved projects.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); void signOut() }} style={btnPrimary}>Log out</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
     </div>
   )
 }
@@ -231,7 +257,7 @@ function DraftCard({
         {project.preview_image_url ? (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
-            src={project.preview_image_url}
+            src={project.preview_image_url.startsWith('http') ? project.preview_image_url : assetUrl(project.preview_image_url) ?? ''}
             alt={project.name}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
@@ -313,7 +339,7 @@ function DraftCard({
         ) : (
           <div style={{ display: 'flex', gap: 8 }}>
             <Link
-              href="/studio"
+              href={`/studio?project=${project.id}`}
               style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
             >
               Open

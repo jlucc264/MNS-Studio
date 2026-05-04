@@ -62,6 +62,7 @@ class FinalizeRequest(BaseModel):
 class FinalizeResponse(BaseModel):
     message: str
     pdf_url: str
+    preview_image_url: str
 
 class RecolorRequest(BaseModel):
     image_url: str
@@ -123,6 +124,7 @@ class ProjectResponse(BaseModel):
 class GalleryCreateRequest(BaseModel):
     title: str
     tags: list[str] = []
+    submitter_name: Optional[str] = None
     preview_image_url: Optional[str] = None
     pdf_url: str
     width_inches: Optional[float] = None
@@ -137,6 +139,7 @@ class GalleryItemResponse(BaseModel):
     user_id: str
     title: str
     tags: list[str] = []
+    submitter_name: Optional[str] = None
     preview_image_url: Optional[str] = None
     pdf_url: str
     width_inches: Optional[float] = None
