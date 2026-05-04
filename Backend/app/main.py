@@ -1,5 +1,6 @@
 import json
 import logging
+import mimetypes
 import os
 import re
 from pathlib import Path
@@ -31,7 +32,7 @@ from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import send_finalized_report
 from app.services.auth import get_current_user_id, get_optional_user_id
-from app.services.supabase_storage import upload_pdf_to_supabase, upload_png_to_supabase
+from app.services.supabase_storage import upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
     list_projects,
     create_project,
@@ -112,6 +113,20 @@ def durable_preview_url(preview_url: str, prefix: str = "previews") -> str:
 
     supabase_preview_url = upload_png_to_supabase(preview_path, prefix=prefix)
     return supabase_preview_url or preview_url
+
+
+def durable_image_url(image_url: str, prefix: str = "source-images") -> str:
+    image_path = local_asset_path(image_url)
+    if image_path is None:
+        return image_url
+
+    content_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+    supabase_image_url = upload_file_to_supabase(
+        image_path,
+        prefix=prefix,
+        content_type=content_type,
+    )
+    return supabase_image_url or image_url
 
 
 @app.get("/dmc-colors")
@@ -265,7 +280,7 @@ def upload(file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
 
-    image_url = save_upload(file)
+    image_url = durable_image_url(save_upload(file), prefix="source-images")
     return {
         "message": "Image uploaded successfully.",
         "active_image_url": image_url,
@@ -276,7 +291,7 @@ def upload(file: UploadFile = File(...)):
 @app.post("/import-url")
 def import_url(request: ImportUrlRequest):
     try:
-        image_url = save_remote_image(request.image_url)
+        image_url = durable_image_url(save_remote_image(request.image_url), prefix="source-images")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

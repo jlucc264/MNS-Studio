@@ -1,5 +1,7 @@
 from pathlib import Path
 import colorsys
+from io import BytesIO
+from urllib.request import Request, urlopen
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 from .storage import preview_output_path, ASSETS_DIR
 from app.data.dmc_colors import DMC_COLORS
@@ -126,7 +128,9 @@ CONTRAST_MAP = {
 }
 
 
-def _resolve_asset_path(image_url: str) -> Path:
+def _resolve_asset_path(image_url: str) -> Path | str:
+    if image_url.startswith(("http://", "https://")):
+        return image_url
     cleaned = image_url.lstrip("/")
     return ASSETS_DIR.parent / cleaned
 
@@ -141,7 +145,14 @@ def flatten_transparency_to_white(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 
-def open_source_image(src_path: Path) -> Image.Image:
+def open_source_image(src_path: Path | str) -> Image.Image:
+    if isinstance(src_path, str) and src_path.startswith(("http://", "https://")):
+        request = Request(src_path, headers={"User-Agent": "MNS/1.0"})
+        with urlopen(request, timeout=30) as response:
+            image_bytes = BytesIO(response.read())
+        with Image.open(image_bytes) as img:
+            return flatten_transparency_to_white(img)
+
     with Image.open(src_path) as img:
         return flatten_transparency_to_white(img)
 

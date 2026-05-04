@@ -150,6 +150,7 @@ export async function chatAssistant(message: string): Promise<ChatResponse> {
 
 export function assetUrl(path: string | null) {
   if (!path) return null
+  if (/^https?:\/\//i.test(path)) return path
   return `${API_BASE}${path}`
 }
 
