@@ -218,6 +218,39 @@ function isWithinSelections(
   return selections.some((selection) => isWithinSelection(selection, row, col))
 }
 
+function drawCenterReferenceCross({
+  context,
+  x,
+  y,
+  cellSize,
+}: {
+  context: CanvasRenderingContext2D
+  x: number
+  y: number
+  cellSize: number
+}) {
+  const armLength = Math.max(7, cellSize * 0.72)
+  const innerGap = Math.max(2, cellSize * 0.18)
+
+  context.save()
+  context.strokeStyle = 'rgba(60, 54, 45, 0.48)'
+  context.lineWidth = Math.max(1.25, cellSize * 0.08)
+  context.lineCap = 'round'
+
+  context.beginPath()
+  context.moveTo(x - armLength, y)
+  context.lineTo(x - innerGap, y)
+  context.moveTo(x + innerGap, y)
+  context.lineTo(x + armLength, y)
+  context.moveTo(x, y - armLength)
+  context.lineTo(x, y - innerGap)
+  context.moveTo(x, y + innerGap)
+  context.lineTo(x, y + armLength)
+  context.stroke()
+
+  context.restore()
+}
+
 function drawCanvasCell({
   activeColor,
   context,
@@ -1225,6 +1258,15 @@ export default function GridEditor({
         context.strokeRect(x, y, cellSize, cellSize)
       }
     }
+
+    const designCenterX = gridOriginX + (contentOriginCol + borderStitches + cols / 2) * cellSize
+    const designCenterY = gridOriginY + (contentOriginRow + borderStitches + rows / 2) * cellSize
+    drawCenterReferenceCross({
+      context,
+      x: designCenterX,
+      y: designCenterY,
+      cellSize,
+    })
 
     if (!renderSelections.length) return
 

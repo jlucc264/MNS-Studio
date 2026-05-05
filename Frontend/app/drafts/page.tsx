@@ -7,7 +7,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { assetUrl, deleteProject, listProjects, type Project } from '../../lib/api'
 import { ProfileModal } from '../../components/ProfileModal'
-import { UserAvatar } from '../../components/UserAvatar'
+import { NavAccountControls } from '../../components/NavAccountControls'
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -42,6 +42,10 @@ function formatDimensions(p: Project) {
     return `${p.width_inches.toFixed(1)}" × ${p.height_inches.toFixed(1)}"`
   }
   return null
+}
+
+function isFinalizedProject(project: Project) {
+  return Boolean(project.finalized || project.pdf_url)
 }
 
 export default function DraftsPage() {
@@ -94,6 +98,9 @@ export default function DraftsPage() {
     setLoading(false)
     await signOut()
   }
+
+  const activeProjects = projects.filter((project) => !isFinalizedProject(project))
+  const finalizedProjects = projects.filter(isFinalizedProject)
 
   return (
     <div
@@ -156,19 +163,11 @@ export default function DraftsPage() {
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {session && (
-            <button
-              type="button"
-              aria-label="Open profile"
-              onClick={() => setShowProfileModal(true)}
-              style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer' }}
-            >
-              <UserAvatar user={user} />
-            </button>
-          )}
-          {session && (
-            <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
-              Log out
-            </button>
+            <NavAccountControls
+              user={user}
+              onProfile={() => setShowProfileModal(true)}
+              onLogout={() => setShowLogoutConfirm(true)}
+            />
           )}
         </div>
       </nav>
@@ -180,7 +179,7 @@ export default function DraftsPage() {
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>Your Designs</h1>
             {!loading && !error && (
               <span style={{ fontSize: 13, color: '#8a8177' }}>
-                {projects.length} project{projects.length !== 1 ? 's' : ''}
+                {activeProjects.length} draft{activeProjects.length !== 1 ? 's' : ''} · {finalizedProjects.length} finalized
               </span>
             )}
           </div>
@@ -196,24 +195,28 @@ export default function DraftsPage() {
           ) : !session ? null : projects.length === 0 && !error ? (
             <EmptyState />
           ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                gap: 16,
-              }}
-            >
-              {projects.map((project) => (
-                <DraftCard
-                  key={project.id}
-                  project={project}
-                  dimensions={formatDimensions(project)}
-                  confirmingDelete={confirmDelete === project.id}
-                  onDeleteRequest={() => setConfirmDelete(project.id)}
+            <div style={{ display: 'grid', gap: 28 }}>
+              <ProjectSection
+                title="Active Drafts"
+                emptyText="No active drafts right now."
+                projects={activeProjects}
+                confirmDelete={confirmDelete}
+                onDeleteRequest={setConfirmDelete}
+                onDeleteCancel={() => setConfirmDelete(null)}
+                onDeleteConfirm={handleDelete}
+              />
+              {finalizedProjects.length > 0 && (
+                <ProjectSection
+                  title="Finalized Designs"
+                  emptyText=""
+                  projects={finalizedProjects}
+                  confirmDelete={confirmDelete}
+                  onDeleteRequest={setConfirmDelete}
                   onDeleteCancel={() => setConfirmDelete(null)}
-                  onDeleteConfirm={() => void handleDelete(project.id)}
+                  onDeleteConfirm={handleDelete}
+                  finalized
                 />
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -239,6 +242,112 @@ export default function DraftsPage() {
   )
 }
 
+function ProjectSection({
+  title,
+  emptyText,
+  projects,
+  confirmDelete,
+  onDeleteRequest,
+  onDeleteCancel,
+  onDeleteConfirm,
+  finalized = false,
+}: {
+  title: string
+  emptyText: string
+  projects: Project[]
+  confirmDelete: string | null
+  onDeleteRequest: (id: string) => void
+  onDeleteCancel: () => void
+  onDeleteConfirm: (id: string) => Promise<void>
+  finalized?: boolean
+}) {
+  return (
+    <section style={{ display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+        <h2 style={{ margin: 0, fontSize: 18 }}>{title}</h2>
+        <span style={{ fontSize: 12, color: '#8a8177' }}>{projects.length}</span>
+      </div>
+      {projects.length === 0 ? (
+        finalized ? (
+          <div style={{ border: '1px dashed #d7d0c8', borderRadius: 12, padding: 18, color: '#8a8177', fontSize: 14 }}>
+            {emptyText}
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <NewDraftCard />
+          </div>
+        )
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            gap: 16,
+          }}
+        >
+          {!finalized && <NewDraftCard />}
+          {projects.map((project) => (
+            <DraftCard
+              key={project.id}
+              project={project}
+              dimensions={formatDimensions(project)}
+              confirmingDelete={confirmDelete === project.id}
+              onDeleteRequest={() => onDeleteRequest(project.id)}
+              onDeleteCancel={onDeleteCancel}
+              onDeleteConfirm={() => void onDeleteConfirm(project.id)}
+              finalized={finalized}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function NewDraftCard() {
+  return (
+    <Link
+      href="/studio"
+      style={{
+        minHeight: 282,
+        border: '2px dashed #d7d0c8',
+        borderRadius: 14,
+        background: '#fffdf8',
+        display: 'grid',
+        placeItems: 'center',
+        textDecoration: 'none',
+        color: '#7f776d',
+        boxSizing: 'border-box',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 54,
+          height: 54,
+          borderRadius: '50%',
+          display: 'grid',
+          placeItems: 'center',
+          border: '1px solid #d7d0c8',
+          color: '#6e8d67',
+          background: '#f5f1ea',
+          fontSize: 36,
+          lineHeight: 1,
+          fontWeight: 400,
+        }}
+      >
+        +
+      </span>
+    </Link>
+  )
+}
+
 function DraftCard({
   project,
   dimensions,
@@ -246,6 +355,7 @@ function DraftCard({
   onDeleteRequest,
   onDeleteCancel,
   onDeleteConfirm,
+  finalized = false,
 }: {
   project: Project
   dimensions: string | null
@@ -253,7 +363,10 @@ function DraftCard({
   onDeleteRequest: () => void
   onDeleteCancel: () => void
   onDeleteConfirm: () => void
+  finalized?: boolean
 }) {
+  const reportUrl = assetUrl(project.pdf_url)
+
   return (
     <div
       style={{
@@ -278,7 +391,7 @@ function DraftCard({
         }}
       >
         <DraftThumbnail project={project} />
-        {project.finalized && (
+        {isFinalizedProject(project) && (
           <div
             style={{
               position: 'absolute',
@@ -293,7 +406,7 @@ function DraftCard({
               letterSpacing: 0.5,
             }}
           >
-            PDF ready
+            Finalized
           </div>
         )}
       </div>
@@ -331,12 +444,29 @@ function DraftCard({
           </div>
         ) : (
           <div style={{ display: 'flex', gap: 8 }}>
-            <Link
-              href={`/studio?project=${project.id}`}
-              style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
-            >
-              Open
-            </Link>
+            {finalized ? (
+              reportUrl ? (
+                <a
+                  href={reportUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
+                >
+                  View PDF
+                </a>
+              ) : (
+                <button type="button" disabled style={{ ...btnPrimary, opacity: 0.55, cursor: 'not-allowed', flex: 1 }}>
+                  PDF unavailable
+                </button>
+              )
+            ) : (
+              <Link
+                href={`/studio?project=${project.id}`}
+                style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
+              >
+                Open
+              </Link>
+            )}
             <button type="button" onClick={onDeleteRequest} style={{ ...btnSecondary, padding: '7px 10px' }}>
               ×
             </button>

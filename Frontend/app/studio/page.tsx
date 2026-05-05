@@ -19,7 +19,8 @@ import PalettePanel from '../../components/PalettePanel'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { ProfileModal } from '../../components/ProfileModal'
-import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
+import { userDisplayName } from '../../components/UserAvatar'
+import { NavAccountControls } from '../../components/NavAccountControls'
 import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
@@ -2249,6 +2250,35 @@ function StudioPage() {
         previous_pdf_url: finalPdfPath,
       })
 
+      const existingId = activeDraftProjectId
+      if (existingId) {
+        await updateProject(
+          existingId,
+          {
+            name: draftName.trim() || 'Untitled',
+            width_inches: settingsForFinalize.width_inches,
+            height_inches: settingsForFinalize.height_inches,
+            mesh_count: settingsForFinalize.mesh_count,
+            color_count: currentDesignPalette.length,
+            contrast_level: settingsForFinalize.contrast_level,
+            source_type: settingsForFinalize.source_type,
+            show_grid: settingsForFinalize.show_grid,
+            clean_background: settingsForFinalize.clean_background,
+            simplify_colors: settingsForFinalize.simplify_colors,
+            strengthen_dark_detail: settingsForFinalize.strengthen_dark_detail,
+            preserve_accents: settingsForFinalize.preserve_accents,
+            palette: currentDesignPalette,
+            cells,
+            source_image_url: activeImagePath,
+            preview_image_url: result.preview_image_url,
+            pdf_url: result.pdf_url,
+            finalized: true,
+          },
+          session.access_token,
+        )
+        if (!savedProjectId) setSavedProjectId(existingId)
+      }
+
       setFinalPdfPath(result.pdf_url)
       setFinalPreviewImagePath(result.preview_image_url)
       setPreviewImagePath(result.preview_image_url)
@@ -2987,18 +3017,14 @@ function StudioPage() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: isMobile ? 8 : 14, alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', flexShrink: 0 }}>
           {session ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer' }}>
-                <UserAvatar user={user} />
-              </button>
-              {!isMobile && (
-                <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
-                  Log out
-                </button>
-              )}
-            </div>
+            <NavAccountControls
+              user={user}
+              isMobile={isMobile}
+              onProfile={() => setShowProfileModal(true)}
+              onLogout={() => setShowLogoutConfirm(true)}
+            />
           ) : (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
               Log in

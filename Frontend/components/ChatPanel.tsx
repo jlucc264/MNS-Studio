@@ -109,19 +109,11 @@ export default function ChatPanel({
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text:
-        'Upload an image, paste an image URL, change settings, edit the preview, or type `help` for guided commands.',
-    },
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [selectedActionId, setSelectedActionId] = useState('')
-  const [showAdvancedCommand, setShowAdvancedCommand] = useState(false)
 
   useEffect(() => {
     const node = logRef.current
@@ -188,7 +180,6 @@ export default function ChatPanel({
 
     if (selectedAction.draftCommand) {
       setInput(selectedAction.draftCommand)
-      setShowAdvancedCommand(true)
     }
   }
 
@@ -291,7 +282,7 @@ export default function ChatPanel({
       onDrop={(event) => void handleDrop(event)}
       style={{
         display: 'grid',
-        gridTemplateRows: 'auto minmax(72px, 1fr) auto',
+        gridTemplateRows: 'auto minmax(48px, 64px) auto',
         gap: 0,
         height: '100%',
         minHeight: 0,
@@ -300,13 +291,14 @@ export default function ChatPanel({
         background: dragActive ? '#f3f7ff' : '#ffffff',
         boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
         overflow: 'hidden',
+        boxSizing: 'border-box',
       }}
     >
       <div
         style={{
           display: 'grid',
-          gap: 8,
-          padding: 10,
+          gap: 6,
+          padding: 8,
           borderBottom: '1px solid #ececec',
           background: '#ffffff',
         }}
@@ -314,7 +306,7 @@ export default function ChatPanel({
         <div style={{ display: 'grid', gap: 3 }}>
           <strong style={{ fontSize: 14 }}>Canvas assistant</strong>
           <span style={{ fontSize: 12.5, color: '#6f675f' }}>
-            Choose a guided action. Current source: {activeModeLabel}.
+            Choose an action or type a command. Current source: {activeModeLabel}.
           </span>
         </div>
 
@@ -325,8 +317,9 @@ export default function ChatPanel({
             width: '100%',
             border: '1px solid #d0c8bd',
             borderRadius: 8,
-            padding: '9px 10px',
+            padding: '7px 9px',
             font: 'inherit',
+            fontSize: 13,
             color: '#3f382f',
             background: '#fffdf8',
           }}
@@ -350,7 +343,7 @@ export default function ChatPanel({
               gridTemplateColumns: 'minmax(0, 1fr) auto',
               alignItems: 'center',
               gap: 10,
-              padding: 10,
+              padding: 8,
               border: '1px solid #e7e1d8',
               borderRadius: 8,
               background: '#fffdf8',
@@ -372,7 +365,7 @@ export default function ChatPanel({
                 background: '#6e8d67',
                 color: '#fff',
                 borderRadius: 8,
-                padding: '7px 10px',
+                padding: '6px 9px',
                 font: 'inherit',
                 fontSize: 12.5,
                 fontWeight: 700,
@@ -385,7 +378,7 @@ export default function ChatPanel({
           </div>
         )}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {[
             hasPreview ? 'analyze palette' : 'show settings',
             canGeneratePreview && !hasPreview ? 'generate preview' : 'use graphic art',
@@ -400,7 +393,7 @@ export default function ChatPanel({
                 border: '1px solid #d0d0d0',
                 background: '#f8f8f8',
                 borderRadius: 999,
-                padding: '5px 9px',
+                padding: '4px 8px',
                 font: 'inherit',
                 fontSize: 12,
                 cursor: busy ? 'default' : 'pointer',
@@ -418,8 +411,9 @@ export default function ChatPanel({
           display: 'grid',
           gap: 8,
           minHeight: 0,
+          maxHeight: 64,
           overflow: 'auto',
-          padding: 10,
+          padding: 8,
           background: '#fafafa',
         }}
       >
@@ -432,7 +426,7 @@ export default function ChatPanel({
               background: message.role === 'user' ? '#e8f0ff' : 'white',
               border: '1px solid #ddd',
               borderRadius: 10,
-              padding: '8px 10px',
+              padding: '6px 8px',
               whiteSpace: 'pre-wrap',
             }}
           >
@@ -445,32 +439,24 @@ export default function ChatPanel({
         onSubmit={handleSubmit}
         style={{
           display: 'grid',
-          gap: 8,
-          padding: 10,
+          padding: 8,
           borderTop: '1px solid #e8e8e8',
           background: 'transparent',
+          minHeight: 0,
         }}
       >
-        <button
-          type="button"
-          onClick={() => setShowAdvancedCommand((current) => !current)}
+        <label
           style={{
-            justifySelf: 'start',
-            border: 0,
-            background: 'transparent',
-            padding: 0,
-            color: '#6e8d67',
-            font: 'inherit',
+            display: 'grid',
+            gap: 5,
             fontSize: 13,
             fontWeight: 700,
-            cursor: 'pointer',
+            color: '#3f382f',
           }}
         >
-          {showAdvancedCommand ? 'Hide advanced command' : 'Advanced command'}
-        </button>
-        {showAdvancedCommand && (
+          Chat or command
           <textarea
-            rows={2}
+            rows={1}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
@@ -479,46 +465,12 @@ export default function ChatPanel({
               resize: 'none',
               border: '1px solid #d0d0d0',
               borderRadius: 10,
-              padding: '10px 12px',
+              padding: '8px 10px',
               font: 'inherit',
               lineHeight: 1.4,
             }}
           />
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={openFilePicker}
-              disabled={busy}
-              style={{
-                border: '1px solid #d0d0d0',
-                background: '#ffffff',
-                borderRadius: 8,
-                padding: '6px 10px',
-                font: 'inherit',
-                cursor: busy ? 'default' : 'pointer',
-              }}
-            >
-              Upload file
-            </button>
-            <button
-              type={showAdvancedCommand ? 'submit' : 'button'}
-              onClick={showAdvancedCommand ? undefined : onGeneratePreview}
-              disabled={busy || !canGeneratePreview}
-              style={{
-                border: '1px solid #d0d0d0',
-                background: '#f8f8f8',
-                borderRadius: 8,
-                padding: '6px 10px',
-                font: 'inherit',
-                cursor: busy || !canGeneratePreview ? 'default' : 'pointer',
-              }}
-            >
-              {showAdvancedCommand ? 'Send command' : 'Generate stitch preview'}
-            </button>
-          </div>
-        </div>
+        </label>
       </form>
       <input
         ref={fileInputRef}

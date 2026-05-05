@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { ProfileModal } from '../../components/ProfileModal'
-import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
+import { userDisplayName } from '../../components/UserAvatar'
+import { NavAccountControls } from '../../components/NavAccountControls'
 import { assetUrl, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import GuideDialog from '../../components/GuideDialog'
 
@@ -215,33 +216,16 @@ export default function GalleryPage() {
           {session ? (
             <>
               {!isMobile && (
-                <>
-                  <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
-                    Mission
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Open profile"
-                    onClick={() => setShowProfileModal(true)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
-                  >
-                    <UserAvatar user={user} />
-                  </button>
-                  <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
-                    Log out
-                  </button>
-                </>
-              )}
-              {isMobile && (
-                <button
-                  type="button"
-                  aria-label="Open profile"
-                  onClick={() => setShowProfileModal(true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
-                >
-                  <UserAvatar user={user} />
+                <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                  Mission
                 </button>
               )}
+              <NavAccountControls
+                user={user}
+                isMobile={isMobile}
+                onProfile={() => setShowProfileModal(true)}
+                onLogout={() => setShowLogoutConfirm(true)}
+              />
             </>
           ) : (
             <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
