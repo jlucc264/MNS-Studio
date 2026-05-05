@@ -13,7 +13,6 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import ChatPanel from '../../components/ChatPanel'
-import GuideDialog from '../../components/GuideDialog'
 import GridEditor, { type DesignSelectionRect } from '../../components/GridEditor'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
@@ -436,6 +435,7 @@ function StudioPage() {
   const [shapeType, setShapeType] = useState<'box' | 'semicircle' | 'line'>('box')
   const [shapeFillColor, setShapeFillColor] = useState<string | null>(null)
   const [shapeBorderColor, setShapeBorderColor] = useState<string | null>(null)
+  const [shapeBorderSize, setShapeBorderSize] = useState(1)
   const [brushDensity, setBrushDensity] = useState(1)
   const [selectedRegions, setSelectedRegions] = useState<DesignSelectionRect[]>([])
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
@@ -451,7 +451,6 @@ function StudioPage() {
   const [finishShape, setFinishShape] = useState<'circle' | 'square'>('circle')
   const [finishSizeInches, setFinishSizeInches] = useState(4)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
-  const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(1280)
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
   const [showChatDrawer, setShowChatDrawer] = useState(false)
@@ -552,11 +551,12 @@ function StudioPage() {
     setShowDraftNameModal(false)
     setShowFinalizeModal(false)
     setShowGalleryPublishModal(false)
-    if (typeof window !== 'undefined') {
-      window.location.assign(href)
-      return
-    }
     router.push(href)
+  }, [router])
+
+  useEffect(() => {
+    router.prefetch('/gallery')
+    router.prefetch('/drafts')
   }, [router])
 
   useEffect(() => {
@@ -828,7 +828,7 @@ function StudioPage() {
     setLastVisibleImageUrl(null)
     setAllPalette([])
     setPreviewPalette([])
-    setOriginalCells([])
+    setOriginalCells(blankGrid)
     setEnabledColorHexes([])
     setCells(blankGrid)
     setActivePaintColor(null)
@@ -845,7 +845,6 @@ function StudioPage() {
     setViewMode('stitch')
     setActiveWorkflowStep(2)
   }
-
 
   function buildPaletteForCells(nextCells: string[][]) {
     const usedHexes = new Set(
@@ -1072,6 +1071,29 @@ function StudioPage() {
 
     const timeoutId = window.setTimeout(() => {
       void handleApply(draftSettings)
+    }, 250)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [activeImagePath, draftSettings, hasGeneratedPreview, lastSettings])
+
+  useEffect(() => {
+    if (!hasGeneratedPreview || activeImagePath || !lastSettings) return
+
+    const newW = Math.max(1, Math.round(draftSettings.width_inches * draftSettings.mesh_count))
+    const newH = Math.max(1, Math.round(draftSettings.height_inches * draftSettings.mesh_count))
+    const lastW = Math.max(1, Math.round(lastSettings.width_inches * lastSettings.mesh_count))
+    const lastH = Math.max(1, Math.round(lastSettings.height_inches * lastSettings.mesh_count))
+    if (newW === lastW && newH === lastH) return
+
+    const timeoutId = window.setTimeout(() => {
+      const blankGrid = Array.from({ length: newH }, () => Array(newW).fill(BLANK_CELL))
+      setOriginalCells(blankGrid)
+      setCells(blankGrid)
+      setManualCellOverrides({})
+      setUndoStack([])
+      setRedoStack([])
+      setLastSettings(draftSettings)
+      setImportedAspectRatio(draftSettings.width_inches / draftSettings.height_inches)
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
@@ -1560,13 +1582,16 @@ function StudioPage() {
   }
 
   function handleResetColorChanges() {
-    if (!allPalette.length || !originalCells.length) return
+    if (!originalCells.length) return
 
+    setShapeFillColor(null)
+    setShapeBorderColor(null)
+    setShapeBorderSize(1)
     setPreviewImagePath(originalPreviewImagePath)
     setPreviewPalette(allPalette)
     setEnabledColorHexes(allPalette.map((color) => color.hex))
     setCells(cloneCells(originalCells))
-    setActivePaintColor(allPalette[0]?.hex ?? '#FFFFFF')
+    setActivePaintColor(allPalette[0]?.hex ?? null)
     setRemovalMode('fill')
     setManualCellOverrides({})
     setFinishOutlineBackups({})
@@ -2875,9 +2900,9 @@ function StudioPage() {
     <main
       style={{
         display: 'grid',
-        gridTemplateRows: 'minmax(0, 1fr) auto',
-        minHeight: '100vh',
-        height: '100vh',
+        gridTemplateRows: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) auto',
+        minHeight: '100dvh',
+        height: '100dvh',
         paddingTop: 72,
         overflow: 'hidden',
         boxSizing: 'border-box',
@@ -2887,15 +2912,13 @@ function StudioPage() {
         isolation: 'isolate',
       }}
     >
-      <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
-
       <nav
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 18,
-          padding: '14px 24px',
+          padding: isMobile ? '0 14px' : '0 28px',
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
           position: 'fixed',
@@ -2906,29 +2929,31 @@ function StudioPage() {
           boxSizing: 'border-box',
           zIndex: 10000,
           pointerEvents: 'auto',
+          overflow: 'hidden',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 14, minWidth: 0, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
           <button
             type="button"
             onClick={() => navigateAwayFromStudio('/gallery')}
-            style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flexShrink: 0, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
           >
             <div
               aria-hidden="true"
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 10px)',
+                gridTemplateColumns: 'repeat(3, 9px)',
                 gap: 3,
                 padding: 2,
+                flexShrink: 0,
               }}
             >
               {Array.from({ length: 9 }, (_, index) => (
                 <span
                   key={index}
                   style={{
-                    width: 10,
-                    height: 10,
+                    width: 9,
+                    height: 9,
                     border: '2px solid #111',
                     borderRadius: 2,
                     boxSizing: 'border-box',
@@ -2936,73 +2961,49 @@ function StudioPage() {
                 />
               ))}
             </div>
-            <strong style={{ fontSize: isMobile ? 20 : 25, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
+            <strong style={{ fontSize: 22, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
           </button>
-          <span style={{ color: '#d8d0c4' }}>|</span>
-          <div style={{ display: 'flex', gap: isMobile ? 12 : 28, color: '#7f776d', fontWeight: 600, fontSize: isMobile ? 13 : undefined, whiteSpace: 'nowrap', position: 'relative', zIndex: 2 }}>
-            <button
-              type="button"
-              onClick={() => navigateAwayFromStudio('/gallery')}
-              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
-            >
-              Gallery
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateAwayFromStudio('/drafts')}
-              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
-            >
-              Projects
-            </button>
-            {!isMobile && (
-              <span style={{ color: '#3f382f', fontWeight: 700 }}>
-                Active Canvas
-              </span>
-            )}
-          </div>
+          {!isMobile && (
+            <>
+              <span style={{ color: '#d8d0c4' }}>|</span>
+              <div style={{ display: 'flex', gap: 28, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap', position: 'relative', zIndex: 2 }}>
+                <button
+                  type="button"
+                  onClick={() => navigateAwayFromStudio('/gallery')}
+                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Gallery
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateAwayFromStudio('/drafts')}
+                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Projects
+                </button>
+                <span style={{ color: '#3f382f', fontWeight: 700 }}>Active Canvas</span>
+              </div>
+            </>
+          )}
         </div>
 
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: isMobile ? 8 : 14, alignItems: 'center', flexShrink: 0 }}>
           {session ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <UserAvatar user={user} />
-              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
-                {userDisplayName(user)}
+              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer' }}>
+                <UserAvatar user={user} />
               </button>
-              <button type="button" onClick={() => setShowLogoutConfirm(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
-                Log out
-              </button>
+              {!isMobile && (
+                <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
+                  Log out
+                </button>
+              )}
             </div>
           ) : (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
               Log in
             </button>
           )}
-          <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d' }}>
-            Mission
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!session?.access_token) {
-                setAuthPrompt('save')
-                return
-              }
-              if (activeDraftProjectId) {
-                void handleSaveDraft()
-                return
-              }
-              setShowDraftNameModal(true)
-            }}
-            disabled={!activeImagePath || saveStatus === 'saving'}
-            style={{
-              ...btnSecondary,
-              opacity: !activeImagePath ? 0.5 : 1,
-              minWidth: 90,
-            }}
-          >
-            {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Draft limit reached' : saveStatus === 'error' ? 'Error' : 'Save Draft'}
-          </button>
         </div>
       </nav>
 
@@ -3018,6 +3019,7 @@ function StudioPage() {
                 : activeWorkflowStep === 2
                   ? 'minmax(280px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
                   : 'minmax(300px, 380px) minmax(0, 1fr)',
+          gridTemplateRows: isMobile ? 'auto minmax(0, 1fr)' : undefined,
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
@@ -3028,11 +3030,13 @@ function StudioPage() {
           <aside
           style={{
             display: 'grid',
-            gridTemplateRows: 'auto minmax(0, 1fr)',
-            borderRight: '1px solid #e0d9cf',
+            gridTemplateRows: 'auto minmax(0, 1fr) auto',
+            borderRight: isMobile ? 'none' : '1px solid #e0d9cf',
+            borderBottom: isMobile ? '1px solid #e0d9cf' : 'none',
             background: '#fffdf8',
             minWidth: 0,
             minHeight: 0,
+            maxHeight: isMobile ? '44vh' : undefined,
             position: 'relative',
             zIndex: 30,
             pointerEvents: 'auto',
@@ -3050,7 +3054,7 @@ function StudioPage() {
                   disabled={locked}
                   style={{
                     display: 'grid',
-                    gap: 8,
+                    gap: isMobile ? 4 : 8,
                     justifyItems: 'center',
                     border: 0,
                     background: 'transparent',
@@ -3059,18 +3063,20 @@ function StudioPage() {
                     fontSize: 12,
                     cursor: locked ? 'default' : 'pointer',
                     opacity: locked ? 0.45 : 1,
+                    padding: isMobile ? '8px 4px' : undefined,
                   }}
                 >
                   <span
                     style={{
-                      width: 34,
-                      height: 34,
+                      width: isMobile ? 26 : 34,
+                      height: isMobile ? 26 : 34,
                       borderRadius: '50%',
                       display: 'grid',
                       placeItems: 'center',
                       background: step.complete ? '#dfe8dd' : active ? '#6e8d67' : '#ede9e2',
                       color: step.complete ? '#6e8d67' : active ? '#fff' : '#8a8177',
                       fontWeight: 800,
+                      fontSize: isMobile ? 11 : undefined,
                     }}
                   >
                     {step.complete ? '✓' : step.id}
@@ -3084,14 +3090,39 @@ function StudioPage() {
           <div
             style={{
               display: 'grid',
-              gap: 22,
+              gap: isMobile ? 14 : 22,
               alignContent: 'start',
-              padding: 24,
+              padding: isMobile ? 14 : 24,
               minHeight: 0,
               overflow: 'auto',
             }}
           >
             {leftPanelContent}
+          </div>
+          <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', borderTop: '1px solid #eee8df' }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (!session?.access_token) {
+                  setAuthPrompt('save')
+                  return
+                }
+                if (activeDraftProjectId) {
+                  void handleSaveDraft()
+                  return
+                }
+                setShowDraftNameModal(true)
+              }}
+              disabled={!activeImagePath || saveStatus === 'saving'}
+              style={{
+                ...btnSecondary,
+                width: '100%',
+                opacity: !activeImagePath ? 0.5 : 1,
+                fontSize: isMobile ? 12 : undefined,
+              }}
+            >
+              {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Limit reached' : saveStatus === 'error' ? 'Error saving' : 'Save Draft'}
+            </button>
           </div>
         </aside>
         )}
@@ -3142,6 +3173,7 @@ function StudioPage() {
                   shapeType={shapeType}
                   shapeFillColor={shapeFillColor}
                   shapeBorderColor={shapeBorderColor}
+                  shapeBorderSize={shapeBorderSize}
                   onSelectionChange={(selection) => setSelectedRegions(selection ?? [])}
                   onPaintStart={pushUndoSnapshot}
                   onPaintCells={handlePaintCells}
@@ -3192,7 +3224,7 @@ function StudioPage() {
               <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>
                 Redo
               </button>
-              <button type="button" onClick={handleResetColorChanges} disabled={!previewImagePath} style={btnSecondary}>
+              <button type="button" onClick={handleResetColorChanges} disabled={!originalCells.length} style={btnSecondary}>
                 Reset
               </button>
             </div>
@@ -3231,6 +3263,8 @@ function StudioPage() {
               onShapeFillColorChange={setShapeFillColor}
               shapeBorderColor={shapeBorderColor}
               onShapeBorderColorChange={setShapeBorderColor}
+              shapeBorderSize={shapeBorderSize}
+              onShapeBorderSizeChange={setShapeBorderSize}
               brushDensity={brushDensity}
               onBrushDensityChange={setBrushDensity}
               hasSelectedRegion={selectedRegions.length > 0}
@@ -3255,11 +3289,11 @@ function StudioPage() {
         )}
       </div>
 
-      <section
+      {!isMobile && <section
         style={{
           borderTop: '1px solid #e0d9cf',
           background: '#fffdf8',
-          height: showChatDrawer ? (isMobile ? 430 : 440) : 64,
+          height: showChatDrawer ? 440 : 64,
           display: 'grid',
           gridTemplateRows: '64px minmax(0, 1fr)',
           minHeight: 0,
@@ -3298,7 +3332,7 @@ function StudioPage() {
             {chatPanel}
           </div>
         )}
-      </section>
+      </section>}
 
       {authPrompt && (
         <div

@@ -16,6 +16,7 @@ type Props = {
   shapeType?: 'box' | 'semicircle' | 'line'
   shapeFillColor?: string | null
   shapeBorderColor?: string | null
+  shapeBorderSize?: number
   onApplyShapeCells?: (cells: ShapeCell[]) => void
 }
 
@@ -39,7 +40,8 @@ export type DesignSelectionRect = {
 function getBoxCells(
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
-  totalRows: number, totalCols: number
+  totalRows: number, totalCols: number,
+  borderSize = 1
 ): Array<{ row: number; col: number; color: string }> {
   const top = Math.max(0, Math.min(r1, r2))
   const bottom = Math.min(totalRows - 1, Math.max(r1, r2))
@@ -48,7 +50,7 @@ function getBoxCells(
   const result: Array<{ row: number; col: number; color: string }> = []
   for (let row = top; row <= bottom; row++) {
     for (let col = left; col <= right; col++) {
-      const isBorder = row === top || row === bottom || col === left || col === right
+      const isBorder = row < top + borderSize || row > bottom - borderSize || col < left + borderSize || col > right - borderSize
       if (isBorder) {
         if (borderColor) result.push({ row, col, color: borderColor })
       } else {
@@ -62,23 +64,38 @@ function getBoxCells(
 function getLineCells(
   r1: number, c1: number, r2: number, c2: number,
   borderColor: string | null, fillColor: string | null,
-  totalRows: number, totalCols: number
+  totalRows: number, totalCols: number,
+  borderSize = 1
 ): Array<{ row: number; col: number; color: string }> {
   const color = borderColor ?? fillColor
   if (!color) return []
-  const result: Array<{ row: number; col: number; color: string }> = []
+  const spine: Array<{ row: number; col: number }> = []
   let row = r1, col = c1
   const dr = Math.abs(r2 - r1), dc = Math.abs(c2 - c1)
   const sr = r1 < r2 ? 1 : -1, sc = c1 < c2 ? 1 : -1
   let err = dr - dc
   for (;;) {
-    if (row >= 0 && row < totalRows && col >= 0 && col < totalCols) {
-      result.push({ row, col, color })
-    }
+    spine.push({ row, col })
     if (row === r2 && col === c2) break
     const e2 = 2 * err
     if (e2 > -dc) { err -= dc; row += sr }
     if (e2 < dr) { err += dr; col += sc }
+  }
+  const half = Math.floor((borderSize - 1) / 2)
+  const ext = borderSize - 1 - half
+  const seen = new Set<string>()
+  const result: Array<{ row: number; col: number; color: string }> = []
+  for (const cell of spine) {
+    for (let dr2 = -half; dr2 <= ext; dr2++) {
+      for (let dc2 = -half; dc2 <= ext; dc2++) {
+        const nr = cell.row + dr2, nc = cell.col + dc2
+        const key = `${nr},${nc}`
+        if (!seen.has(key) && nr >= 0 && nr < totalRows && nc >= 0 && nc < totalCols) {
+          seen.add(key)
+          result.push({ row: nr, col: nc, color })
+        }
+      }
+    }
   }
   return result
 }
@@ -86,7 +103,8 @@ function getLineCells(
 function getSemicircleCells(
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
-  totalRows: number, totalCols: number
+  totalRows: number, totalCols: number,
+  borderSize = 1
 ): Array<{ row: number; col: number; color: string }> {
   const topRow = Math.min(r1, r2)
   const botRow = Math.max(r1, r2)
@@ -113,10 +131,13 @@ function getSemicircleCells(
   for (let row = Math.max(0, topRow); row <= Math.min(totalRows - 1, botRow); row++) {
     for (let col = Math.max(0, leftCol); col <= Math.min(totalCols - 1, rightCol); col++) {
       if (!isInsideSemicircle(row, col)) continue
-      const neighbors = [
-        [row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]
-      ]
-      const isBorder = row === cy || neighbors.some(([nr, nc]) => !isInsideSemicircle(nr, nc))
+      let isBorder = false
+      outer: for (let dr = -borderSize; dr <= borderSize; dr++) {
+        for (let dc = -(borderSize - Math.abs(dr)); dc <= borderSize - Math.abs(dr); dc++) {
+          if (dr === 0 && dc === 0) continue
+          if (!isInsideSemicircle(row + dr, col + dc)) { isBorder = true; break outer }
+        }
+      }
       if (isBorder) {
         if (borderColor) result.push({ row, col, color: borderColor })
       } else {
@@ -131,15 +152,16 @@ function computeShapeCells(
   shapeType: 'box' | 'semicircle' | 'line',
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
-  totalRows: number, totalCols: number
+  totalRows: number, totalCols: number,
+  borderSize = 1
 ): Array<{ row: number; col: number; color: string }> {
   const cr1 = Math.max(0, Math.min(totalRows - 1, r1))
   const cc1 = Math.max(0, Math.min(totalCols - 1, c1))
   const cr2 = Math.max(0, Math.min(totalRows - 1, r2))
   const cc2 = Math.max(0, Math.min(totalCols - 1, c2))
-  if (shapeType === 'box') return getBoxCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols)
-  if (shapeType === 'line') return getLineCells(cr1, cc1, cr2, cc2, borderColor, fillColor, totalRows, totalCols)
-  return getSemicircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols)
+  if (shapeType === 'box') return getBoxCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize)
+  if (shapeType === 'line') return getLineCells(cr1, cc1, cr2, cc2, borderColor, fillColor, totalRows, totalCols, borderSize)
+  return getSemicircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize)
 }
 
 // ── End shape helpers ────────────────────────────────────────────────────────
@@ -358,6 +380,7 @@ export default function GridEditor({
   shapeType,
   shapeFillColor,
   shapeBorderColor,
+  shapeBorderSize = 1,
   onApplyShapeCells,
 }: Props) {
   if (!cells.length) return null
@@ -493,7 +516,8 @@ export default function GridEditor({
             shapeEndCell.row, shapeEndCell.col,
             shapeFillColor ?? null,
             shapeBorderColor ?? null,
-            cells.length, cells[0]?.length ?? 0
+            cells.length, cells[0]?.length ?? 0,
+            shapeBorderSize
           )
           if (shapeCells.length) onApplyShapeCells(shapeCells)
         }
@@ -1184,7 +1208,8 @@ export default function GridEditor({
         shapeEndCell.row, shapeEndCell.col,
         shapeFillColor ?? null,
         shapeBorderColor ?? null,
-        rows, cols
+        rows, cols,
+        shapeBorderSize
       )
       for (const cell of previewCells) {
         const stageRow = cell.row + contentOriginRow + borderStitches

@@ -2,11 +2,12 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { assetUrl, deleteProject, listProjects, type Project } from '../../lib/api'
 import { ProfileModal } from '../../components/ProfileModal'
-import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
+import { UserAvatar } from '../../components/UserAvatar'
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -44,6 +45,7 @@ function formatDimensions(p: Project) {
 }
 
 export default function DraftsPage() {
+  const router = useRouter()
   const { loading: authLoading, session, user, signOut } = useAuth()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -67,6 +69,11 @@ export default function DraftsPage() {
       .catch(() => setError('Could not load projects. Make sure the backend is running.'))
       .finally(() => setLoading(false))
   }, [authLoading, session?.access_token])
+
+  useEffect(() => {
+    router.prefetch('/gallery')
+    router.prefetch('/studio')
+  }, [router])
 
   async function handleDelete(id: string) {
     if (!session?.access_token) return
@@ -102,12 +109,17 @@ export default function DraftsPage() {
       {/* Nav */}
       <nav
         style={{
+          height: 72,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '14px 32px',
+          padding: '0 28px',
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
+          boxSizing: 'border-box',
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -144,12 +156,14 @@ export default function DraftsPage() {
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {session && (
-            <>
+            <button
+              type="button"
+              aria-label="Open profile"
+              onClick={() => setShowProfileModal(true)}
+              style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer' }}
+            >
               <UserAvatar user={user} />
-              <button type="button" onClick={() => setShowProfileModal(true)} style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, color: '#8a8177', cursor: 'pointer' }}>
-                {userDisplayName(user)}
-              </button>
-            </>
+            </button>
           )}
           {session && (
             <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>

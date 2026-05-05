@@ -28,8 +28,12 @@ export function UserAvatar({ user, size = 38 }: { user?: User | null; size?: num
         border: '1px solid #d8d0c4',
         background: '#f0ece5',
         color: '#3f382f',
+        fontFamily: 'Georgia, "Times New Roman", serif',
         fontSize: Math.max(11, Math.round(size * 0.34)),
-        fontWeight: 800,
+        fontWeight: 700,
+        letterSpacing: 0,
+        lineHeight: 1,
+        textTransform: 'uppercase',
         flex: '0 0 auto',
       }}
     >

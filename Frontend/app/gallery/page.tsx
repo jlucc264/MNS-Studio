@@ -1,12 +1,16 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { ProfileModal } from '../../components/ProfileModal'
 import { UserAvatar, userDisplayName } from '../../components/UserAvatar'
 import { assetUrl, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import GuideDialog from '../../components/GuideDialog'
+
+const MOBILE_BREAKPOINT = 768
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -53,7 +57,67 @@ function submitterLabel(item: GalleryItem, user: ReturnType<typeof useAuth>['use
   return 'MNS stitcher'
 }
 
+function submitterInitials(name: string) {
+  const parts = name.split(/[._\-\s]+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function designSpecs(item: GalleryItem) {
+  return [
+    item.width_inches && item.height_inches
+      ? `${item.width_inches.toFixed(1)}" x ${item.height_inches.toFixed(1)}"`
+      : null,
+    item.mesh_count ? `${item.mesh_count} mesh` : null,
+    item.color_count ? `${item.color_count} colors` : null,
+  ].filter(Boolean)
+}
+
+function GalleryImage({
+  src,
+  alt,
+  style,
+  placeholderText = 'Preview unavailable',
+}: {
+  src: string | null
+  alt: string
+  style: CSSProperties
+  placeholderText?: string
+}) {
+  const [failed, setFailed] = useState(false)
+
+  if (!src || failed) {
+    return (
+      <span
+        style={{
+          ...style,
+          display: 'grid',
+          placeItems: 'center',
+          color: '#8a8177',
+          fontSize: 12,
+          textAlign: 'center',
+          padding: 12,
+          boxSizing: 'border-box',
+        }}
+      >
+        {placeholderText}
+      </span>
+    )
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      style={style}
+    />
+  )
+}
+
 export default function GalleryPage() {
+  const router = useRouter()
   const { session, user, signOut } = useAuth()
   const [items, setItems] = useState<GalleryItem[]>([])
   const [search, setSearch] = useState('')
@@ -63,7 +127,21 @@ export default function GalleryPage() {
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
+  const [viewportWidth, setViewportWidth] = useState(1200)
+
+  useEffect(() => {
+    const update = () => setViewportWidth(window.innerWidth)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  useEffect(() => {
+    router.prefetch('/drafts')
+    router.prefetch('/studio')
+  }, [router])
 
   useEffect(() => {
     setLoading(true)
@@ -73,6 +151,8 @@ export default function GalleryPage() {
       .catch(() => setError('Could not load the gallery.'))
       .finally(() => setLoading(false))
   }, [search, sort, session?.access_token])
+
+  const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
   const itemCountLabel = useMemo(() => {
     if (loading) return 'Loading...'
@@ -87,27 +167,32 @@ export default function GalleryPage() {
     try {
       const updated = await toggleGalleryLike(item.id, session.access_token)
       setItems((current) => current.map((entry) => (entry.id === item.id ? updated : entry)))
+      if (selectedPreview?.id === item.id) setSelectedPreview(updated)
     } catch {
       setError('Could not update like.')
     }
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f1ea', color: '#3f382f' }}>
+    <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>
       <nav
         style={{
           height: 72,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '14px 32px',
+          padding: isMobile ? '0 14px' : '0 28px',
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
           boxSizing: 'border-box',
+          overflow: 'hidden',
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0 }}>
+          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
             <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
               {Array.from({ length: 9 }, (_, i) => (
                 <span key={i} style={{ width: 9, height: 9, border: '2px solid #111', borderRadius: 2, boxSizing: 'border-box' }} />
@@ -115,49 +200,65 @@ export default function GalleryPage() {
             </div>
             <strong style={{ fontSize: 22, color: '#111' }}>MNS Studio</strong>
           </Link>
-          <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-          <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
-            <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Projects</Link>
-            <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
-          </div>
+          {!isMobile && (
+            <>
+              <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
+              <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
+                <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Projects</Link>
+                <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
+              </div>
+            </>
+          )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, flexShrink: 0 }}>
           {session ? (
             <>
-              <button
-                type="button"
-                onClick={() => setShowProfileModal(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
-              >
-                <UserAvatar user={user} />
-                <span style={{ color: '#7f776d', fontSize: 13, fontWeight: 600 }}>
-                {userDisplayName(user)}
-                </span>
-              </button>
-              <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
-                Log out
-              </button>
+              {!isMobile && (
+                <>
+                  <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                    Mission
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Open profile"
+                    onClick={() => setShowProfileModal(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
+                  >
+                    <UserAvatar user={user} />
+                  </button>
+                  <button type="button" onClick={() => setShowLogoutConfirm(true)} style={btnSecondary}>
+                    Log out
+                  </button>
+                </>
+              )}
+              {isMobile && (
+                <button
+                  type="button"
+                  aria-label="Open profile"
+                  onClick={() => setShowProfileModal(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit' }}
+                >
+                  <UserAvatar user={user} />
+                </button>
+              )}
             </>
           ) : (
-            <button type="button" onClick={() => setShowAuthPrompt(true)} style={btnSecondary}>Log in</button>
+            <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
+              Log in
+            </button>
           )}
         </div>
       </nav>
 
-      <main style={{ maxWidth: 1180, margin: '0 auto', padding: '30px 24px 52px', display: 'grid', gap: 22 }}>
-        <section style={{ display: 'grid', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'end', flexWrap: 'wrap' }}>
-            <div style={{ display: 'grid', gap: 6 }}>
-              <h1 style={{ margin: 0, fontSize: 32 }}>Gallery</h1>
-              <p style={{ margin: 0, color: '#7f776d', fontSize: 15 }}>
-                Browse finalized stitch designs shared by the MNS Studio community.
-              </p>
-            </div>
-            <span style={{ fontSize: 13, color: '#8a8177' }}>{itemCountLabel}</span>
+      <main style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '16px 0 40px' : '30px 24px 52px', display: 'grid', gap: isMobile ? 14 : 22 }}>
+        <section style={{ display: 'grid', gap: 10, padding: isMobile ? '0 12px' : 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <h1 style={{ margin: 0, fontSize: isMobile ? 22 : 32 }}>Gallery</h1>
+            <span style={{ fontSize: 12, color: '#8a8177' }}>{itemCountLabel}</span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) 150px', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -165,8 +266,9 @@ export default function GalleryPage() {
               style={{
                 border: '1px solid #d7d0c8',
                 borderRadius: 8,
-                padding: '10px 12px',
+                padding: '9px 12px',
                 font: 'inherit',
+                fontSize: isMobile ? 14 : undefined,
                 background: '#fffdf8',
                 color: '#3f382f',
               }}
@@ -177,10 +279,12 @@ export default function GalleryPage() {
               style={{
                 border: '1px solid #d7d0c8',
                 borderRadius: 8,
-                padding: '10px 12px',
+                padding: '9px 10px',
                 font: 'inherit',
+                fontSize: isMobile ? 13 : undefined,
                 background: '#fffdf8',
                 color: '#3f382f',
+                minWidth: isMobile ? 'unset' : 150,
               }}
             >
               <option value="recent">Newest</option>
@@ -189,14 +293,75 @@ export default function GalleryPage() {
           </div>
         </section>
 
-        {error && <p style={{ margin: 0, color: '#b0453a' }}>{error}</p>}
+        {error && <p style={{ margin: 0, color: '#b0453a', padding: isMobile ? '0 12px' : 0 }}>{error}</p>}
 
         {loading ? (
-          <p style={{ margin: 0, color: '#8a8177' }}>Loading gallery...</p>
+          <p style={{ margin: 0, color: '#8a8177', padding: isMobile ? '0 12px' : 0 }}>Loading gallery...</p>
         ) : items.length === 0 ? (
-          <div style={{ border: '1px solid #e7e1d8', borderRadius: 12, background: '#fffdf8', padding: 24 }}>
+          <div style={{ border: '1px solid #e7e1d8', borderRadius: 12, background: '#fffdf8', padding: 24, margin: isMobile ? '0 12px' : 0 }}>
             No shared designs yet.
           </div>
+        ) : isMobile ? (
+          <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 2 }}>
+            {items.map((item) => (
+              <article key={item.id} style={{ display: 'grid', gridTemplateRows: 'auto auto', background: '#fff' }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPreview(item)}
+                  aria-label={`Open ${item.title}`}
+                  style={{
+                    border: 0,
+                    padding: 0,
+                    background: '#ede8df',
+                    cursor: 'pointer',
+                    aspectRatio: '1',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    display: 'block',
+                    width: '100%',
+                  }}
+                >
+                  <GalleryImage
+                    src={resolveMaybeAssetUrl(item.preview_image_url)}
+                    alt={item.title}
+                    placeholderText="No preview"
+                    style={{
+                      position: 'absolute',
+                      inset: 6,
+                      width: 'calc(100% - 12px)',
+                      height: 'calc(100% - 12px)',
+                      objectFit: 'contain',
+                      objectPosition: 'center center',
+                    }}
+                  />
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: 6,
+                      right: 6,
+                      background: 'rgba(0,0,0,0.48)',
+                      color: '#fff',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      padding: '2px 7px',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    ♥ {item.like_count}
+                  </span>
+                </button>
+                <div style={{ padding: '6px 8px 8px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#3f382f' }}>
+                    {item.title}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#8a8177', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {submitterLabel(item, user)}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
         ) : (
           <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16 }}>
             {items.map((item) => (
@@ -243,9 +408,8 @@ export default function GalleryPage() {
                         overflow: 'hidden',
                       }}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={resolveMaybeAssetUrl(item.preview_image_url) ?? ''}
+                      <GalleryImage
+                        src={resolveMaybeAssetUrl(item.preview_image_url)}
                         alt={item.title}
                         style={{
                           display: 'block',
@@ -269,9 +433,7 @@ export default function GalleryPage() {
                       By {submitterLabel(item, user)} · {formatDate(item.created_at)}
                     </span>
                     <span style={{ fontSize: 12, color: '#8a8177' }}>
-                      {[item.width_inches && item.height_inches ? `${item.width_inches.toFixed(1)}" x ${item.height_inches.toFixed(1)}"` : null, item.mesh_count ? `${item.mesh_count} mesh` : null, item.color_count ? `${item.color_count} colors` : null]
-                        .filter(Boolean)
-                        .join(' · ') || 'Finalized stitch design'}
+                      {designSpecs(item).join(' · ') || 'Finalized stitch design'}
                     </span>
                   </div>
                   {item.tags.length > 0 && (
@@ -308,6 +470,7 @@ export default function GalleryPage() {
           </div>
         </div>
       )}
+
       {selectedPreview && (
         <div
           role="dialog"
@@ -320,24 +483,36 @@ export default function GalleryPage() {
             display: 'grid',
             placeItems: 'center',
             zIndex: 90,
-            padding: 24,
+            padding: isMobile ? 0 : 24,
           }}
         >
           <div
             onClick={(event) => event.stopPropagation()}
             style={{
-              width: 'min(980px, 100%)',
-              maxHeight: '92vh',
+              width: isMobile ? '100%' : 'min(1120px, 100%)',
+              height: isMobile ? '100%' : 'min(86vh, 780px)',
+              maxHeight: isMobile ? '100%' : '92vh',
               display: 'grid',
-              gap: 12,
+              gridTemplateRows: isMobile ? '60px minmax(0, 1fr) auto' : 'auto minmax(0, 1fr)',
+              gap: isMobile ? 0 : 12,
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', color: '#fff' }}>
-              <div style={{ display: 'grid', gap: 2 }}>
-                <strong style={{ fontSize: 18 }}>{selectedPreview.title}</strong>
-                <span style={{ fontSize: 13, color: '#eee2d4' }}>
-                  By {submitterLabel(selectedPreview, user)} · {formatDate(selectedPreview.created_at)}
-                </span>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              color: '#fff',
+              padding: isMobile ? '0 16px' : 0,
+              borderBottom: isMobile ? '1px solid rgba(255,255,255,0.12)' : 'none',
+            }}>
+              <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                <strong style={{ fontSize: isMobile ? 15 : 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedPreview.title}</strong>
+                {!isMobile && (
+                  <span style={{ fontSize: 13, color: '#eee2d4' }}>
+                    By {submitterLabel(selectedPreview, user)} · {formatDate(selectedPreview.created_at)}
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -347,6 +522,7 @@ export default function GalleryPage() {
                   borderColor: 'rgba(255,255,255,0.55)',
                   background: 'rgba(255,255,255,0.12)',
                   color: '#fff',
+                  flexShrink: 0,
                 }}
               >
                 Close
@@ -354,38 +530,193 @@ export default function GalleryPage() {
             </div>
             <div
               style={{
-                minHeight: 280,
-                height: 'min(76vh, 780px)',
+                minHeight: 0,
                 display: 'grid',
-                placeItems: 'center',
-                background: '#f8f4ec',
-                borderRadius: 10,
+                gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 320px',
+                background: isMobile ? '#1a1714' : '#f8f4ec',
+                borderRadius: isMobile ? 0 : 10,
                 overflow: 'hidden',
-                padding: 16,
                 boxSizing: 'border-box',
-                position: 'relative',
+                height: '100%',
               }}
             >
-              {resolveMaybeAssetUrl(selectedPreview.preview_image_url) && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={resolveMaybeAssetUrl(selectedPreview.preview_image_url) ?? ''}
+              <div
+                style={{
+                  minHeight: 0,
+                  display: 'grid',
+                  placeItems: 'center',
+                  padding: isMobile ? 12 : 20,
+                  boxSizing: 'border-box',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  minWidth: 0,
+                  height: '100%',
+                }}
+              >
+                <GalleryImage
+                  src={resolveMaybeAssetUrl(selectedPreview.preview_image_url)}
                   alt={selectedPreview.title}
                   style={{
                     display: 'block',
                     position: 'absolute',
-                    inset: 16,
-                    width: 'calc(100% - 32px)',
-                    height: 'calc(100% - 32px)',
+                    inset: isMobile ? 12 : 20,
+                    width: isMobile ? 'calc(100% - 24px)' : 'calc(100% - 40px)',
+                    height: isMobile ? 'calc(100% - 24px)' : 'calc(100% - 40px)',
                     objectFit: 'contain',
                     objectPosition: 'center center',
                   }}
                 />
+              </div>
+              {!isMobile && (
+                <aside
+                  style={{
+                    borderLeft: '1px solid #e7e1d8',
+                    background: '#fffdf8',
+                    padding: 20,
+                    display: 'grid',
+                    gridTemplateRows: 'auto auto 1fr auto',
+                    gap: 18,
+                    minHeight: 0,
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: '50%',
+                        display: 'grid',
+                        placeItems: 'center',
+                        border: '1px solid #d8d0c4',
+                        background: '#f0ece5',
+                        color: '#3f382f',
+                        fontFamily: 'Georgia, "Times New Roman", serif',
+                        fontSize: 15,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      }}
+                    >
+                      {submitterInitials(submitterLabel(selectedPreview, user))}
+                    </div>
+                    <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                      <span style={{ fontSize: 11, color: '#8a8177', fontWeight: 700, textTransform: 'uppercase' }}>
+                        Maker
+                      </span>
+                      <strong style={{ fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {submitterLabel(selectedPreview, user)}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    <h2 style={{ margin: 0, fontSize: 22, lineHeight: 1.15 }}>{selectedPreview.title}</h2>
+                    <span style={{ fontSize: 13, color: '#8a8177' }}>
+                      Shared {formatDate(selectedPreview.created_at)}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', alignContent: 'start', gap: 14, minHeight: 0 }}>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <span style={{ fontSize: 12, color: '#8a8177', fontWeight: 700 }}>Design details</span>
+                      <div style={{ display: 'grid', gap: 6, fontSize: 13, color: '#5f574f' }}>
+                        {(designSpecs(selectedPreview).length ? designSpecs(selectedPreview) : ['Finalized stitch design']).map((spec) => (
+                          <span key={spec}>{spec}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {selectedPreview.tags.length > 0 && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {selectedPreview.tags.map((tag) => (
+                          <span key={tag} style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: '#6f675f' }}>
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    <button type="button" onClick={() => void handleLike(selectedPreview)} style={btnPrimary}>
+                      {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
+                    </button>
+                    <a href={resolveMaybeAssetUrl(selectedPreview.pdf_url) ?? '#'} target="_blank" rel="noreferrer" style={{ ...btnSecondary, textDecoration: 'none', textAlign: 'center' }}>
+                      View Report
+                    </a>
+                    <button
+                      type="button"
+                      disabled
+                      style={{
+                        ...btnSecondary,
+                        color: '#8a8177',
+                        background: '#f4efe7',
+                        cursor: 'not-allowed',
+                      }}
+                    >
+                      Purchase Options Soon
+                    </button>
+                  </div>
+                </aside>
               )}
             </div>
+            {isMobile && (
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '12px 16px',
+                borderTop: '1px solid rgba(255,255,255,0.12)',
+                gap: 10,
+              }}>
+                <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 12, color: '#fff', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {submitterLabel(selectedPreview, user)}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#b0a898' }}>
+                    {designSpecs(selectedPreview).join(' · ') || formatDate(selectedPreview.created_at)}
+                  </span>
+                  {selectedPreview.tags.length > 0 && (
+                    <span style={{ fontSize: 11, color: '#8a8177', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {selectedPreview.tags.map(t => `#${t}`).join(' ')}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => void handleLike(selectedPreview)}
+                    style={{
+                      ...btnSecondary,
+                      borderColor: selectedPreview.liked_by_me ? '#6e8d67' : 'rgba(255,255,255,0.3)',
+                      background: selectedPreview.liked_by_me ? '#dfe8dd' : 'rgba(255,255,255,0.1)',
+                      color: selectedPreview.liked_by_me ? '#3f6b38' : '#fff',
+                    }}
+                  >
+                    {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
+                  </button>
+                  <a
+                    href={resolveMaybeAssetUrl(selectedPreview.pdf_url) ?? '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      ...btnSecondary,
+                      borderColor: 'rgba(255,255,255,0.3)',
+                      background: 'rgba(255,255,255,0.1)',
+                      color: '#fff',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    Report
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
+
       {showLogoutConfirm && (
         <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 41, padding: 18 }}>
           <div onClick={(event) => event.stopPropagation()} style={{ background: 'white', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
@@ -403,6 +734,7 @@ export default function GalleryPage() {
         </div>
       )}
       {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
+      <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
     </div>
   )
 }

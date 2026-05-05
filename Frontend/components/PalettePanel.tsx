@@ -1,6 +1,6 @@
 'use client'
 
-import { ChangeEvent, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 type PaletteColor = {
   hex: string
@@ -32,6 +32,8 @@ type Props = {
   onShapeFillColorChange: (color: string | null) => void
   shapeBorderColor: string | null
   onShapeBorderColorChange: (color: string | null) => void
+  shapeBorderSize: number
+  onShapeBorderSizeChange: (size: number) => void
 }
 
 const SPECIAL_COLORS: PaletteColor[] = [
@@ -79,8 +81,12 @@ export default function PalettePanel({
   onShapeFillColorChange,
   shapeBorderColor,
   onShapeBorderColorChange,
+  shapeBorderSize,
+  onShapeBorderSizeChange,
 }: Props) {
   const [showOtherColors, setShowOtherColors] = useState(false)
+  const [showFillMoreColors, setShowFillMoreColors] = useState(false)
+  const [showBorderMoreColors, setShowBorderMoreColors] = useState(false)
   const [showSelectionOtherColors, setShowSelectionOtherColors] = useState(false)
 
   const allOtherColors = useMemo(() => {
@@ -281,94 +287,9 @@ export default function PalettePanel({
           {/* Paint sub-tab: color grid */}
           {toolMode === 'paint' && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {/* Header row */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, color: '#8a8177' }}>{colors.length} colors</span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                {allOtherColors.length > 0 && (
-                  <select
-                    value={showOtherColors ? 'other' : ''}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setShowOtherColors(e.target.value === 'other')}
-                    style={{
-                      padding: '3px 6px',
-                      borderRadius: 6,
-                      border: '1px solid #d0c9bf',
-                      background: '#fff',
-                      fontFamily: 'inherit',
-                      fontSize: 11,
-                      maxWidth: '100%',
-                      minWidth: 0,
-                    }}
-                  >
-                    <option value="">+ Add color</option>
-                    <option value="other">All DMC colors</option>
-                  </select>
-                )}
-              </div>
-            </div>
-
-            {/* Other DMC colors expanded */}
-            {showOtherColors && allOtherColors.length > 0 && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-                  gap: 5,
-                  maxHeight: 140,
-                  overflow: 'auto',
-                  padding: '6px',
-                  border: '1px solid #e4ddd5',
-                  borderRadius: 8,
-                  background: '#faf7f3',
-                  flexShrink: 0,
-                }}
-              >
-                {allOtherColors.map((color) => (
-                  <button
-                    key={`other-${color.hex}`}
-                    type="button"
-                    onClick={() => onSelect(color)}
-                    title={`${color.dmc_code} – ${color.dmc_name}`}
-                    style={{
-                      display: 'grid',
-                      justifyItems: 'center',
-                      gap: 3,
-                      padding: 4,
-                      border: activeColor === color.hex ? '2px solid #3f382f' : '1px solid #ccc',
-                      borderRadius: 6,
-                      background: 'white',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: 18,
-                        height: 18,
-                        borderRadius: 3,
-                        background: color.hex,
-                        border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none',
-                      }}
-                    />
-                    <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Color swatches */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                gap: 5,
-                alignContent: 'start',
-                overflow: 'auto',
-                paddingRight: 2,
-              }}
-            >
-              {/* Eraser first */}
+            {/* Eraser + Add color fixed row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 5, flexShrink: 0 }}>
+              {/* Eraser */}
               <div
                 style={{
                   display: 'grid',
@@ -410,10 +331,106 @@ export default function PalettePanel({
                     />
                   </button>
                 </div>
-                <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>
-                  Eraser
-                </div>
+                <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>Eraser</div>
               </div>
+
+              {/* Add color */}
+              {allOtherColors.length > 0 && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    border: showOtherColors ? '2px solid #3f382f' : '1px solid #d5cec6',
+                    background: showOtherColors ? '#f5f3ef' : 'white',
+                    borderRadius: 8,
+                    padding: '5px 6px',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setShowOtherColors((c) => !c)}
+                >
+                  <div
+                    style={{
+                      flex: 1,
+                      height: 26,
+                      border: showOtherColors ? '2px solid #111' : '1px solid #ccc',
+                      borderRadius: 5,
+                      background: showOtherColors ? '#3f382f' : '#fffdf8',
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: showOtherColors ? '#fff' : '#5f574e',
+                      fontSize: 18,
+                      lineHeight: 1,
+                      fontWeight: 300,
+                    }}
+                  >
+                    +
+                  </div>
+                  <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>Add color</div>
+                </div>
+              )}
+            </div>
+
+            {/* DMC picker — expanded inline below the top row */}
+            {showOtherColors && allOtherColors.length > 0 && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                  gap: 5,
+                  maxHeight: 140,
+                  overflow: 'auto',
+                  padding: 6,
+                  border: '1px solid #e4ddd5',
+                  borderRadius: 8,
+                  background: '#faf7f3',
+                  flexShrink: 0,
+                }}
+              >
+                {allOtherColors.map((color) => (
+                  <button
+                    key={`other-${color.hex}`}
+                    type="button"
+                    onClick={() => { onSelect(color); setShowOtherColors(false) }}
+                    title={`${color.dmc_code} – ${color.dmc_name}`}
+                    style={{
+                      display: 'grid',
+                      justifyItems: 'center',
+                      gap: 3,
+                      padding: 4,
+                      border: activeColor === color.hex ? '2px solid #3f382f' : '1px solid #ccc',
+                      borderRadius: 6,
+                      background: 'white',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 3,
+                        background: color.hex,
+                        border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none',
+                      }}
+                    />
+                    <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Color swatches — palette colors below */}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                gap: 5,
+                alignContent: 'start',
+                overflow: 'auto',
+                paddingRight: 2,
+              }}
+            >
 
               {orderedColors.map((color) => {
                 const selected = activeColor === color.hex
@@ -613,7 +630,7 @@ export default function PalettePanel({
                 ))}
               </div>
 
-              <div
+              {shapeType !== 'line' && <div
                 style={{
                   display: 'grid',
                   gap: 6,
@@ -648,8 +665,33 @@ export default function PalettePanel({
                       }}
                     />
                   ))}
+                  {allOtherColors.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setShowFillMoreColors((c) => !c); setShowBorderMoreColors(false) }}
+                      title="Add color to palette"
+                      style={{
+                        width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                        border: showFillMoreColors ? '2px solid #3f382f' : '1px solid #bbb',
+                        background: showFillMoreColors ? '#3f382f' : '#fffdf8',
+                        color: showFillMoreColors ? '#fff' : '#5f574e',
+                        fontSize: 18, fontWeight: 300, lineHeight: 1,
+                        display: 'grid', placeItems: 'center',
+                      }}
+                    >+</button>
+                  )}
                 </div>
-              </div>
+                {showFillMoreColors && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5, maxHeight: 140, overflow: 'auto', padding: 6, border: '1px solid #e4ddd5', borderRadius: 8, background: '#faf7f3' }}>
+                    {allOtherColors.map((color) => (
+                      <button key={`fill-other-${color.hex}`} type="button" onClick={() => { onSelect(color); onShapeFillColorChange(color.hex); setShowFillMoreColors(false) }} title={`${color.dmc_code} – ${color.dmc_name}`} style={{ display: 'grid', justifyItems: 'center', gap: 3, padding: 4, border: '1px solid #ccc', borderRadius: 6, background: 'white', cursor: 'pointer' }}>
+                        <div style={{ width: 18, height: 18, borderRadius: 3, background: color.hex, border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none' }} />
+                        <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>}
 
               <div
                 style={{
@@ -661,12 +703,12 @@ export default function PalettePanel({
                   background: '#faf7f3',
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#6f665b' }}>Border color</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#6f665b' }}>{shapeType === 'line' ? 'Fill color' : 'Border color'}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   <button
                     type="button"
                     onClick={() => onShapeBorderColorChange(null)}
-                    title="No border"
+                    title={shapeType === 'line' ? 'No fill' : 'No border'}
                     style={{
                       width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
                       border: shapeBorderColor === null ? '2px solid #3f382f' : '1px solid #bbb',
@@ -686,7 +728,46 @@ export default function PalettePanel({
                       }}
                     />
                   ))}
+                  {allOtherColors.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setShowBorderMoreColors((c) => !c); setShowFillMoreColors(false) }}
+                      title="Add color to palette"
+                      style={{
+                        width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                        border: showBorderMoreColors ? '2px solid #3f382f' : '1px solid #bbb',
+                        background: showBorderMoreColors ? '#3f382f' : '#fffdf8',
+                        color: showBorderMoreColors ? '#fff' : '#5f574e',
+                        fontSize: 18, fontWeight: 300, lineHeight: 1,
+                        display: 'grid', placeItems: 'center',
+                      }}
+                    >+</button>
+                  )}
                 </div>
+                {showBorderMoreColors && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5, maxHeight: 140, overflow: 'auto', padding: 6, border: '1px solid #e4ddd5', borderRadius: 8, background: '#faf7f3' }}>
+                    {allOtherColors.map((color) => (
+                      <button key={`border-other-${color.hex}`} type="button" onClick={() => { onSelect(color); onShapeBorderColorChange(color.hex); setShowBorderMoreColors(false) }} title={`${color.dmc_code} – ${color.dmc_name}`} style={{ display: 'grid', justifyItems: 'center', gap: 3, padding: 4, border: '1px solid #ccc', borderRadius: 6, background: 'white', cursor: 'pointer' }}>
+                        <div style={{ width: 18, height: 18, borderRadius: 3, background: color.hex, border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none' }} />
+                        <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#6f665b' }}>
+                  <span style={{ flexShrink: 0 }}>{shapeType === 'line' ? 'Line size' : 'Border size'}</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={4}
+                    step={1}
+                    value={shapeBorderSize}
+                    onChange={(e) => onShapeBorderSizeChange(Number(e.target.value))}
+                    disabled={shapeBorderColor === null}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ minWidth: 14, textAlign: 'right', fontWeight: 600 }}>{shapeBorderSize}</span>
+                </label>
               </div>
 
               <div
