@@ -2270,32 +2270,32 @@ function StudioPage() {
       })
 
       const existingId = activeDraftProjectId
+      const finalizedPayload = {
+        name: draftName.trim() || 'Untitled',
+        width_inches: settingsForFinalize.width_inches,
+        height_inches: settingsForFinalize.height_inches,
+        mesh_count: settingsForFinalize.mesh_count,
+        color_count: currentDesignPalette.length,
+        contrast_level: settingsForFinalize.contrast_level,
+        source_type: settingsForFinalize.source_type,
+        show_grid: settingsForFinalize.show_grid,
+        clean_background: settingsForFinalize.clean_background,
+        simplify_colors: settingsForFinalize.simplify_colors,
+        strengthen_dark_detail: settingsForFinalize.strengthen_dark_detail,
+        preserve_accents: settingsForFinalize.preserve_accents,
+        palette: currentDesignPalette,
+        cells,
+        source_image_url: activeImagePath,
+        preview_image_url: result.preview_image_url,
+        pdf_url: result.pdf_url,
+        finalized: true,
+      }
       if (existingId) {
-        await updateProject(
-          existingId,
-          {
-            name: draftName.trim() || 'Untitled',
-            width_inches: settingsForFinalize.width_inches,
-            height_inches: settingsForFinalize.height_inches,
-            mesh_count: settingsForFinalize.mesh_count,
-            color_count: currentDesignPalette.length,
-            contrast_level: settingsForFinalize.contrast_level,
-            source_type: settingsForFinalize.source_type,
-            show_grid: settingsForFinalize.show_grid,
-            clean_background: settingsForFinalize.clean_background,
-            simplify_colors: settingsForFinalize.simplify_colors,
-            strengthen_dark_detail: settingsForFinalize.strengthen_dark_detail,
-            preserve_accents: settingsForFinalize.preserve_accents,
-            palette: currentDesignPalette,
-            cells,
-            source_image_url: activeImagePath,
-            preview_image_url: result.preview_image_url,
-            pdf_url: result.pdf_url,
-            finalized: true,
-          },
-          session.access_token,
-        )
+        await updateProject(existingId, finalizedPayload, session.access_token)
         if (!savedProjectId) setSavedProjectId(existingId)
+      } else {
+        const project = await saveProject(finalizedPayload, session.access_token)
+        setSavedProjectId(project.id)
       }
 
       setFinalPdfPath(result.pdf_url)
