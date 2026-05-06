@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -25,12 +25,20 @@ from app.models import (
     ProjectResponse,
     GalleryCreateRequest,
     GalleryItemResponse,
+    PrintOwnCheckoutRequest,
+    CheckoutResponse,
 )
 from app.services.intent import classify_intent
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
-from app.services.email_delivery import send_finalized_report
+from app.services.email_delivery import send_finalized_report, send_order_notification
+from app.services.stripe_service import (
+    create_print_own_checkout,
+    create_template_checkout,
+    create_gallery_print_checkout,
+)
+from app.services.canvas_pricing import get_canvas_for_design
 from app.services.auth import get_current_user_id, get_optional_user_id
 from app.services.supabase_storage import upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
@@ -412,10 +420,13 @@ def get_project(project_id: str, user_id: str = Depends(get_current_user_id)):
 
 MAX_DRAFTS = 3
 
+def is_active_draft(project: dict) -> bool:
+    return not bool(project.get("finalized") or project.get("pdf_url"))
+
 @app.post("/projects", response_model=ProjectResponse, status_code=201)
 def save_project(request: ProjectSaveRequest, user_id: str = Depends(get_current_user_id)):
-    existing = list_projects(user_id)
-    if len(existing) >= MAX_DRAFTS:
+    active_drafts = [project for project in list_projects(user_id) if is_active_draft(project)]
+    if len(active_drafts) >= MAX_DRAFTS:
         raise HTTPException(
             status_code=422,
             detail=f"Draft limit reached ({MAX_DRAFTS}). Delete a saved design before saving a new one."
@@ -488,3 +499,120 @@ def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id))
     if result is None:
         raise HTTPException(status_code=502, detail="Could not update gallery like.")
     return result
+
+
+# ── Checkout ──────────────────────────────────────────────────────────────────
+
+@app.post("/checkout/print-own", response_model=CheckoutResponse)
+def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(get_current_user_id)):
+    canvas = get_canvas_for_design(request.width_inches, request.height_inches)
+    if not canvas:
+        raise HTTPException(status_code=422, detail="Design exceeds the largest available canvas (8×12).")
+    try:
+        url = create_print_own_checkout(
+            pdf_url=request.pdf_url,
+            width_inches=request.width_inches,
+            height_inches=request.height_inches,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return CheckoutResponse(checkout_url=url)
+
+
+@app.post("/checkout/template/{item_id}", response_model=CheckoutResponse)
+def checkout_template(item_id: str):
+    from app.services.supabase_db import get_gallery_item
+    item = get_gallery_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    try:
+        url = create_template_checkout(
+            gallery_item_id=item_id,
+            gallery_item_title=item.get("title", "Untitled"),
+            creator_user_id=item.get("user_id", ""),
+            pdf_url=item.get("pdf_url", ""),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return CheckoutResponse(checkout_url=url)
+
+
+@app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
+def checkout_print_gallery(item_id: str):
+    from app.services.supabase_db import get_gallery_item
+    item = get_gallery_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    width = item.get("width_inches")
+    height = item.get("height_inches")
+    if not width or not height:
+        raise HTTPException(status_code=422, detail="This design does not have dimension data for printing.")
+    canvas = get_canvas_for_design(width, height)
+    if not canvas:
+        raise HTTPException(status_code=422, detail="Design exceeds the largest available canvas (8×12).")
+    try:
+        url = create_gallery_print_checkout(
+            gallery_item_id=item_id,
+            gallery_item_title=item.get("title", "Untitled"),
+            creator_user_id=item.get("user_id", ""),
+            pdf_url=item.get("pdf_url", ""),
+            width_inches=width,
+            height_inches=height,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return CheckoutResponse(checkout_url=url)
+
+
+# ── Stripe webhook ────────────────────────────────────────────────────────────
+
+def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str) -> None:
+    from app.services.supabase_db import _request
+    _request("POST", "/creator_earnings", body={
+        "stripe_session_id": session_id,
+        "creator_user_id": creator_user_id,
+        "gallery_item_id": gallery_item_id,
+        "order_type": order_type,
+        "amount_cents": 450,
+        "paid_out": False,
+    })
+
+
+def _handle_completed_session(session: dict) -> None:
+    metadata = session.get("metadata") or {}
+    order_type = metadata.get("type", "")
+    customer_details = session.get("customer_details") or {}
+    customer_email = customer_details.get("email")
+    shipping = session.get("shipping_details")
+
+    try:
+        send_order_notification(order_type, metadata, customer_email, shipping)
+    except Exception:
+        logger.exception("Order notification email failed for session %s", session.get("id"))
+
+    if order_type in {"template", "print_gallery"}:
+        creator_user_id = metadata.get("creator_user_id", "")
+        gallery_item_id = metadata.get("gallery_item_id", "")
+        if creator_user_id and gallery_item_id:
+            try:
+                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type)
+            except Exception:
+                logger.exception("Failed to record creator earnings for session %s", session.get("id"))
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str = Header(None, alias="stripe-signature"),
+):
+    import stripe as stripe_lib
+    payload = await request.body()
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    try:
+        event = stripe_lib.Webhook.construct_event(payload, stripe_signature, webhook_secret)
+    except (ValueError, stripe_lib.error.SignatureVerificationError):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+    if event["type"] == "checkout.session.completed":
+        _handle_completed_session(event["data"]["object"])
+    return {"received": True}

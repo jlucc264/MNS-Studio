@@ -16,8 +16,8 @@ export type PreviewSettings = {
   source_type: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
-const MAX_PRINTABLE_SHORT_SIDE = 7
-const MAX_PRINTABLE_LONG_SIDE = 9.5
+const MAX_PRINTABLE_SHORT_SIDE = 6
+const MAX_PRINTABLE_LONG_SIDE = 10
 
 
 function clampToPrintableArea(width: number, height: number) {
@@ -71,7 +71,6 @@ export default function PreviewControls({
     height_inches: heightInches,
     mesh_count: meshCount,
     show_grid: showGrid,
-    clean_background: cleanBackground,
     contrast_level: contrastLevel,
     source_type: sourceType,
   } = settings
@@ -165,7 +164,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max="9.5"
+            max="10"
             step="0.5"
             value={widthInches}
             onChange={(e) => {
@@ -202,7 +201,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max="9.5"
+            max="10"
             step="0.5"
             value={heightInches}
             onChange={(e) => {
@@ -291,14 +290,13 @@ export default function PreviewControls({
 
       <div
         style={{
-          display: 'flex',
-          gap: 14,
-          flexWrap: 'wrap',
-          alignItems: 'center',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 8,
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1 }}>
+        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0 }}>
             <input
               type="checkbox"
               checked={lockAspectRatio}
@@ -317,7 +315,7 @@ export default function PreviewControls({
             Lock ratio
         </label>
 
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1 }}>
+        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0 }}>
             <input
               type="checkbox"
               checked={showGrid}
@@ -329,20 +327,6 @@ export default function PreviewControls({
               }
             />
             Show grid
-        </label>
-
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1 }}>
-            <input
-              type="checkbox"
-              checked={cleanBackground}
-              onChange={(e) =>
-                onSettingsChange({
-                  ...settings,
-                  clean_background: e.target.checked,
-                })
-              }
-            />
-            Exclude blank canvas
         </label>
       </div>
 

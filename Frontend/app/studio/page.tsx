@@ -26,8 +26,11 @@ import {
   assetUrl,
   chatAssistant,
   createPreview,
+  createPrintOwnCheckout,
   fetchDmcColors,
   finalizePreview,
+  formatCents,
+  getCanvasForDesign,
   getProject,
   importImageFromUrl,
   PaletteColor,
@@ -462,11 +465,16 @@ function StudioPage() {
   const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
+  const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
+  const [galleryAcknowledged, setGalleryAcknowledged] = useState(false)
   const [galleryStatus, setGalleryStatus] = useState<'idle' | 'posting' | 'posted' | 'error'>('idle')
   const [galleryError, setGalleryError] = useState('')
+  const [printCheckoutLoading, setPrintCheckoutLoading] = useState(false)
+  const [printCheckoutError, setPrintCheckoutError] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
   const [draftSaveError, setDraftSaveError] = useState('')
   const [, startPaletteTransition] = useTransition()
@@ -534,8 +542,18 @@ function StudioPage() {
 
   const skipGalleryPublish = useCallback(() => {
     if (galleryStatus === 'posting') return
+    setGalleryAcknowledged(false)
     finishFinalizeFlow()
   }, [finishFinalizeFlow, galleryStatus])
+
+  const openGalleryPublishModal = useCallback(() => {
+    setGalleryStatus('idle')
+    setGalleryError('')
+    setGalleryAcknowledged(false)
+    setGalleryStep('form')
+    setShowPostFinalizeOptions(false)
+    setShowGalleryPublishModal(true)
+  }, [])
 
   const handleLogoutAndReturnToGallery = useCallback(async () => {
     setShowLogoutConfirm(false)
@@ -2288,8 +2306,10 @@ function StudioPage() {
       setGalleryTitle(draftName.trim() === 'Untitled' ? '' : draftName.trim())
       setGalleryStatus('idle')
       setGalleryError('')
-      setShowGalleryPublishModal(true)
+      setGalleryStep('form')
+      setPrintCheckoutError('')
       setShowFinalizeModal(false)
+      setShowPostFinalizeOptions(true)
     } catch (err) {
       setFinalizeError(err instanceof Error ? err.message : 'Something went wrong generating the PDF.')
     } finally {
@@ -2311,6 +2331,11 @@ function StudioPage() {
       setGalleryError('Add a piece name and try again.')
       return
     }
+    if (!galleryAcknowledged) {
+      setGalleryStatus('error')
+      setGalleryError('Acknowledge the disclaimer before sharing.')
+      return
+    }
 
     setGalleryStatus('posting')
     setGalleryError('')
@@ -2329,6 +2354,8 @@ function StudioPage() {
           height_inches: lastSettings?.height_inches ?? null,
           mesh_count: lastSettings?.mesh_count ?? null,
           color_count: currentDesignPalette.length,
+          palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
+          has_outline: Object.keys(finishOutlineBackups).length > 0,
         },
         session.access_token,
       )
@@ -2338,6 +2365,30 @@ function StudioPage() {
       const message = err instanceof Error ? err.message : ''
       setGalleryError(message || 'Gallery post failed. Please try again.')
       setGalleryStatus('error')
+    }
+  }
+
+  async function handlePrintOwnCheckout() {
+    if (!session?.access_token) {
+      setAuthPrompt('finalize')
+      return
+    }
+    if (!finalPdfPath || !lastSettings) return
+    setPrintCheckoutLoading(true)
+    setPrintCheckoutError('')
+    try {
+      const { checkout_url } = await createPrintOwnCheckout(
+        {
+          pdf_url: finalPdfPath,
+          width_inches: lastSettings.width_inches,
+          height_inches: lastSettings.height_inches,
+        },
+        session.access_token,
+      )
+      window.location.href = checkout_url
+    } catch (err) {
+      setPrintCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+      setPrintCheckoutLoading(false)
     }
   }
 
@@ -2391,12 +2442,14 @@ function StudioPage() {
     <div
       style={{
         display: 'grid',
-        gap: 6,
+        gap: 9,
         width: '100%',
         minWidth: 0,
-        padding: 8,
+        minHeight: 286,
+        alignContent: 'start',
+        padding: '14px 12px 16px',
         boxSizing: 'border-box',
-        overflow: 'hidden',
+        overflow: 'visible',
         border: '1px solid #d9d9d9',
         borderRadius: 12,
         background: '#fbfbfb',
@@ -2414,6 +2467,24 @@ function StudioPage() {
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
       />
+      <label
+        style={{
+          display: 'flex',
+          gap: 7,
+          alignItems: 'center',
+          paddingTop: 2,
+          fontSize: 12,
+          lineHeight: 1.1,
+          color: '#3f382f',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={draftSettings.clean_background}
+          onChange={(event) => updateSettings({ clean_background: event.target.checked })}
+        />
+        Exclude blank canvas
+      </label>
     </div>
   )
 
@@ -2728,7 +2799,7 @@ function StudioPage() {
               Design
             </h2>
           <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
-              Set size, mesh, and source mode. Paint colors on the right.
+              Set Size, Mesh, Source Type, and Create!
             </p>
           </div>
           {paletteReductionPanel}
@@ -2796,6 +2867,20 @@ function StudioPage() {
           >
             Download PDF report
           </a>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => void handlePrintOwnCheckout()}
+              disabled={!lastSettings || printCheckoutLoading}
+              style={{ ...btnSecondary, opacity: !lastSettings ? 0.55 : 1, cursor: !lastSettings ? 'not-allowed' : 'pointer' }}
+            >
+              {printCheckoutLoading ? 'Redirecting...' : 'Order print'}
+            </button>
+            <button type="button" onClick={openGalleryPublishModal} style={btnSecondary}>
+              Share to gallery
+            </button>
+          </div>
+          {printCheckoutError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{printCheckoutError}</p>}
           <button type="button" onClick={finishFinalizeFlow} style={btnSecondary}>
             Go to Gallery
           </button>
@@ -3009,7 +3094,7 @@ function StudioPage() {
                   onClick={() => navigateAwayFromStudio('/drafts')}
                   style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
                 >
-                  Projects
+                  Your Studio
                 </button>
                 <span style={{ color: '#3f382f', fontWeight: 700 }}>Active Canvas</span>
               </div>
@@ -3116,9 +3201,9 @@ function StudioPage() {
           <div
             style={{
               display: 'grid',
-              gap: isMobile ? 14 : 22,
+              gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
               alignContent: 'start',
-              padding: isMobile ? 14 : 24,
+              padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
               minHeight: 0,
               overflow: 'auto',
             }}
@@ -3466,111 +3551,191 @@ function StudioPage() {
         </div>
       )}
 
+      {showPostFinalizeOptions && (() => {
+        const canvas = lastSettings ? getCanvasForDesign(lastSettings.width_inches, lastSettings.height_inches) : null
+        const printTotal = canvas ? 1500 + canvas.priceCents : null
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
+          >
+            <div
+              style={{ background: '#fffdf8', borderRadius: 14, width: 480, maxWidth: '100%', display: 'grid', gap: 0, boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8' }}
+            >
+              <div style={{ padding: '22px 24px 16px', borderBottom: '1px solid #e7e1d8' }}>
+                <h2 style={{ margin: 0, fontSize: 20 }}>Your design is ready</h2>
+                <p style={{ margin: '6px 0 0', color: '#8a8177', fontSize: 14 }}>Choose what to do next — you can do both.</p>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                <div style={{ padding: '20px 20px 20px', borderRight: '1px solid #e7e1d8', display: 'grid', gap: 12, alignContent: 'start' }}>
+                  <div>
+                    <strong style={{ fontSize: 15 }}>Order a print</strong>
+                    <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
+                      We'll print your canvas and ship it to you.
+                    </p>
+                  </div>
+                  {canvas && printTotal !== null ? (
+                    <div style={{ fontSize: 13, color: '#5f574f' }}>
+                      <div>{canvas.label} canvas</div>
+                      <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
+                    </div>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>No printable canvas size available.</p>
+                  )}
+                  {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
+                  <button
+                    type="button"
+                    onClick={() => void handlePrintOwnCheckout()}
+                    disabled={!canvas || printCheckoutLoading}
+                    style={{ ...btnPrimary, opacity: !canvas ? 0.5 : 1, cursor: !canvas ? 'not-allowed' : 'pointer' }}
+                  >
+                    {printCheckoutLoading ? 'Redirecting...' : 'Order print'}
+                  </button>
+                </div>
+
+                <div style={{ padding: '20px 20px 20px', display: 'grid', gap: 12, alignContent: 'start' }}>
+                  <div>
+                    <strong style={{ fontSize: 15 }}>Share to gallery</strong>
+                    <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
+                      Let the MNS community see your work.
+                    </p>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#5f574f' }}>
+                    <div>Visible to everyone</div>
+                    <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>Free</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openGalleryPublishModal}
+                    style={btnSecondary}
+                  >
+                    Share to gallery
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ padding: '14px 24px', borderTop: '1px solid #e7e1d8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                {finalPdfPath && (
+                  <a href={assetUrl(finalPdfPath) ?? '#'} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: '#8a8177', textDecoration: 'underline' }}>
+                    Download PDF
+                  </a>
+                )}
+                <button type="button" onClick={finishFinalizeFlow} style={{ ...btnSecondary, marginLeft: 'auto' }}>
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {showGalleryPublishModal && (
         <div
           role="dialog"
           aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            display: 'grid',
-            placeItems: 'center',
-            zIndex: 25,
-            padding: 18,
-          }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
           onClick={skipGalleryPublish}
         >
           <div
             onClick={(event) => event.stopPropagation()}
-            style={{
-              background: 'white',
-              padding: 24,
-              borderRadius: 12,
-              width: 420,
-              maxWidth: '100%',
-              display: 'grid',
-              gap: 14,
-              boxSizing: 'border-box',
-            }}
+            style={{ background: 'white', padding: 24, borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}
           >
-            <div style={{ display: 'grid', gap: 6 }}>
-              <h2 style={{ margin: 0 }}>Post to gallery?</h2>
-              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                Your PDF report is ready. Add a name and searchable tags if you want to share this finalized design in the gallery.
-              </p>
-            </div>
-            {finalPdfPath && (
-              <a
-                href={assetUrl(finalPdfPath) ?? '#'}
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  justifySelf: 'start',
-                  border: '1px solid #d7d0c8',
-                  borderRadius: 8,
-                  padding: '8px 12px',
-                  font: 'inherit',
-                  fontWeight: 700,
-                  color: '#3f382f',
-                  background: '#fff',
-                  textDecoration: 'none',
-                }}
-              >
-                Download PDF report
-              </a>
+            {galleryStep === 'form' ? (
+              <>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <h2 style={{ margin: 0 }}>Share to gallery</h2>
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>Add a name and tags so others can find your design.</p>
+                </div>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
+                  Piece name
+                  <input
+                    value={galleryTitle}
+                    onChange={(event) => { setGalleryTitle(event.target.value); setGalleryStatus('idle'); setGalleryError('') }}
+                    placeholder="Canvas name"
+                    autoFocus
+                    style={{ border: '1px solid #d7d0c8', borderRadius: 8, padding: '10px 12px', font: 'inherit', fontWeight: 400 }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
+                  Tags
+                  <input
+                    value={galleryTags}
+                    onChange={(event) => { setGalleryTags(event.target.value); setGalleryError('') }}
+                    placeholder="ornament, floral, beginner"
+                    style={{ border: '1px solid #d7d0c8', borderRadius: 8, padding: '10px 12px', font: 'inherit', fontWeight: 400 }}
+                  />
+                </label>
+                {galleryStatus === 'error' && <p style={{ margin: 0, color: '#b0453a', fontSize: 13 }}>{galleryError}</p>}
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={skipGalleryPublish} style={btnSecondary}>Cancel</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!galleryTitle.trim()) { setGalleryStatus('error'); setGalleryError('Add a piece name and try again.'); return }
+                      setGalleryAcknowledged(false)
+                      setGalleryStep('confirm')
+                    }}
+                    style={btnPrimary}
+                  >
+                    Review &amp; confirm
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <h2 style={{ margin: 0 }}>Content Responsibility</h2>
+                  <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.45 }}>
+                    This studio is intended to be used as a way to create what you want. Users are entirely responsible for their own content; unauthorized use of copyrighted material will result in your design being taken down and further action being taken against your account. See terms and conditions for more information.
+                  </p>
+                </div>
+                <div style={{ border: '1px solid #e7e1d8', borderRadius: 10, padding: 14, display: 'grid', gap: 6, background: '#f8f4ec' }}>
+                  <strong style={{ fontSize: 16 }}>{galleryTitle}</strong>
+                  {galleryTags && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {galleryTags.split(',').map((t) => t.trim()).filter(Boolean).map((tag) => (
+                        <span key={tag} style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '2px 8px', fontSize: 12, color: '#6f675f' }}>#{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {lastSettings && (
+                    <span style={{ fontSize: 12, color: '#8a8177' }}>
+                      {lastSettings.width_inches}" × {lastSettings.height_inches}" · {lastSettings.mesh_count} mesh · {currentDesignPalette.length} colors
+                    </span>
+                  )}
+                </div>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#3f382f', lineHeight: 1.35 }}>
+                  <input
+                    type="checkbox"
+                    checked={galleryAcknowledged}
+                    onChange={(event) => {
+                      setGalleryAcknowledged(event.target.checked)
+                      setGalleryStatus('idle')
+                      setGalleryError('')
+                    }}
+                  />
+                  I acknowledge the above
+                </label>
+                {galleryStatus === 'error' && <p style={{ margin: 0, color: '#b0453a', fontSize: 13 }}>{galleryError}</p>}
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => { setGalleryAcknowledged(false); setGalleryStep('form') }} disabled={galleryStatus === 'posting'} style={btnSecondary}>Edit</button>
+                  <button
+                    type="button"
+                    onClick={() => void handlePublishGalleryItem()}
+                    disabled={galleryStatus === 'posting' || !galleryAcknowledged}
+                    style={{
+                      ...btnPrimary,
+                      opacity: galleryStatus === 'posting' || !galleryAcknowledged ? 0.55 : 1,
+                      cursor: galleryStatus === 'posting' || !galleryAcknowledged ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {galleryStatus === 'posting' ? 'Posting...' : 'Confirm & share'}
+                  </button>
+                </div>
+              </>
             )}
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
-              Piece name
-              <input
-                value={galleryTitle}
-                onChange={(event) => {
-                  setGalleryTitle(event.target.value)
-                  setGalleryStatus('idle')
-                  setGalleryError('')
-                }}
-                placeholder="Canvas name"
-                autoFocus
-                style={{
-                  border: '1px solid #d7d0c8',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  font: 'inherit',
-                  fontWeight: 400,
-                }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
-              Tags
-              <input
-                value={galleryTags}
-                onChange={(event) => {
-                  setGalleryTags(event.target.value)
-                  setGalleryError('')
-                }}
-                placeholder="ornament, floral, beginner"
-                style={{
-                  border: '1px solid #d7d0c8',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  font: 'inherit',
-                  fontWeight: 400,
-                }}
-              />
-            </label>
-            {galleryStatus === 'error' && (
-              <p style={{ margin: 0, color: '#b0453a', fontSize: 13 }}>
-                {galleryError || 'Gallery post failed. Please try again.'}
-              </p>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" onClick={skipGalleryPublish} disabled={galleryStatus === 'posting'} style={btnSecondary}>
-                Skip
-              </button>
-              <button type="button" onClick={() => void handlePublishGalleryItem()} disabled={galleryStatus === 'posting'} style={btnPrimary}>
-                {galleryStatus === 'posting' ? 'Posting...' : 'Post to Gallery'}
-              </button>
-            </div>
           </div>
         </div>
       )}

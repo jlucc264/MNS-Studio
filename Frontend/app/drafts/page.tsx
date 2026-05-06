@@ -156,7 +156,7 @@ export default function DraftsPage() {
           <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
           <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
             <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
-            <span style={{ color: '#3f382f', fontWeight: 700 }}>Projects</span>
+            <span style={{ color: '#3f382f', fontWeight: 700 }}>Your Studio</span>
             <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
           </div>
         </div>
@@ -443,22 +443,30 @@ function DraftCard({
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {finalized ? (
-              reportUrl ? (
-                <a
-                  href={reportUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
+              <>
+                <Link
+                  href={`/studio?project=${project.id}`}
+                  style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
                 >
-                  View PDF
-                </a>
-              ) : (
-                <button type="button" disabled style={{ ...btnPrimary, opacity: 0.55, cursor: 'not-allowed', flex: 1 }}>
-                  PDF unavailable
-                </button>
-              )
+                  Manage
+                </Link>
+                {reportUrl ? (
+                  <a
+                    href={reportUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
+                  >
+                    View PDF
+                  </a>
+                ) : (
+                  <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', flex: 1, minWidth: 92 }}>
+                    PDF unavailable
+                  </button>
+                )}
+              </>
             ) : (
               <Link
                 href={`/studio?project=${project.id}`}

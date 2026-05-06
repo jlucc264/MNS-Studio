@@ -123,6 +123,7 @@ def _draw_report_page(
     contrast_level: str,
     palette: list[dict],
     cells: list[list[str]],
+    has_outline: bool = False,
 ) -> None:
     page_width, page_height = page_size
     margin = PAGE_MARGIN
@@ -168,7 +169,7 @@ def _draw_report_page(
     summary_y = page_height - 112
     summary_pairs = [
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
-        ("Canvas size", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
+        ("Suggested canvas", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Total stitches", str(total_stitches)),
@@ -188,6 +189,18 @@ def _draw_report_page(
         pdf.setFont("Helvetica-Bold", 10)
 
     y = page_height - 182
+    if has_outline:
+        pdf.setFillColor(colors.HexColor("#F0F4EF"))
+        note_h = 20
+        pdf.roundRect(margin, y - note_h, content_width, note_h, 4, fill=1, stroke=0)
+        pdf.setFillColor(colors.HexColor("#2D5A27"))
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawString(margin + 10, y - 13, "✓ Black finish outline applied")
+        pdf.setFont("Helvetica", 9)
+        pdf.setFillColor(colors.HexColor("#5B635C"))
+        pdf.drawString(margin + 148, y - 13, "— outline stitches are not included in the totals above")
+        y -= note_h + 6
+
     pdf.setStrokeColor(colors.HexColor("#D9D9D9"))
     pdf.line(margin, y, margin + content_width, y)
     y -= 22
@@ -266,6 +279,7 @@ def _draw_cover_page(
     contrast_level: str,
     used_colors: int,
     total_stitches: int,
+    has_outline: bool = False,
 ) -> None:
     page_width, page_height = page_size
     margin = PAGE_MARGIN
@@ -317,7 +331,8 @@ def _draw_cover_page(
 
     footer_y = margin + 28
     stat_pairs = [
-        ("Design", f'{width_inches:.1f}" x {height_inches:.1f}"'),
+        ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
+        ("Suggested canvas", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Stitches", str(total_stitches)),
@@ -331,6 +346,12 @@ def _draw_cover_page(
         pdf.setFillColor(colors.HexColor("#1E241F"))
         pdf.setFont("Helvetica", 11)
         pdf.drawString(x, footer_y, value)
+
+    if has_outline:
+        pdf.setFillColor(colors.HexColor("#2D5A27"))
+        pdf.setFont("Helvetica-Bold", 8)
+        outline_label_x = margin + 24
+        pdf.drawString(outline_label_x, footer_y - 16, "✓ Black finish outline applied")
 
 
 def _draw_true_size_reference_page(
@@ -399,6 +420,7 @@ def generate_preview_pdf(
     report_rows = _build_report_rows(cells, palette)
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
+    has_outline = any(cell == FINISH_OUTLINE_CELL for row in cells for cell in row)
 
     def draw_public_pages(pdf: canvas.Canvas) -> None:
         _draw_cover_page(
@@ -411,6 +433,7 @@ def generate_preview_pdf(
             contrast_level,
             used_colors,
             total_stitches,
+            has_outline,
         )
 
         pdf.showPage()
@@ -424,6 +447,7 @@ def generate_preview_pdf(
             contrast_level,
             palette,
             cells,
+            has_outline,
         )
 
     public_pdf = canvas.Canvas(str(public_path), pagesize=page_size)

@@ -286,6 +286,12 @@ export async function deleteProject(id: string, accessToken?: string | null): Pr
   if (!res.ok) throw new Error('Could not delete project')
 }
 
+export type GalleryPaletteColor = {
+  hex: string
+  dmc_code: string
+  dmc_name: string
+}
+
 export type GalleryItem = {
   id: string
   created_at: string
@@ -299,6 +305,8 @@ export type GalleryItem = {
   height_inches: number | null
   mesh_count: number | null
   color_count: number | null
+  palette: GalleryPaletteColor[] | null
+  has_outline: boolean
   like_count: number
   liked_by_me: boolean
 }
@@ -313,6 +321,8 @@ export type GalleryCreatePayload = {
   height_inches?: number | null
   mesh_count?: number | null
   color_count?: number | null
+  palette?: GalleryPaletteColor[] | null
+  has_outline?: boolean | null
 }
 
 export async function listGalleryItems(
@@ -357,6 +367,74 @@ export async function toggleGalleryLike(id: string, accessToken?: string | null)
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail ?? 'Could not update like')
+  }
+  return res.json()
+}
+
+// ── Canvas pricing (mirrors backend canvas_pricing.py) ────────────────────────
+
+const CANVAS_SIZES = [
+  { label: '5×6"', canvasW: 5, canvasH: 6, priceCents: 900 },
+  { label: '6×8"', canvasW: 6, canvasH: 8, priceCents: 1200 },
+  { label: '8×12"', canvasW: 8, canvasH: 12, priceCents: 1400 },
+] as const
+
+export type CanvasSize = typeof CANVAS_SIZES[number]
+
+export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize | null {
+  const cw = widthInches + 2
+  const ch = heightInches + 2
+  return (
+    CANVAS_SIZES.find(
+      (c) =>
+        (cw <= c.canvasW && ch <= c.canvasH) ||
+        (cw <= c.canvasH && ch <= c.canvasW),
+    ) ?? null
+  )
+}
+
+export function formatCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}`
+}
+
+// ── Checkout ──────────────────────────────────────────────────────────────────
+
+export type CheckoutResponse = { checkout_url: string }
+
+export async function createPrintOwnCheckout(
+  payload: { pdf_url: string; width_inches: number; height_inches: number },
+  accessToken?: string | null,
+): Promise<CheckoutResponse> {
+  const res = await fetch(`${API_BASE}/checkout/print-own`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not create checkout session')
+  }
+  return res.json()
+}
+
+export async function createTemplateCheckout(galleryItemId: string): Promise<CheckoutResponse> {
+  const res = await fetch(`${API_BASE}/checkout/template/${galleryItemId}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not create checkout session')
+  }
+  return res.json()
+}
+
+export async function createGalleryPrintCheckout(galleryItemId: string): Promise<CheckoutResponse> {
+  const res = await fetch(`${API_BASE}/checkout/print-gallery/${galleryItemId}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not create checkout session')
   }
   return res.json()
 }

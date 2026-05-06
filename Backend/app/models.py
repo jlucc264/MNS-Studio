@@ -127,6 +127,16 @@ class ProjectResponse(BaseModel):
     pdf_url: Optional[str] = None
 
 
+class PrintOwnCheckoutRequest(BaseModel):
+    pdf_url: str
+    width_inches: float
+    height_inches: float
+
+
+class CheckoutResponse(BaseModel):
+    checkout_url: str
+
+
 class GalleryCreateRequest(BaseModel):
     title: str
     tags: list[str] = []
@@ -137,6 +147,8 @@ class GalleryCreateRequest(BaseModel):
     height_inches: Optional[float] = None
     mesh_count: Optional[int] = None
     color_count: Optional[int] = None
+    palette: Optional[list] = None
+    has_outline: Optional[bool] = None
 
 
 class GalleryItemResponse(BaseModel):
@@ -152,5 +164,7 @@ class GalleryItemResponse(BaseModel):
     height_inches: Optional[float] = None
     mesh_count: Optional[int] = None
     color_count: Optional[int] = None
+    palette: Optional[list] = None
+    has_outline: bool = False
     like_count: int = 0
     liked_by_me: bool = False

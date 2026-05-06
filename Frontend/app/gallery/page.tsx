@@ -1,14 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { ProfileModal } from '../../components/ProfileModal'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { assetUrl, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, createTemplateCheckout, formatCents, getCanvasForDesign, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import GuideDialog from '../../components/GuideDialog'
 
 const MOBILE_BREAKPOINT = 768
@@ -131,6 +131,8 @@ export default function GalleryPage() {
   const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
   const [viewportWidth, setViewportWidth] = useState(1200)
+  const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
+  const [checkoutError, setCheckoutError] = useState('')
 
   useEffect(() => {
     const update = () => setViewportWidth(window.innerWidth)
@@ -155,10 +157,29 @@ export default function GalleryPage() {
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
-  const itemCountLabel = useMemo(() => {
-    if (loading) return 'Loading...'
-    return `${items.length} design${items.length === 1 ? '' : 's'}`
-  }, [items.length, loading])
+  async function handleTemplateCheckout(item: GalleryItem) {
+    setCheckoutError('')
+    setCheckoutLoading('template')
+    try {
+      const { checkout_url } = await createTemplateCheckout(item.id)
+      window.location.href = checkout_url
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+      setCheckoutLoading(null)
+    }
+  }
+
+  async function handlePrintCheckout(item: GalleryItem) {
+    setCheckoutError('')
+    setCheckoutLoading('print')
+    try {
+      const { checkout_url } = await createGalleryPrintCheckout(item.id)
+      window.location.href = checkout_url
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+      setCheckoutLoading(null)
+    }
+  }
 
   async function handleLike(item: GalleryItem) {
     if (!session?.access_token) {
@@ -206,7 +227,7 @@ export default function GalleryPage() {
               <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
               <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
                 <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
-                <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Projects</Link>
+                <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Your Studio</Link>
                 <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
               </div>
             </>
@@ -235,13 +256,9 @@ export default function GalleryPage() {
         </div>
       </nav>
 
-      <main style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '16px 0 40px' : '30px 24px 52px', display: 'grid', gap: isMobile ? 14 : 22 }}>
-        <section style={{ display: 'grid', gap: 10, padding: isMobile ? '0 12px' : 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <h1 style={{ margin: 0, fontSize: isMobile ? 22 : 32 }}>Gallery</h1>
-            <span style={{ fontSize: 12, color: '#8a8177' }}>{itemCountLabel}</span>
-          </div>
-
+      <div style={{ position: 'sticky', top: 72, zIndex: 40, background: '#f5f1ea', borderBottom: '1px solid #e7e1d8' }}>
+        <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '12px 12px 12px' : '14px 24px 14px', display: 'grid', gap: 10 }}>
+          <h1 style={{ margin: 0, fontSize: isMobile ? 20 : 28 }}>Gallery</h1>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
             <input
               value={search}
@@ -275,8 +292,10 @@ export default function GalleryPage() {
               <option value="popular">Most liked</option>
             </select>
           </div>
-        </section>
+        </div>
+      </div>
 
+      <main style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '14px 0 40px' : '20px 24px 52px', display: 'grid', gap: isMobile ? 14 : 22 }}>
         {error && <p style={{ margin: 0, color: '#b0453a', padding: isMobile ? '0 12px' : 0 }}>{error}</p>}
 
         {loading ? (
@@ -429,13 +448,10 @@ export default function GalleryPage() {
                       ))}
                     </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button type="button" onClick={() => void handleLike(item)} style={btnSecondary}>
                       {item.liked_by_me ? 'Liked' : 'Like'} · {item.like_count}
                     </button>
-                    <a href={resolveMaybeAssetUrl(item.pdf_url) ?? '#'} target="_blank" rel="noreferrer" style={{ ...btnSecondary, textDecoration: 'none' }}>
-                      Report
-                    </a>
                   </div>
                 </div>
               </article>
@@ -601,7 +617,7 @@ export default function GalleryPage() {
                     </span>
                   </div>
 
-                  <div style={{ display: 'grid', alignContent: 'start', gap: 14, minHeight: 0 }}>
+                  <div style={{ display: 'grid', alignContent: 'start', gap: 14, minHeight: 0, overflowY: 'auto' }}>
                     <div style={{ display: 'grid', gap: 8 }}>
                       <span style={{ fontSize: 12, color: '#8a8177', fontWeight: 700 }}>Design details</span>
                       <div style={{ display: 'grid', gap: 6, fontSize: 13, color: '#5f574f' }}>
@@ -609,7 +625,34 @@ export default function GalleryPage() {
                           <span key={spec}>{spec}</span>
                         ))}
                       </div>
+                      {selectedPreview.has_outline && (
+                        <span style={{ fontSize: 12, color: '#4a7244', fontWeight: 600 }}>
+                          ✓ 4&#34; finish outline applied
+                        </span>
+                      )}
                     </div>
+
+                    {selectedPreview.palette && selectedPreview.palette.length > 0 && (
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <span style={{ fontSize: 12, color: '#8a8177', fontWeight: 700 }}>Colors used</span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {selectedPreview.palette.map((color) => (
+                            <div
+                              key={color.hex}
+                              title={`${color.dmc_code} — ${color.dmc_name}`}
+                              style={{
+                                width: 22,
+                                height: 22,
+                                borderRadius: '50%',
+                                background: color.hex,
+                                border: '1px solid rgba(0,0,0,0.12)',
+                                flexShrink: 0,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {selectedPreview.tags.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -626,21 +669,41 @@ export default function GalleryPage() {
                     <button type="button" onClick={() => void handleLike(selectedPreview)} style={btnPrimary}>
                       {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
                     </button>
-                    <a href={resolveMaybeAssetUrl(selectedPreview.pdf_url) ?? '#'} target="_blank" rel="noreferrer" style={{ ...btnSecondary, textDecoration: 'none', textAlign: 'center' }}>
-                      View Report
-                    </a>
-                    <button
-                      type="button"
-                      disabled
-                      style={{
-                        ...btnSecondary,
-                        color: '#8a8177',
-                        background: '#f4efe7',
-                        cursor: 'not-allowed',
-                      }}
-                    >
-                      Purchase Options Soon
-                    </button>
+                    {(() => {
+                      const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                        ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
+                        : null
+                      const templatePrice = formatCents(500)
+                      const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void handleTemplateCheckout(selectedPreview)}
+                            disabled={checkoutLoading !== null}
+                            style={btnSecondary}
+                          >
+                            {checkoutLoading === 'template' ? 'Redirecting...' : `Use this design — ${templatePrice}`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handlePrintCheckout(selectedPreview)}
+                            disabled={!printPrice || checkoutLoading !== null}
+                            style={{
+                              ...btnSecondary,
+                              ...(printPrice ? {} : { color: '#8a8177', background: '#f4efe7', cursor: 'not-allowed' }),
+                            }}
+                          >
+                            {checkoutLoading === 'print'
+                              ? 'Redirecting...'
+                              : printPrice
+                                ? `Order print — ${printPrice}`
+                                : 'Print unavailable'}
+                          </button>
+                          {checkoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{checkoutError}</p>}
+                        </>
+                      )
+                    })()}
                   </div>
                 </aside>
               )}
@@ -654,13 +717,34 @@ export default function GalleryPage() {
                 borderTop: '1px solid rgba(255,255,255,0.12)',
                 gap: 10,
               }}>
-                <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                <div style={{ display: 'grid', gap: 3, minWidth: 0 }}>
                   <span style={{ fontSize: 12, color: '#fff', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {submitterLabel(selectedPreview, user)}
                   </span>
                   <span style={{ fontSize: 11, color: '#b0a898' }}>
                     {designSpecs(selectedPreview).join(' · ') || formatDate(selectedPreview.created_at)}
                   </span>
+                  {selectedPreview.has_outline && (
+                    <span style={{ fontSize: 11, color: '#8fcf87' }}>✓ 4&#34; finish outline</span>
+                  )}
+                  {selectedPreview.palette && selectedPreview.palette.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2 }}>
+                      {selectedPreview.palette.map((color) => (
+                        <div
+                          key={color.hex}
+                          title={`${color.dmc_code} — ${color.dmc_name}`}
+                          style={{
+                            width: 14,
+                            height: 14,
+                            borderRadius: '50%',
+                            background: color.hex,
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            flexShrink: 0,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                   {selectedPreview.tags.length > 0 && (
                     <span style={{ fontSize: 11, color: '#8a8177', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {selectedPreview.tags.map(t => `#${t}`).join(' ')}
@@ -680,20 +764,6 @@ export default function GalleryPage() {
                   >
                     {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
                   </button>
-                  <a
-                    href={resolveMaybeAssetUrl(selectedPreview.pdf_url) ?? '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      ...btnSecondary,
-                      borderColor: 'rgba(255,255,255,0.3)',
-                      background: 'rgba(255,255,255,0.1)',
-                      color: '#fff',
-                      textDecoration: 'none',
-                    }}
-                  >
-                    Report
-                  </a>
                 </div>
               </div>
             )}
