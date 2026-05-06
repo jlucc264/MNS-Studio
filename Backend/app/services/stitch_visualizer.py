@@ -157,8 +157,16 @@ def open_source_image(src_path: Path | str) -> Image.Image:
         return flatten_transparency_to_white(img)
 
 
-def source_transparency_mask(src_path: Path, size: tuple[int, int]) -> set[tuple[int, int]]:
-    with Image.open(src_path) as img:
+def source_transparency_mask(src_path: Path | str, size: tuple[int, int]) -> set[tuple[int, int]]:
+    if isinstance(src_path, str) and src_path.startswith(("http://", "https://")):
+        request = Request(src_path, headers={"User-Agent": "MNS/1.0"})
+        with urlopen(request, timeout=30) as response:
+            img_bytes = BytesIO(response.read())
+        img_ctx = Image.open(img_bytes)
+    else:
+        img_ctx = Image.open(src_path)
+
+    with img_ctx as img:
         if img.mode not in {"RGBA", "LA"} and "transparency" not in img.info:
             return set()
 
