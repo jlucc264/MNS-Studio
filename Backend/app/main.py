@@ -50,7 +50,7 @@ from app.services.supabase_db import (
     create_gallery_item,
     toggle_gallery_like,
 )
-from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview
+from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -332,12 +332,17 @@ def visualize(request: VisualizeRequest):
     )
     preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
+    width_inches = request.stitch_width / request.mesh_count
+    height_inches = request.stitch_height / request.mesh_count
+    content_bounds = compute_content_bounds(cells, width_inches, height_inches)
+
     return {
         "message": "Preview generated successfully.",
         "stitch_preview_url": preview_url,
         "palette": palette,
         "settings": request.model_dump(),
         "cells": cells,
+        "content_bounds": content_bounds,
     }
 
 @app.post("/finalize", response_model=FinalizeResponse)

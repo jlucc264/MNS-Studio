@@ -677,6 +677,43 @@ def edge_connected_blank_mask(img: Image.Image) -> set[tuple[int, int]]:
     return blank_cells
 
 
+def compute_content_bounds(
+    cells: list[list[str]],
+    width_inches: float,
+    height_inches: float,
+) -> dict | None:
+    """Return the tight bounding box of non-blank cells in inches, or None if no blanks exist."""
+    if not cells or not cells[0]:
+        return None
+
+    grid_h = len(cells)
+    grid_w = len(cells[0])
+    min_row, max_row = grid_h, -1
+    min_col, max_col = grid_w, -1
+    has_blank = False
+
+    for r, row in enumerate(cells):
+        for c, cell in enumerate(row):
+            if cell == BLANK_CELL:
+                has_blank = True
+            else:
+                if r < min_row:
+                    min_row = r
+                if r > max_row:
+                    max_row = r
+                if c < min_col:
+                    min_col = c
+                if c > max_col:
+                    max_col = c
+
+    if not has_blank or max_row == -1:
+        return None
+
+    content_w = round((max_col - min_col + 1) / grid_w * width_inches, 2)
+    content_h = round((max_row - min_row + 1) / grid_h * height_inches, 2)
+    return {"width_inches": content_w, "height_inches": content_h}
+
+
 def apply_blank_mask_to_cells(
     cells: list[list[str]],
     blank_mask: set[tuple[int, int]],

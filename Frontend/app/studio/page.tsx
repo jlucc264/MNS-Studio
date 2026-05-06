@@ -25,6 +25,7 @@ import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
   chatAssistant,
+  ContentBounds,
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
@@ -449,6 +450,7 @@ function StudioPage() {
   const [finalizeError, setFinalizeError] = useState('')
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
   const [finalPreviewImagePath, setFinalPreviewImagePath] = useState<string | null>(null)
+  const [contentBounds, setContentBounds] = useState<ContentBounds | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
   const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
@@ -1071,6 +1073,7 @@ function StudioPage() {
       setPaletteReductionTarget(nextFullPaletteHexes.length || 128)
       setFinalPdfPath(null)
       setFinalPreviewImagePath(null)
+      setContentBounds(result.content_bounds ?? null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
       setActiveWorkflowStep(2)
@@ -2467,6 +2470,7 @@ function StudioPage() {
         lockAspectRatio={lockAspectRatio}
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
+        contentBounds={contentBounds}
       />
       <label
         style={{

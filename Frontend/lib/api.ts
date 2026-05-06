@@ -57,12 +57,18 @@ export type ChatResponse = {
   metadata?: Record<string, unknown>
 }
 
+export type ContentBounds = {
+  width_inches: number
+  height_inches: number
+}
+
 export type VisualizeResponse = {
   message: string
   stitch_preview_url: string
   palette: PaletteColor[]
   settings: Record<string, unknown>
   cells: string[][]
+  content_bounds: ContentBounds | null
 }
 
 
