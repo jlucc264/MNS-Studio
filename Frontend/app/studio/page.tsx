@@ -619,8 +619,9 @@ function StudioPage() {
         setOriginalPreviewImagePath(project.preview_image_url)
         setLastVisibleImageUrl(project.preview_image_url)
       }
-      if (project.pdf_url) setFinalPdfPath(project.pdf_url)
-      if (project.finalized && project.preview_image_url) setFinalPreviewImagePath(project.preview_image_url)
+      const isSupabaseUrl = (url: string) => url.includes('supabase.co')
+      if (project.pdf_url && isSupabaseUrl(project.pdf_url)) setFinalPdfPath(project.pdf_url)
+      if (project.finalized && project.preview_image_url && isSupabaseUrl(project.preview_image_url)) setFinalPreviewImagePath(project.preview_image_url)
 
       if (loadedCells.length > 0) {
         const settings: PreviewSettings = {
