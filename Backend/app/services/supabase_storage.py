@@ -9,9 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_supabase_url(value: str | None) -> str | None:
+    """Return the bare project URL, stripping any /rest/v1 path suffix."""
     if not value:
         return None
-    return value.rstrip("/")
+    url = value.rstrip("/")
+    for suffix in ("/rest/v1", "/rest"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    return url
 
 
 def _storage_object_path(prefix: str, local_path: Path) -> str:
