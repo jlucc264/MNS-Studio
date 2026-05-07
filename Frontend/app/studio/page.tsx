@@ -2788,8 +2788,8 @@ function StudioPage() {
               <strong style={{ color: '#3f382f', fontSize: 18 }}>Drop image file here</strong>
               <span>or click to choose a file</span>
             </div>
-            <button type="button" onClick={() => setShowChatDrawer(true)} style={btnSecondary}>
-              Import URL in chat
+            <button type="button" disabled style={{ ...btnSecondary, opacity: 0.5, cursor: 'default' }}>
+              Import URL in chat (Coming Soon)
             </button>
             {activeImagePath && <p style={{ margin: 0, color: '#5f7f5a' }}>Image loaded.</p>}
           </div>
@@ -3446,7 +3446,7 @@ function StudioPage() {
       >
         <button
           type="button"
-          onClick={() => setShowChatDrawer((current) => !current)}
+          disabled
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -3455,7 +3455,8 @@ function StudioPage() {
             border: 0,
             background: 'transparent',
             textAlign: 'left',
-            cursor: 'pointer',
+            cursor: 'default',
+            opacity: 0.5,
           }}
         >
           <span style={{ width: 36, height: 36, borderRadius: '50%', background: '#e5eee2', display: 'grid', placeItems: 'center', color: '#6e8d67', fontWeight: 800, fontSize: 22, lineHeight: 1 }}>
@@ -3463,7 +3464,7 @@ function StudioPage() {
           </span>
           <span style={{ display: 'grid', gap: 2 }}>
             <strong style={{ letterSpacing: 1, color: '#8a8177', fontSize: 12 }}>HELP</strong>
-            <span style={{ fontSize: 17 }}>Click to Expand Chat</span>
+            <span style={{ fontSize: 17 }}>Click to Expand Chat <span style={{ fontSize: 13, fontWeight: 400 }}>(Coming Soon)</span></span>
           </span>
         </button>
 
