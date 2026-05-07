@@ -2470,7 +2470,6 @@ function StudioPage() {
         lockAspectRatio={lockAspectRatio}
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
-        contentBounds={contentBounds}
       />
       <label
         style={{
@@ -2638,7 +2637,9 @@ function StudioPage() {
   } as const
   const previewStatsSettings = hasGeneratedPreview ? lastSettings : null
   const previewDesignLabel = previewStatsSettings
-    ? `${previewStatsSettings.width_inches.toFixed(1)}" × ${previewStatsSettings.height_inches.toFixed(1)}"`
+    ? contentBounds
+      ? `${contentBounds.width_inches}" × ${contentBounds.height_inches}"`
+      : `${previewStatsSettings.width_inches.toFixed(1)}" × ${previewStatsSettings.height_inches.toFixed(1)}"`
     : 'N/A'
   const previewCanvasLabel = previewStatsSettings
     ? `${(previewStatsSettings.width_inches + 2).toFixed(1)}" × ${(previewStatsSettings.height_inches + 2).toFixed(1)}"`

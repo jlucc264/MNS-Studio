@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect } from 'react'
-import type { ContentBounds } from '../lib/api'
-import { getCanvasForDesign, formatCents } from '../lib/api'
 
 export type PreviewSettings = {
   width_inches: number
@@ -59,7 +57,6 @@ type Props = {
   lockAspectRatio: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
-  contentBounds: ContentBounds | null
 }
 
 export default function PreviewControls({
@@ -68,7 +65,6 @@ export default function PreviewControls({
   lockAspectRatio,
   onSettingsChange,
   onLockAspectRatioChange,
-  contentBounds,
 }: Props) {
   const {
     width_inches: widthInches,
@@ -291,18 +287,6 @@ export default function PreviewControls({
           </select>
         </label>
       </div>
-
-      {contentBounds && (() => {
-        const canvas = getCanvasForDesign(contentBounds.width_inches, contentBounds.height_inches)
-        return (
-          <div style={{ fontSize: 11, color: '#6b7f66', background: '#f0f4ee', border: '1px solid #c8d8c4', borderRadius: 8, padding: '7px 10px', lineHeight: 1.4 }}>
-            <span style={{ fontWeight: 700 }}>Content area:</span> {contentBounds.width_inches}" × {contentBounds.height_inches}"
-            {canvas && (
-              <span style={{ color: '#8a8177' }}> — fits a <strong style={{ color: '#3f382f' }}>{canvas.label}"</strong> canvas ({formatCents(canvas.priceCents)})</span>
-            )}
-          </div>
-        )
-      })()}
 
       <div
         style={{
