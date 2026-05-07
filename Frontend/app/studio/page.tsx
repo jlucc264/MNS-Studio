@@ -25,7 +25,6 @@ import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
   chatAssistant,
-  ContentBounds,
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
@@ -450,7 +449,6 @@ function StudioPage() {
   const [finalizeError, setFinalizeError] = useState('')
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
   const [finalPreviewImagePath, setFinalPreviewImagePath] = useState<string | null>(null)
-  const [contentBounds, setContentBounds] = useState<ContentBounds | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
   const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
@@ -1073,7 +1071,6 @@ function StudioPage() {
       setPaletteReductionTarget(nextFullPaletteHexes.length || 128)
       setFinalPdfPath(null)
       setFinalPreviewImagePath(null)
-      setContentBounds(result.content_bounds ?? null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
       setActiveWorkflowStep(2)
@@ -2636,6 +2633,32 @@ function StudioPage() {
     lineHeight: 1.3,
   } as const
   const previewStatsSettings = hasGeneratedPreview ? lastSettings : null
+
+  const contentBounds = useMemo(() => {
+    if (!cells.length || !lastSettings) return null
+    const gridH = cells.length
+    const gridW = cells[0].length
+    let minRow = gridH, maxRow = -1, minCol = gridW, maxCol = -1
+    let hasBlank = false
+    for (let r = 0; r < gridH; r++) {
+      for (let c = 0; c < gridW; c++) {
+        if (cells[r][c] === BLANK_CELL) {
+          hasBlank = true
+        } else if (cells[r][c] !== FINISH_OUTLINE_CELL) {
+          if (r < minRow) minRow = r
+          if (r > maxRow) maxRow = r
+          if (c < minCol) minCol = c
+          if (c > maxCol) maxCol = c
+        }
+      }
+    }
+    if (!hasBlank || maxRow === -1) return null
+    return {
+      width_inches: Math.round((maxCol - minCol + 1) / gridW * lastSettings.width_inches * 100) / 100,
+      height_inches: Math.round((maxRow - minRow + 1) / gridH * lastSettings.height_inches * 100) / 100,
+    }
+  }, [cells, lastSettings])
+
   const previewDesignLabel = previewStatsSettings
     ? contentBounds
       ? `${contentBounds.width_inches}" × ${contentBounds.height_inches}"`
