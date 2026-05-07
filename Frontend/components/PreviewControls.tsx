@@ -104,7 +104,7 @@ export default function PreviewControls({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateColumns: 'repeat(2, 1fr)',
             gap: 3,
             padding: 3,
             border: '1px solid #d7d0c8',
@@ -115,7 +115,6 @@ export default function PreviewControls({
           {(
             [
               { value: 'photo', label: 'Photo' },
-              { value: 'stitched_photo', label: 'Stitched' },
               { value: 'graphic_art', label: 'Graphic' },
             ] as const
           ).map(({ value, label }) => (
@@ -141,11 +140,9 @@ export default function PreviewControls({
           ))}
         </div>
         <p style={{ margin: 0, fontSize: 11, color: '#8a8177', lineHeight: 1.35 }}>
-          {sourceType === 'stitched_photo'
-            ? 'For photographed needlepoint where fabric or canvas colors interfere.'
-            : sourceType === 'graphic_art'
-              ? 'For screenshots, logos, and sign art where crisp structure matters.'
-              : 'For regular photos and artwork.'}
+          {sourceType === 'graphic_art'
+            ? 'For screenshots, logos, and sign art where crisp structure matters.'
+            : 'For regular photos and artwork.'}
         </p>
       </div>
 
