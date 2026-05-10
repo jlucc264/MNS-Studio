@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
@@ -119,7 +119,7 @@ function GalleryImage({
   )
 }
 
-export default function GalleryPage() {
+function GalleryPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { session, user, signOut } = useAuth()
@@ -915,5 +915,13 @@ export default function GalleryPage() {
       {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
     </div>
+  )
+}
+
+export default function GalleryPageWrapper() {
+  return (
+    <Suspense>
+      <GalleryPage />
+    </Suspense>
   )
 }
