@@ -149,6 +149,7 @@ class GalleryCreateRequest(BaseModel):
     color_count: Optional[int] = None
     palette: Optional[list] = None
     has_outline: Optional[bool] = None
+    project_id: Optional[str] = None
 
 
 class GalleryItemResponse(BaseModel):
@@ -168,3 +169,5 @@ class GalleryItemResponse(BaseModel):
     has_outline: bool = False
     like_count: int = 0
     liked_by_me: bool = False
+    share_count: int = 0
+    project_id: Optional[str] = None

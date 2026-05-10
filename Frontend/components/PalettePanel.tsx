@@ -10,24 +10,34 @@ type PaletteColor = {
 
 type Props = {
   colors: PaletteColor[]
+  activeDesignColors: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
-  toolMode: 'paint' | 'select' | 'shape'
-  onToolModeChange: (mode: 'paint' | 'select' | 'shape') => void
+  toolMode: 'paint' | 'select' | 'shape' | 'merge'
+  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge') => void
   brushDensity: number
   onBrushDensityChange: (value: number) => void
   hasSelectedRegion: boolean
   selectedRegionCount: number
   selectionMergeSuggestions: PaletteColor[]
-  selectionOtherColors: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
-  onEyedropperSelection: () => void
   onSelect: (color: PaletteColor) => void
   onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
+  onOpenAddBrowser: () => void
+  onOpenSwapBrowser: (color: PaletteColor) => void
+  onOpenFillBrowser: () => void
+  onOpenBorderBrowser: () => void
+  onMergeColor: (color: PaletteColor) => void
+  onMergeColorInSelection: (color: PaletteColor) => void
+  onResetPalette: () => void
   shapeType: 'box' | 'semicircle' | 'line'
   onShapeTypeChange: (type: 'box' | 'semicircle' | 'line') => void
+  arcFlipped: boolean
+  onArcFlippedChange: (flipped: boolean) => void
+  arcFullCircle: boolean
+  onArcFullCircleChange: (full: boolean) => void
   shapeFillColor: string | null
   onShapeFillColorChange: (color: string | null) => void
   shapeBorderColor: string | null
@@ -36,10 +46,6 @@ type Props = {
   onShapeBorderSizeChange: (size: number) => void
 }
 
-const SPECIAL_COLORS: PaletteColor[] = [
-  { hex: '#FFFFFF', dmc_code: 'BLANC', dmc_name: 'White' },
-  { hex: '#000000', dmc_code: '310', dmc_name: 'Black' },
-]
 const BLANK_CELL = '__BLANK__'
 
 function hexToRgb(hex: string) {
@@ -59,6 +65,7 @@ function colorDistance(a: string, b: string) {
 
 export default function PalettePanel({
   colors,
+  activeDesignColors,
   activeColor,
   colorCountsByHex = {},
   toolMode,
@@ -68,15 +75,24 @@ export default function PalettePanel({
   hasSelectedRegion,
   selectedRegionCount,
   selectionMergeSuggestions,
-  selectionOtherColors,
   onApplyColorToSelection,
   onClearSelection,
-  onEyedropperSelection,
   onSelect,
   onSelectBlankCanvas,
   moreColors,
+  onOpenAddBrowser,
+  onOpenSwapBrowser,
+  onOpenFillBrowser,
+  onOpenBorderBrowser,
+  onMergeColor,
+  onMergeColorInSelection,
+  onResetPalette,
   shapeType,
   onShapeTypeChange,
+  arcFlipped,
+  onArcFlippedChange,
+  arcFullCircle,
+  onArcFullCircleChange,
   shapeFillColor,
   onShapeFillColorChange,
   shapeBorderColor,
@@ -84,18 +100,9 @@ export default function PalettePanel({
   shapeBorderSize,
   onShapeBorderSizeChange,
 }: Props) {
-  const [showOtherColors, setShowOtherColors] = useState(false)
-  const [showFillMoreColors, setShowFillMoreColors] = useState(false)
-  const [showBorderMoreColors, setShowBorderMoreColors] = useState(false)
-  const [showSelectionOtherColors, setShowSelectionOtherColors] = useState(false)
+  const [hoveredSwatchHex, setHoveredSwatchHex] = useState<string | null>(null)
 
-  const allOtherColors = useMemo(() => {
-    const byHex = new Map<string, PaletteColor>()
-    ;[...SPECIAL_COLORS, ...moreColors].forEach((color) => {
-      if (!byHex.has(color.hex)) byHex.set(color.hex, color)
-    })
-    return Array.from(byHex.values())
-  }, [moreColors])
+
 
   const fallbackSelectionSuggestions = useMemo(() => {
     if (!activeColor) return []
@@ -113,6 +120,20 @@ export default function PalettePanel({
       return a.dmc_code.localeCompare(b.dmc_code, undefined, { numeric: true })
     })
   }, [colorCountsByHex, colors])
+
+  const orderedActiveDesignColors = useMemo(() => {
+    return [...activeDesignColors].sort((a, b) => {
+      const aCount = colorCountsByHex[a.hex] ?? 0
+      const bCount = colorCountsByHex[b.hex] ?? 0
+      if (aCount !== bCount) return bCount - aCount
+      return a.dmc_code.localeCompare(b.dmc_code, undefined, { numeric: true })
+    })
+  }, [colorCountsByHex, activeDesignColors])
+
+  const shapePickerColors = useMemo(() => {
+    const activeHexes = new Set(orderedActiveDesignColors.map((c) => c.hex))
+    return [...orderedActiveDesignColors, ...orderedColors.filter((c) => !activeHexes.has(c.hex))]
+  }, [orderedActiveDesignColors, orderedColors])
 
   const activeColorInfo = useMemo(
     () => colors.find((c) => c.hex === activeColor) ?? null,
@@ -134,6 +155,7 @@ export default function PalettePanel({
   const isSelectTab = toolMode === 'select'
   const isCreateTab = !isSelectTab
   const isShapeTab = toolMode === 'shape'
+  const isMergeTab = toolMode === 'merge'
 
   return (
     <div
@@ -160,7 +182,7 @@ export default function PalettePanel({
       >
         <button
           type="button"
-          onClick={() => onToolModeChange(isShapeTab ? 'shape' : 'paint')}
+          onClick={() => onToolModeChange(isShapeTab ? 'shape' : isMergeTab ? 'merge' : 'paint')}
           style={{
             ...pill,
             background: isCreateTab ? '#3f382f' : 'transparent',
@@ -185,7 +207,7 @@ export default function PalettePanel({
       {/* Create tab content */}
       {isCreateTab && (
         <>
-          {/* Paint | Shape sub-toggle */}
+          {/* Paint | Merge | Shape sub-toggle */}
           <div
             style={{
               display: 'grid',
@@ -208,6 +230,20 @@ export default function PalettePanel({
             >
               ✏ Paint
             </button>
+            {/* Merge button hidden — code preserved */}
+            {false && (
+            <button
+              type="button"
+              onClick={() => onToolModeChange('merge')}
+              style={{
+                ...pill,
+                background: isMergeTab ? '#6e8d67' : 'transparent',
+                color: isMergeTab ? '#fff' : '#8a8177',
+              }}
+            >
+              ⊕ Merge
+            </button>
+            )}
             <button
               type="button"
               onClick={() => onToolModeChange('shape')}
@@ -284,11 +320,66 @@ export default function PalettePanel({
             </div>
           )}
 
+          {/* Merge mode card */}
+          {isMergeTab && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  border: '1px solid #e4ddd5',
+                  background: '#faf7f3',
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{ fontSize: 12, color: '#6f665b' }}>Drag to blend stitches into their nearest palette color</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#6f665b' }}>
+                  <span style={{ flexShrink: 0 }}>Brush size</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    value={brushDensity}
+                    onChange={(event) => onBrushDensityChange(Number(event.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ minWidth: 14, textAlign: 'right', fontWeight: 600 }}>{brushDensity}</span>
+                </label>
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase', flexShrink: 0 }}>Palette</div>
+              <div style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(34px, 1fr))', gap: 4 }}>
+                  {orderedColors.map((color) => (
+                    <div
+                      key={color.hex}
+                      title={`${color.dmc_code} – ${color.dmc_name}`}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 2,
+                        padding: '4px 2px',
+                        borderRadius: 5,
+                        border: '1px solid #e0d8cf',
+                      }}
+                    >
+                      <span style={{ width: '100%', height: 22, borderRadius: 3, background: color.hex, display: 'block', border: color.hex === '#FFFFFF' ? '1px solid #ccc' : '1px solid rgba(0,0,0,0.1)' }} />
+                      <span style={{ fontSize: 8, color: '#8a8177', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', textAlign: 'center' }}>{color.dmc_code}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Paint sub-tab: color grid */}
           {toolMode === 'paint' && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {/* Eraser + Add color fixed row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 5, flexShrink: 0 }}>
+            {/* Eraser row */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, flexShrink: 0 }}>
               {/* Eraser */}
               <div
                 style={{
@@ -334,89 +425,78 @@ export default function PalettePanel({
                 <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>Eraser</div>
               </div>
 
-              {/* Add color */}
-              {allOtherColors.length > 0 && (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 6,
-                    border: showOtherColors ? '2px solid #3f382f' : '1px solid #d5cec6',
-                    background: showOtherColors ? '#f5f3ef' : 'white',
-                    borderRadius: 8,
-                    padding: '5px 6px',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => setShowOtherColors((c) => !c)}
-                >
-                  <div
-                    style={{
-                      flex: 1,
-                      height: 26,
-                      border: showOtherColors ? '2px solid #111' : '1px solid #ccc',
-                      borderRadius: 5,
-                      background: showOtherColors ? '#3f382f' : '#fffdf8',
-                      display: 'grid',
-                      placeItems: 'center',
-                      color: showOtherColors ? '#fff' : '#5f574e',
-                      fontSize: 18,
-                      lineHeight: 1,
-                      fontWeight: 300,
-                    }}
-                  >
-                    +
-                  </div>
-                  <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>Add color</div>
-                </div>
-              )}
-            </div>
-
-            {/* DMC picker — expanded inline below the top row */}
-            {showOtherColors && allOtherColors.length > 0 && (
+              {/* Reset palette */}
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-                  gap: 5,
-                  maxHeight: 140,
-                  overflow: 'auto',
-                  padding: 6,
-                  border: '1px solid #e4ddd5',
+                  gap: 6,
+                  border: '1px solid #d5cec6',
+                  background: 'white',
                   borderRadius: 8,
-                  background: '#faf7f3',
-                  flexShrink: 0,
+                  padding: '5px 6px',
+                  cursor: 'pointer',
                 }}
+                onClick={onResetPalette}
               >
-                {allOtherColors.map((color) => (
-                  <button
-                    key={`other-${color.hex}`}
-                    type="button"
-                    onClick={() => { onSelect(color); setShowOtherColors(false) }}
-                    title={`${color.dmc_code} – ${color.dmc_name}`}
-                    style={{
-                      display: 'grid',
-                      justifyItems: 'center',
-                      gap: 3,
-                      padding: 4,
-                      border: activeColor === color.hex ? '2px solid #3f382f' : '1px solid #ccc',
-                      borderRadius: 6,
-                      background: 'white',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <div
+                <div
+                  style={{
+                    flex: 1,
+                    height: 26,
+                    border: '1px solid #ccc',
+                    borderRadius: 5,
+                    background: '#fffdf8',
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: '#5f574e',
+                    fontSize: 13,
+                    lineHeight: 1,
+                  }}
+                >
+                  ↺
+                </div>
+                <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>Reset palette</div>
+              </div>
+            </div>
+
+
+            {/* On canvas — active colors pinned section */}
+            {orderedActiveDesignColors.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase', flexShrink: 0 }}>On canvas</div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 4,
+                    flexShrink: 0,
+                  }}
+                >
+                  {orderedActiveDesignColors.map((color) => (
+                    <button
+                      key={`active-${color.hex}`}
+                      type="button"
+                      onClick={() => onSelect(color)}
+                      title={`${color.dmc_code} – ${color.dmc_name}`}
                       style={{
-                        width: 18,
-                        height: 18,
-                        borderRadius: 3,
+                        width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                        border: activeColor === color.hex ? '2px solid #3f382f' : '1px solid #bbb',
                         background: color.hex,
-                        border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none',
                       }}
                     />
-                    <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
-                  </button>
-                ))}
-              </div>
+                  ))}
+                </div>
+              </>
             )}
+
+            {/* Palette header + Browse button */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Your palette</div>
+              <button
+                type="button"
+                onClick={onOpenAddBrowser}
+                style={{ border: '1px solid #d5cec6', borderRadius: 5, padding: '2px 7px', background: '#fff', color: '#3f382f', fontSize: 10, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
+              >Browse →</button>
+            </div>
 
             {/* Color swatches — palette colors below */}
             <div
@@ -434,9 +514,6 @@ export default function PalettePanel({
 
               {orderedColors.map((color) => {
                 const selected = activeColor === color.hex
-                const showSelectionTray = false
-                const visibleSuggestions =
-                  selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
 
                 return (
                   <div
@@ -444,154 +521,27 @@ export default function PalettePanel({
                     style={{
                       display: 'grid',
                       gap: 6,
-                      gridColumn: showSelectionTray ? '1 / -1' : undefined,
                       border: selected ? '2px solid #3f382f' : '1px solid #d5cec6',
                       background: selected ? '#f5f3ef' : 'white',
                       borderRadius: 8,
                       padding: '5px 6px',
                     }}
                   >
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <button
-                        type="button"
-                        onClick={() => onSelect(color)}
-                        title={`${color.dmc_code} – ${color.dmc_name}`}
-                        style={{
-                          flex: 1,
-                          height: 26,
-                          backgroundColor: color.hex,
-                          border: selected ? '2px solid #111' : '1px solid #ccc',
-                          borderRadius: 5,
-                          cursor: 'pointer',
-                        }}
-                      />
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(color)}
+                      title={`${color.dmc_code} – ${color.dmc_name}`}
+                      style={{
+                        height: 26,
+                        backgroundColor: color.hex,
+                        border: selected ? '2px solid #111' : '1px solid #ccc',
+                        borderRadius: 5,
+                        cursor: 'pointer',
+                      }}
+                    />
                     <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>
                       {color.dmc_code}
                     </div>
-
-                    {showSelectionTray && (
-                      <div
-                        style={{
-                          display: 'grid',
-                          gap: 5,
-                          paddingTop: 4,
-                          borderTop: '1px solid rgba(0,0,0,0.08)',
-                        }}
-                      >
-                        <div style={{ fontSize: 10, color: '#6f665b' }}>
-                          Replace {hasSelectedRegion ? `${selectedRegionCount} selected stitches` : 'all matching stitches'} with
-                        </div>
-                        <div
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-                            gap: 6,
-                          }}
-                        >
-                          <button
-                            type="button"
-                            title="Null / blank canvas"
-                            onClick={() => onApplyColorToSelection(BLANK_CELL)}
-                            style={{
-                              height: 34,
-                              border: '1px solid #b8aea3',
-                              borderRadius: 6,
-                              background:
-                                'linear-gradient(135deg, #fffdf8 0%, #fffdf8 42%, #b23428 43%, #b23428 57%, #fffdf8 58%, #fffdf8 100%)',
-                              color: '#b23428',
-                              fontFamily: 'inherit',
-                              fontSize: 13,
-                              fontWeight: 800,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            X
-                          </button>
-                          {visibleSuggestions.map((suggestion) => (
-                            <button
-                              key={`suggestion-${suggestion.hex}`}
-                              type="button"
-                              title={`${suggestion.dmc_code} – ${suggestion.dmc_name}`}
-                              onClick={() => onApplyColorToSelection(suggestion.hex)}
-                              style={{
-                                height: 34,
-                                backgroundColor: suggestion.hex,
-                                border: '1px solid #bbb',
-                                borderRadius: 6,
-                                cursor: 'pointer',
-                              }}
-                            />
-                          ))}
-                        </div>
-
-                        {selectionOtherColors.length > 0 && (
-                          <div style={{ display: 'grid', gap: 3 }}>
-                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                onClick={() => setShowSelectionOtherColors((c) => !c)}
-                                style={{
-                                  border: '1px solid #d0c9bf',
-                                  background: '#fff',
-                                  borderRadius: 5,
-                                  padding: '2px 7px',
-                                  fontSize: 10,
-                                  fontFamily: 'inherit',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                {showSelectionOtherColors ? 'Hide' : 'Other colors'}
-                              </button>
-                              {showSelectionOtherColors && (
-                                <button
-                                  type="button"
-                                  onClick={onEyedropperSelection}
-                                  style={{
-                                    border: '1px solid #d0c9bf',
-                                    background: '#fff',
-                                    borderRadius: 5,
-                                    padding: '2px 7px',
-                                    fontSize: 10,
-                                    fontFamily: 'inherit',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  Eyedropper
-                                </button>
-                              )}
-                            </div>
-                            {showSelectionOtherColors && (
-                              <div
-                                style={{
-                                  display: 'grid',
-                                  gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
-                                  gap: 6,
-                                  maxHeight: 150,
-                                  overflow: 'auto',
-                                }}
-                              >
-                                {selectionOtherColors.map((c) => (
-                                  <button
-                                    key={`sel-other-${c.hex}`}
-                                    type="button"
-                                    title={`${c.dmc_code} – ${c.dmc_name}`}
-                                    onClick={() => onApplyColorToSelection(c.hex)}
-                                    style={{
-                                      height: 28,
-                                      backgroundColor: c.hex,
-                                      border: '1px solid #bbb',
-                                      borderRadius: 6,
-                                      cursor: 'pointer',
-                                    }}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )
               })}
@@ -630,6 +580,44 @@ export default function PalettePanel({
                 ))}
               </div>
 
+              {/* Arc controls */}
+              {shapeType === 'semicircle' && !arcFullCircle && (
+                <button
+                  type="button"
+                  title="Flip arc axis 90°"
+                  onClick={() => onArcFlippedChange(!arcFlipped)}
+                  style={{
+                    ...pill,
+                    padding: '6px 10px',
+                    border: '1px solid #d7d0c8',
+                    background: arcFlipped ? '#3f382f' : '#f0ece5',
+                    color: arcFlipped ? '#fff' : '#3f382f',
+                    fontSize: 12,
+                    alignSelf: 'stretch',
+                  }}
+                >
+                  ↻ Flip axis
+                </button>
+              )}
+              {shapeType === 'semicircle' && (
+                <button
+                  type="button"
+                  title="Toggle full circle"
+                  onClick={() => onArcFullCircleChange(!arcFullCircle)}
+                  style={{
+                    ...pill,
+                    padding: '6px 10px',
+                    border: '1px solid #d7d0c8',
+                    background: arcFullCircle ? '#3f382f' : '#f0ece5',
+                    color: arcFullCircle ? '#fff' : '#3f382f',
+                    fontSize: 12,
+                    alignSelf: 'stretch',
+                  }}
+                >
+                  ◯ Full circle
+                </button>
+              )}
+
               {shapeType !== 'line' && <div
                 style={{
                   display: 'grid',
@@ -641,18 +629,32 @@ export default function PalettePanel({
                 }}
               >
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#6f665b' }}>Fill color</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => onShapeFillColorChange(BLANK_CELL)}
+                    title="Erase — removes stitches inside shape"
+                    style={{
+                      width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                      border: shapeFillColor === BLANK_CELL ? '2px solid #3f382f' : '1px solid #bbb',
+                      background: '#fffdf8', display: 'grid', placeItems: 'center',
+                    }}
+                  >
+                    <span style={{ width: 16, height: 9, borderRadius: 2, border: '1px solid #6f665b', background: 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)', transform: 'rotate(-18deg)', display: 'block', boxShadow: '0 1px 0 rgba(0,0,0,0.1)' }} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => onShapeFillColorChange(null)}
-                    title="No fill"
+                    title="No fill — leave stitches inside unchanged"
                     style={{
                       width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
                       border: shapeFillColor === null ? '2px solid #3f382f' : '1px solid #bbb',
-                      background: 'linear-gradient(135deg, #fffdf8 0%, #fffdf8 42%, #b23428 43%, #b23428 57%, #fffdf8 58%, #fffdf8 100%)',
+                      background: '#fffdf8', display: 'grid', placeItems: 'center',
                     }}
-                  />
-                  {orderedColors.map((color) => (
+                  >
+                    <span style={{ width: 14, height: 14, borderRadius: 2, border: '1.5px dashed #9a9287', display: 'block' }} />
+                  </button>
+                  {shapePickerColors.map((color) => (
                     <button
                       key={`fill-${color.hex}`}
                       type="button"
@@ -665,32 +667,17 @@ export default function PalettePanel({
                       }}
                     />
                   ))}
-                  {allOtherColors.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => { setShowFillMoreColors((c) => !c); setShowBorderMoreColors(false) }}
-                      title="Add color to palette"
-                      style={{
-                        width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
-                        border: showFillMoreColors ? '2px solid #3f382f' : '1px solid #bbb',
-                        background: showFillMoreColors ? '#3f382f' : '#fffdf8',
-                        color: showFillMoreColors ? '#fff' : '#5f574e',
-                        fontSize: 18, fontWeight: 300, lineHeight: 1,
-                        display: 'grid', placeItems: 'center',
-                      }}
-                    >+</button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={onOpenFillBrowser}
+                    title="Browse all colors"
+                    style={{
+                      width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                      border: '1px solid #bbb', background: '#fffdf8', color: '#5f574e',
+                      fontSize: 18, fontWeight: 300, lineHeight: 1, display: 'grid', placeItems: 'center',
+                    }}
+                  >+</button>
                 </div>
-                {showFillMoreColors && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5, maxHeight: 140, overflow: 'auto', padding: 6, border: '1px solid #e4ddd5', borderRadius: 8, background: '#faf7f3' }}>
-                    {allOtherColors.map((color) => (
-                      <button key={`fill-other-${color.hex}`} type="button" onClick={() => { onSelect(color); onShapeFillColorChange(color.hex); setShowFillMoreColors(false) }} title={`${color.dmc_code} – ${color.dmc_name}`} style={{ display: 'grid', justifyItems: 'center', gap: 3, padding: 4, border: '1px solid #ccc', borderRadius: 6, background: 'white', cursor: 'pointer' }}>
-                        <div style={{ width: 18, height: 18, borderRadius: 3, background: color.hex, border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none' }} />
-                        <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>}
 
               <div
@@ -701,10 +688,23 @@ export default function PalettePanel({
                   borderRadius: 10,
                   border: '1px solid #e4ddd5',
                   background: '#faf7f3',
+                  marginTop: 6,
                 }}
               >
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#6f665b' }}>{shapeType === 'line' ? 'Fill color' : 'Border color'}</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => onShapeBorderColorChange(BLANK_CELL)}
+                    title="Erase — removes stitches along border"
+                    style={{
+                      width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                      border: shapeBorderColor === BLANK_CELL ? '2px solid #3f382f' : '1px solid #bbb',
+                      background: '#fffdf8', display: 'grid', placeItems: 'center',
+                    }}
+                  >
+                    <span style={{ width: 16, height: 9, borderRadius: 2, border: '1px solid #6f665b', background: 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)', transform: 'rotate(-18deg)', display: 'block', boxShadow: '0 1px 0 rgba(0,0,0,0.1)' }} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => onShapeBorderColorChange(null)}
@@ -712,10 +712,12 @@ export default function PalettePanel({
                     style={{
                       width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
                       border: shapeBorderColor === null ? '2px solid #3f382f' : '1px solid #bbb',
-                      background: 'linear-gradient(135deg, #fffdf8 0%, #fffdf8 42%, #b23428 43%, #b23428 57%, #fffdf8 58%, #fffdf8 100%)',
+                      background: '#fffdf8', display: 'grid', placeItems: 'center',
                     }}
-                  />
-                  {orderedColors.map((color) => (
+                  >
+                    <span style={{ width: 14, height: 14, borderRadius: 2, border: '1.5px dashed #9a9287', display: 'block' }} />
+                  </button>
+                  {shapePickerColors.map((color) => (
                     <button
                       key={`border-${color.hex}`}
                       type="button"
@@ -728,32 +730,17 @@ export default function PalettePanel({
                       }}
                     />
                   ))}
-                  {allOtherColors.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => { setShowBorderMoreColors((c) => !c); setShowFillMoreColors(false) }}
-                      title="Add color to palette"
-                      style={{
-                        width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
-                        border: showBorderMoreColors ? '2px solid #3f382f' : '1px solid #bbb',
-                        background: showBorderMoreColors ? '#3f382f' : '#fffdf8',
-                        color: showBorderMoreColors ? '#fff' : '#5f574e',
-                        fontSize: 18, fontWeight: 300, lineHeight: 1,
-                        display: 'grid', placeItems: 'center',
-                      }}
-                    >+</button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={onOpenBorderBrowser}
+                    title="Browse all colors"
+                    style={{
+                      width: 26, height: 26, borderRadius: 5, padding: 0, flexShrink: 0, cursor: 'pointer',
+                      border: '1px solid #bbb', background: '#fffdf8', color: '#5f574e',
+                      fontSize: 18, fontWeight: 300, lineHeight: 1, display: 'grid', placeItems: 'center',
+                    }}
+                  >+</button>
                 </div>
-                {showBorderMoreColors && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5, maxHeight: 140, overflow: 'auto', padding: 6, border: '1px solid #e4ddd5', borderRadius: 8, background: '#faf7f3' }}>
-                    {allOtherColors.map((color) => (
-                      <button key={`border-other-${color.hex}`} type="button" onClick={() => { onSelect(color); onShapeBorderColorChange(color.hex); setShowBorderMoreColors(false) }} title={`${color.dmc_code} – ${color.dmc_name}`} style={{ display: 'grid', justifyItems: 'center', gap: 3, padding: 4, border: '1px solid #ccc', borderRadius: 6, background: 'white', cursor: 'pointer' }}>
-                        <div style={{ width: 18, height: 18, borderRadius: 3, background: color.hex, border: color.hex === '#FFFFFF' ? '1px solid #bbb' : 'none' }} />
-                        <span style={{ fontSize: 10, lineHeight: 1 }}>{color.dmc_code}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#6f665b' }}>
                   <span style={{ flexShrink: 0 }}>{shapeType === 'line' ? 'Line size' : 'Border size'}</span>
                   <input
@@ -772,6 +759,10 @@ export default function PalettePanel({
 
               <div
                 style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
                   fontSize: 12,
                   color: '#8a8177',
                   padding: '6px 10px',
@@ -781,7 +772,17 @@ export default function PalettePanel({
                   lineHeight: 1.4,
                 }}
               >
-                Drag on the canvas to place shape
+                <span>Drag on canvas to place</span>
+                <button
+                  type="button"
+                  onClick={onResetPalette}
+                  title="Reset palette to original"
+                  style={{
+                    border: '1px solid #d5cec6', borderRadius: 5, padding: '2px 7px',
+                    background: '#fff', color: '#6f665b', fontSize: 10, fontFamily: 'inherit',
+                    cursor: 'pointer', flexShrink: 0, lineHeight: 1.4,
+                  }}
+                >↺ Reset</button>
               </div>
             </div>
           )}
@@ -805,7 +806,7 @@ export default function PalettePanel({
               flexShrink: 0,
             }}
           >
-            <span>Choose a palette color to replace it everywhere, or drag a smaller region first.</span>
+            <span>Choose a color to highlight all active cells, or select a region first. Can select multiple regions by holding down CTRL.</span>
             {hasSelectedRegion && (
               <button
                 type="button"
@@ -838,14 +839,17 @@ export default function PalettePanel({
               paddingRight: 2,
             }}
           >
-            {orderedColors.map((color) => {
+            {orderedActiveDesignColors.map((color) => {
               const selected = activeColor === color.hex
               const visibleSuggestions =
                 selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
+              const hovered = hoveredSwatchHex === color.hex
 
               return (
                 <div
                   key={`sel-${color.dmc_code}-${color.hex}`}
+                  onMouseEnter={() => setHoveredSwatchHex(color.hex)}
+                  onMouseLeave={() => setHoveredSwatchHex(null)}
                   style={{
                     display: 'grid',
                     gap: 6,
@@ -856,7 +860,7 @@ export default function PalettePanel({
                     padding: '5px 6px',
                   }}
                 >
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <button
                       type="button"
                       onClick={() => onSelect(color)}
@@ -870,6 +874,29 @@ export default function PalettePanel({
                         cursor: 'pointer',
                       }}
                     />
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); hasSelectedRegion ? onMergeColorInSelection(color) : onMergeColor(color) }}
+                      title={hasSelectedRegion ? 'Merge selected stitches into nearest color' : 'Merge all into nearest color'}
+                      style={{
+                        flexShrink: 0,
+                        width: 18,
+                        height: 26,
+                        border: '1px solid #d5cec6',
+                        borderRadius: 4,
+                        background: hovered ? '#f0ece4' : 'transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 11,
+                        color: hovered ? '#3f382f' : 'transparent',
+                        transition: 'color 0.1s, background 0.1s',
+                        padding: 0,
+                      }}
+                    >
+                      ⊕
+                    </button>
                   </div>
                   <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>{color.dmc_code}</div>
 
@@ -881,21 +908,19 @@ export default function PalettePanel({
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 6 }}>
                         <button
                           type="button"
-                          title="Null / blank canvas"
+                          title="Erase stitches"
                           onClick={() => onApplyColorToSelection(BLANK_CELL)}
                           style={{
                             height: 34,
-                            border: '1px solid #b8aea3',
+                            border: '1px solid #d5cec6',
                             borderRadius: 6,
-                            background: 'linear-gradient(135deg, #fffdf8 0%, #fffdf8 42%, #b23428 43%, #b23428 57%, #fffdf8 58%, #fffdf8 100%)',
-                            color: '#b23428',
-                            fontFamily: 'inherit',
-                            fontSize: 13,
-                            fontWeight: 800,
+                            background: '#fffdf8',
                             cursor: 'pointer',
+                            display: 'grid',
+                            placeItems: 'center',
                           }}
                         >
-                          X
+                          <span style={{ width: 16, height: 9, borderRadius: 2, border: '1px solid #6f665b', background: 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)', transform: 'rotate(-18deg)', display: 'block', boxShadow: '0 1px 0 rgba(0,0,0,0.1)' }} />
                         </button>
                         {visibleSuggestions.map((suggestion) => (
                           <button
@@ -912,73 +937,26 @@ export default function PalettePanel({
                             }}
                           />
                         ))}
+                        <button
+                          type="button"
+                          title="Browse all colors"
+                          onClick={() => onOpenSwapBrowser(color)}
+                          style={{
+                            height: 34,
+                            border: '1px solid #bbb',
+                            borderRadius: 6,
+                            background: '#fffdf8',
+                            color: '#5f574e',
+                            fontSize: 18,
+                            fontWeight: 300,
+                            lineHeight: 1,
+                            display: 'grid',
+                            placeItems: 'center',
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        >+</button>
                       </div>
-
-                      {selectionOtherColors.length > 0 && (
-                        <div style={{ display: 'grid', gap: 3 }}>
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              onClick={() => setShowSelectionOtherColors((c) => !c)}
-                              style={{
-                                border: '1px solid #d0c9bf',
-                                background: '#fff',
-                                borderRadius: 5,
-                                padding: '2px 7px',
-                                fontSize: 10,
-                                fontFamily: 'inherit',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {showSelectionOtherColors ? 'Hide' : 'Other colors'}
-                            </button>
-                            {showSelectionOtherColors && (
-                              <button
-                                type="button"
-                                onClick={onEyedropperSelection}
-                                style={{
-                                  border: '1px solid #d0c9bf',
-                                  background: '#fff',
-                                  borderRadius: 5,
-                                  padding: '2px 7px',
-                                  fontSize: 10,
-                                  fontFamily: 'inherit',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Eyedropper
-                              </button>
-                            )}
-                          </div>
-                          {showSelectionOtherColors && (
-                            <div
-                              style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
-                                gap: 6,
-                                maxHeight: 150,
-                                overflow: 'auto',
-                              }}
-                            >
-                              {selectionOtherColors.map((c) => (
-                                <button
-                                  key={`sel-other-${c.hex}`}
-                                  type="button"
-                                  title={`${c.dmc_code} – ${c.dmc_name}`}
-                                  onClick={() => onApplyColorToSelection(c.hex)}
-                                  style={{
-                                    height: 28,
-                                    backgroundColor: c.hex,
-                                    border: '1px solid #bbb',
-                                    borderRadius: 6,
-                                    cursor: 'pointer',
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>

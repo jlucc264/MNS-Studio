@@ -7,13 +7,16 @@ type ShapeCell = { row: number; col: number; color: string }
 type Props = {
   cells: string[][]
   activeColor: string | null
-  toolMode: 'paint' | 'select' | 'shape'
+  toolMode: 'paint' | 'select' | 'shape' | 'merge'
   meshCount: 13 | 18
   brushDensity: number
   onSelectionChange?: (selection: DesignSelectionRect[] | null) => void
+  onDesignAreaMiss?: () => void
   onPaintStart: () => void
   onPaintCells: (coords: Array<[number, number]>) => void
   shapeType?: 'box' | 'semicircle' | 'line'
+  arcFlipped?: boolean
+  arcFullCircle?: boolean
   shapeFillColor?: string | null
   shapeBorderColor?: string | null
   shapeBorderSize?: number
@@ -104,25 +107,39 @@ function getSemicircleCells(
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
   totalRows: number, totalCols: number,
-  borderSize = 1
+  borderSize = 1,
+  flipped = false
 ): Array<{ row: number; col: number; color: string }> {
   const topRow = Math.min(r1, r2)
   const botRow = Math.max(r1, r2)
   const leftCol = Math.min(c1, c2)
   const rightCol = Math.max(c1, c2)
-  const opensDown = r2 >= r1
-  const cx = (leftCol + rightCol) / 2
-  const cy = opensDown ? topRow : botRow
   const width = Math.max(1, rightCol - leftCol)
   const height = Math.max(1, botRow - topRow)
-  const a = width / 2 + 0.5
-  const b = height + 0.5
   const result: Array<{ row: number; col: number; color: string }> = []
+
+  let cx: number, cy: number, a: number, b: number
+  let isOnOpenSide: (row: number, col: number) => boolean
+
+  if (!flipped) {
+    // Original drag-based up/down
+    const opensDown = r2 >= r1
+    cx = (leftCol + rightCol) / 2
+    cy = opensDown ? topRow : botRow
+    a = width / 2 + 0.5; b = height + 0.5
+    isOnOpenSide = (row) => opensDown ? row >= cy : row <= cy
+  } else {
+    // Horizontal axis — drag-based left/right
+    const opensRight = c2 >= c1
+    cy = (topRow + botRow) / 2
+    cx = opensRight ? leftCol : rightCol
+    a = width + 0.5; b = height / 2 + 0.5
+    isOnOpenSide = (_row, col) => opensRight ? col >= cx : col <= cx
+  }
 
   function isInsideSemicircle(row: number, col: number) {
     if (row < 0 || row >= totalRows || col < 0 || col >= totalCols) return false
-    const isOnOpenSide = opensDown ? row >= cy : row <= cy
-    if (!isOnOpenSide) return false
+    if (!isOnOpenSide(row, col)) return false
     const nx = (col + 0.5 - cx) / a
     const ny = (row + 0.5 - cy) / b
     return nx * nx + ny * ny <= 1
@@ -148,12 +165,59 @@ function getSemicircleCells(
   return result
 }
 
+function getFullCircleCells(
+  r1: number, c1: number, r2: number, c2: number,
+  fillColor: string | null, borderColor: string | null,
+  totalRows: number, totalCols: number,
+  borderSize = 1,
+): Array<{ row: number; col: number; color: string }> {
+  const topRow = Math.min(r1, r2)
+  const botRow = Math.max(r1, r2)
+  const leftCol = Math.min(c1, c2)
+  const rightCol = Math.max(c1, c2)
+  const width = Math.max(1, rightCol - leftCol)
+  const height = Math.max(1, botRow - topRow)
+  const cx = (leftCol + rightCol) / 2
+  const cy = (topRow + botRow) / 2
+  const a = width / 2 + 0.5
+  const b = height / 2 + 0.5
+  const result: Array<{ row: number; col: number; color: string }> = []
+
+  function isInside(row: number, col: number) {
+    if (row < 0 || row >= totalRows || col < 0 || col >= totalCols) return false
+    const nx = (col + 0.5 - cx) / a
+    const ny = (row + 0.5 - cy) / b
+    return nx * nx + ny * ny <= 1
+  }
+
+  for (let row = Math.max(0, topRow); row <= Math.min(totalRows - 1, botRow); row++) {
+    for (let col = Math.max(0, leftCol); col <= Math.min(totalCols - 1, rightCol); col++) {
+      if (!isInside(row, col)) continue
+      let isBorder = false
+      outer: for (let dr = -borderSize; dr <= borderSize; dr++) {
+        for (let dc = -(borderSize - Math.abs(dr)); dc <= borderSize - Math.abs(dr); dc++) {
+          if (dr === 0 && dc === 0) continue
+          if (!isInside(row + dr, col + dc)) { isBorder = true; break outer }
+        }
+      }
+      if (isBorder) {
+        if (borderColor) result.push({ row, col, color: borderColor })
+      } else {
+        if (fillColor) result.push({ row, col, color: fillColor })
+      }
+    }
+  }
+  return result
+}
+
 function computeShapeCells(
   shapeType: 'box' | 'semicircle' | 'line',
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
   totalRows: number, totalCols: number,
-  borderSize = 1
+  borderSize = 1,
+  arcFlipped = false,
+  arcFullCircle = false,
 ): Array<{ row: number; col: number; color: string }> {
   const cr1 = Math.max(0, Math.min(totalRows - 1, r1))
   const cc1 = Math.max(0, Math.min(totalCols - 1, c1))
@@ -161,7 +225,8 @@ function computeShapeCells(
   const cc2 = Math.max(0, Math.min(totalCols - 1, c2))
   if (shapeType === 'box') return getBoxCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize)
   if (shapeType === 'line') return getLineCells(cr1, cc1, cr2, cc2, borderColor, fillColor, totalRows, totalCols, borderSize)
-  return getSemicircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize)
+  if (arcFullCircle) return getFullCircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize)
+  return getSemicircleCells(cr1, cc1, cr2, cc2, fillColor, borderColor, totalRows, totalCols, borderSize, arcFlipped)
 }
 
 // ── End shape helpers ────────────────────────────────────────────────────────
@@ -408,9 +473,12 @@ export default function GridEditor({
   meshCount,
   brushDensity,
   onSelectionChange,
+  onDesignAreaMiss,
   onPaintStart,
   onPaintCells,
   shapeType,
+  arcFlipped = false,
+  arcFullCircle = false,
   shapeFillColor,
   shapeBorderColor,
   shapeBorderSize = 1,
@@ -447,7 +515,7 @@ export default function GridEditor({
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
-  const lastPaintedCellRef = useRef<string | null>(null)
+  const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
   const gestureStartZoomRef = useRef(100)
   const zoomPercentRef = useRef(100)
   const activeColorRef = useRef<string | null>(activeColor)
@@ -550,7 +618,9 @@ export default function GridEditor({
             shapeFillColor ?? null,
             shapeBorderColor ?? null,
             cells.length, cells[0]?.length ?? 0,
-            shapeBorderSize
+            shapeBorderSize,
+            arcFlipped,
+            arcFullCircle,
           )
           if (shapeCells.length) onApplyShapeCells(shapeCells)
         }
@@ -560,11 +630,25 @@ export default function GridEditor({
       }
 
       if (isSelecting && dragSelectionRect) {
-        const nextSelectionRects = isAddingSelection
-          ? [...selectionRects, dragSelectionRect]
-          : [dragSelectionRect]
-        setSelectionRects(nextSelectionRects)
-        onSelectionChange?.(nextSelectionRects)
+        const _rows = cells.length
+        const _cols = cells[0]?.length ?? 0
+        const minRow = Math.min(dragSelectionRect.startRow, dragSelectionRect.endRow)
+        const maxRow = Math.max(dragSelectionRect.startRow, dragSelectionRect.endRow)
+        const minCol = Math.min(dragSelectionRect.startCol, dragSelectionRect.endCol)
+        const maxCol = Math.max(dragSelectionRect.startCol, dragSelectionRect.endCol)
+        const hitsDesign = minRow < _rows && maxRow >= 0 && minCol < _cols && maxCol >= 0
+
+        if (hitsDesign) {
+          const nextSelectionRects = isAddingSelection
+            ? [...selectionRects, dragSelectionRect]
+            : [dragSelectionRect]
+          setSelectionRects(nextSelectionRects)
+          onSelectionChange?.(nextSelectionRects)
+        } else {
+          setSelectionRects([])
+          onSelectionChange?.(null)
+          onDesignAreaMiss?.()
+        }
         liveSelectionRectRef.current = null
       }
 
@@ -588,6 +672,7 @@ export default function GridEditor({
     toolMode, shapeEndCell, shapeType, shapeFillColor, shapeBorderColor,
     onApplyShapeCells, cells,
     dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects,
+    onDesignAreaMiss,
   ])
 
   const borderStitches = Math.floor(1 * meshCount)
@@ -688,11 +773,41 @@ export default function GridEditor({
 
   const paintCell = useCallback(
     (row: number, col: number) => {
-      const cellKey = `${row}-${col}-${brushDensityRef.current}`
-      if (lastPaintedCellRef.current === cellKey) return
+      const last = lastPaintedCellRef.current
+      if (last && last.row === row && last.col === col) return
 
-      lastPaintedCellRef.current = cellKey
-      onPaintCells(buildBrushCoords(row, col))
+      // Bresenham's line — fill any skipped cells when pointer moves fast
+      const points: Array<[number, number]> = []
+      if (last) {
+        let r = last.row, c = last.col
+        const dr = Math.abs(row - r), dc = Math.abs(col - c)
+        const sr = r < row ? 1 : -1, sc = c < col ? 1 : -1
+        let err = dr - dc
+        while (true) {
+          points.push([r, c])
+          if (r === row && c === col) break
+          const e2 = 2 * err
+          if (e2 > -dc) { err -= dc; r += sr }
+          if (e2 < dr) { err += dr; c += sc }
+        }
+      } else {
+        points.push([row, col])
+      }
+
+      lastPaintedCellRef.current = { row, col }
+
+      const seen = new Set<string>()
+      const allCoords: Array<[number, number]> = []
+      for (const [r, c] of points) {
+        for (const coord of buildBrushCoords(r, c)) {
+          const key = `${coord[0]}-${coord[1]}`
+          if (!seen.has(key)) {
+            seen.add(key)
+            allCoords.push(coord)
+          }
+        }
+      }
+      onPaintCells(allCoords)
     },
     [buildBrushCoords, onPaintCells]
   )
@@ -945,7 +1060,7 @@ export default function GridEditor({
         return
       }
 
-      if (!activeColorRef.current) return
+      if (toolMode !== 'merge' && !activeColorRef.current) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
       if (!hit) return
@@ -1242,7 +1357,9 @@ export default function GridEditor({
         shapeFillColor ?? null,
         shapeBorderColor ?? null,
         rows, cols,
-        shapeBorderSize
+        shapeBorderSize,
+        arcFlipped,
+        arcFullCircle,
       )
       for (const cell of previewCells) {
         const stageRow = cell.row + contentOriginRow + borderStitches
@@ -1250,7 +1367,7 @@ export default function GridEditor({
         const x = gridOriginX + stageCol * cellSize
         const y = gridOriginY + stageRow * cellSize
         context.globalAlpha = 0.7
-        context.fillStyle = cell.color
+        context.fillStyle = cell.color === BLANK_CELL ? '#fffdf8' : cell.color
         context.fillRect(x, y, cellSize, cellSize)
         context.globalAlpha = 1
         context.strokeStyle = 'rgba(0,0,0,0.25)'
@@ -1596,7 +1713,7 @@ export default function GridEditor({
                   onPointerMove={handleCanvasPointerMove}
                   style={{
                     display: 'block',
-                    cursor: activeColor ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    cursor: (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
                     touchAction: 'pan-x pan-y',
                   }}
                 />

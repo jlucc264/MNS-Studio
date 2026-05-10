@@ -5,13 +5,13 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
-import { assetUrl, deleteProject, listProjects, type Project } from '../../lib/api'
+import { assetUrl, deleteProject, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
 import { ProfileModal } from '../../components/ProfileModal'
 import { NavAccountControls } from '../../components/NavAccountControls'
 
 const btnPrimary = {
   padding: '9px 18px',
-  border: 'none',
+  border: '1px solid #5c7856',
   borderRadius: 8,
   fontFamily: 'inherit',
   fontSize: 13,
@@ -19,10 +19,11 @@ const btnPrimary = {
   cursor: 'pointer',
   background: '#6e8d67',
   color: '#fff',
+  lineHeight: 1.3,
 } as const
 
 const btnSecondary = {
-  padding: '7px 14px',
+  padding: '8px 14px',
   border: '1px solid #d7d0c8',
   borderRadius: 8,
   fontFamily: 'inherit',
@@ -31,6 +32,7 @@ const btnSecondary = {
   cursor: 'pointer',
   background: '#fff',
   color: '#3f382f',
+  lineHeight: 1.3,
 } as const
 
 function formatDate(iso: string) {
@@ -57,6 +59,30 @@ export default function DraftsPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [hasActiveDesign] = useState(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      const saved = localStorage.getItem('mns_active_design')
+      if (!saved) return false
+      const d = JSON.parse(saved)
+      return !!(d.previewImagePath || d.cells?.length > 0)
+    } catch { return false }
+  })
+  const [showNewDraftConfirm, setShowNewDraftConfirm] = useState(false)
+  const [pendingOpenProjectId, setPendingOpenProjectId] = useState<string | null>(null)
+  const [activeDraftName, setActiveDraftName] = useState('Untitled')
+  const [showNamingModal, setShowNamingModal] = useState(false)
+  const [pendingAction, setPendingAction] = useState<'new' | 'open' | null>(null)
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('mns_active_design')
+      if (saved) {
+        const d = JSON.parse(saved)
+        if (d.draftName) setActiveDraftName(d.draftName)
+      }
+    } catch {}
+  }, [])
 
   useEffect(() => {
     if (authLoading) return
@@ -90,6 +116,101 @@ export default function DraftsPage() {
     setConfirmDelete(null)
   }
 
+  function handleNewDraft() {
+    if (hasActiveDesign) {
+      setShowNewDraftConfirm(true)
+    } else {
+      router.push('/studio')
+    }
+  }
+
+  function handleOpenDraft(projectId: string) {
+    if (hasActiveDesign) {
+      setPendingOpenProjectId(projectId)
+    } else {
+      router.push(`/studio?project=${projectId}`)
+    }
+  }
+
+  async function saveActiveDraft(name: string) {
+    try {
+      const saved = localStorage.getItem('mns_active_design')
+      if (saved && session?.access_token) {
+        const d = JSON.parse(saved)
+        const payload: ProjectSavePayload = {
+          name: name.trim() || 'Untitled',
+          palette: d.allPalette || null,
+          cells: d.cells || null,
+          source_image_url: d.activeImagePath || null,
+          preview_image_url: d.previewImagePath || null,
+          width_inches: d.draftSettings?.width_inches ?? null,
+          height_inches: d.draftSettings?.height_inches ?? null,
+          mesh_count: d.draftSettings?.mesh_count ?? null,
+          color_count: d.draftSettings?.color_count ?? null,
+          contrast_level: d.draftSettings?.contrast_level ?? null,
+          source_type: d.draftSettings?.source_type ?? null,
+          show_grid: d.draftSettings?.show_grid ?? null,
+          clean_background: d.draftSettings?.clean_background ?? null,
+          simplify_colors: d.draftSettings?.simplify_colors ?? null,
+          strengthen_dark_detail: d.draftSettings?.strengthen_dark_detail ?? null,
+          preserve_accents: d.draftSettings?.preserve_accents ?? null,
+          finalized: false,
+        }
+        if (d.savedProjectId) {
+          await updateProject(d.savedProjectId, payload, session.access_token)
+        } else {
+          await saveProject(payload, session.access_token)
+        }
+      }
+    } catch {}
+  }
+
+  function needsNaming() {
+    return !activeDraftName.trim() || activeDraftName.trim() === 'Untitled'
+  }
+
+  async function confirmNewDraft(save: boolean) {
+    if (save && needsNaming()) {
+      setShowNewDraftConfirm(false)
+      setPendingAction('new')
+      setShowNamingModal(true)
+      return
+    }
+    setShowNewDraftConfirm(false)
+    if (save) await saveActiveDraft(activeDraftName)
+    localStorage.removeItem('mns_active_design')
+    router.push('/studio')
+  }
+
+  async function confirmOpenDraft(save: boolean) {
+    if (save && needsNaming()) {
+      setPendingAction('open')
+      setShowNamingModal(true)
+      return
+    }
+    const projectId = pendingOpenProjectId
+    setPendingOpenProjectId(null)
+    if (save) await saveActiveDraft(activeDraftName)
+    localStorage.removeItem('mns_active_design')
+    router.push(`/studio?project=${projectId}`)
+  }
+
+  async function confirmNaming() {
+    const action = pendingAction
+    const projectId = pendingOpenProjectId
+    await saveActiveDraft(activeDraftName)
+    localStorage.removeItem('mns_active_design')
+    setShowNamingModal(false)
+    setPendingAction(null)
+    setPendingOpenProjectId(null)
+    setShowNewDraftConfirm(false)
+    if (action === 'open' && projectId) {
+      router.push(`/studio?project=${projectId}`)
+    } else {
+      router.push('/studio')
+    }
+  }
+
   async function handleSignOut() {
     setShowLogoutConfirm(false)
     setConfirmDelete(null)
@@ -106,8 +227,8 @@ export default function DraftsPage() {
     <div
       style={{
         minHeight: '100vh',
-        display: 'grid',
-        gridTemplateRows: '72px 1fr',
+        display: 'flex',
+        flexDirection: 'column',
         background: '#f5f1ea',
         fontFamily: 'Georgia, "Times New Roman", serif',
         color: '#3f382f',
@@ -172,6 +293,13 @@ export default function DraftsPage() {
         </div>
       </nav>
 
+      {hasActiveDesign && (
+        <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center' }}>
+          <span style={{ color: '#5c4a3a', fontSize: 14 }}>You have an active design in progress.</span>
+          <Link href="/studio" style={{ color: '#3f382f', fontWeight: 700, fontSize: 14 }}>Continue editing →</Link>
+        </div>
+      )}
+
       {/* Content */}
       <main style={{ padding: '32px 32px 48px', maxWidth: 1000, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
         <div style={{ display: 'grid', gap: 24 }}>
@@ -200,20 +328,18 @@ export default function DraftsPage() {
                 title="Active Drafts"
                 emptyText="No active drafts right now."
                 projects={activeProjects}
-                confirmDelete={confirmDelete}
                 onDeleteRequest={setConfirmDelete}
-                onDeleteCancel={() => setConfirmDelete(null)}
-                onDeleteConfirm={handleDelete}
+                onNewDraft={() => void handleNewDraft()}
+                onOpenDraft={handleOpenDraft}
               />
               {finalizedProjects.length > 0 && (
                 <ProjectSection
                   title="Finalized Designs"
                   emptyText=""
                   projects={finalizedProjects}
-                  confirmDelete={confirmDelete}
                   onDeleteRequest={setConfirmDelete}
-                  onDeleteCancel={() => setConfirmDelete(null)}
-                  onDeleteConfirm={handleDelete}
+                  onNewDraft={() => void handleNewDraft()}
+                  onOpenDraft={handleOpenDraft}
                   finalized
                 />
               )}
@@ -223,7 +349,7 @@ export default function DraftsPage() {
       </main>
       {showLogoutConfirm && (
         <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
-          <div onClick={(event) => event.stopPropagation()} style={{ background: 'white', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+          <div onClick={(event) => event.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
@@ -238,6 +364,113 @@ export default function DraftsPage() {
         </div>
       )}
       {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
+
+      {showNewDraftConfirm && (
+        <div role="dialog" aria-modal="true" onClick={() => setShowNewDraftConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Start a new design?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You have an active design in progress. Would you like to save it before starting fresh?
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="button" onClick={() => void confirmNewDraft(true)} style={btnPrimary}>
+                Save and start new
+              </button>
+              <button type="button" onClick={() => void confirmNewDraft(false)} style={btnSecondary}>
+                Discard and start new
+              </button>
+              <button type="button" onClick={() => setShowNewDraftConfirm(false)} style={{ ...btnSecondary, color: '#8a8177' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingOpenProjectId && !showNamingModal && (
+        <div role="dialog" aria-modal="true" onClick={() => setPendingOpenProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Open this design?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You have an active design in progress. Save it before switching?
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="button" onClick={() => void confirmOpenDraft(true)} style={btnPrimary}>
+                Save and open
+              </button>
+              <button type="button" onClick={() => void confirmOpenDraft(false)} style={btnSecondary}>
+                Discard and open
+              </button>
+              <button type="button" onClick={() => setPendingOpenProjectId(null)} style={{ ...btnSecondary, color: '#8a8177' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNamingModal && (
+        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 18 }}>
+          <div style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Name your design</h2>
+            </div>
+            <input
+              value={activeDraftName === 'Untitled' ? '' : activeDraftName}
+              onChange={(e) => setActiveDraftName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && activeDraftName.trim()) void confirmNaming() }}
+              placeholder="Design name"
+              autoFocus
+              style={{ border: '1px solid #d7d0c8', borderRadius: 8, padding: '10px 12px', font: 'inherit', fontSize: 14, width: '100%', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => void confirmNaming()}
+                disabled={!activeDraftName.trim()}
+                style={{ ...btnPrimary, opacity: !activeDraftName.trim() ? 0.5 : 1, cursor: !activeDraftName.trim() ? 'not-allowed' : 'pointer' }}
+              >
+                Save and continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (() => {
+        const project = projects.find((p) => p.id === confirmDelete)
+        const isFinalized = project ? Boolean(project.finalized || project.pdf_url) : false
+        return (
+          <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 18 }}>
+            <div style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 400, maxWidth: '100%', display: 'grid', gap: 16, boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+              <div style={{ display: 'grid', gap: 6 }}>
+                <h2 style={{ margin: 0, fontSize: 20 }}>Delete this design?</h2>
+                <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                  {isFinalized
+                    ? 'This will permanently delete the design, its PDF, and remove it from the gallery if it was shared.'
+                    : 'This will permanently delete this draft. This cannot be undone.'}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setConfirmDelete(null)} style={btnSecondary}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDelete(confirmDelete)}
+                  style={{ ...btnSecondary, color: '#b0453a', borderColor: '#e0b0aa' }}
+                >
+                  Delete permanently
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -246,19 +479,17 @@ function ProjectSection({
   title,
   emptyText,
   projects,
-  confirmDelete,
   onDeleteRequest,
-  onDeleteCancel,
-  onDeleteConfirm,
+  onNewDraft,
+  onOpenDraft,
   finalized = false,
 }: {
   title: string
   emptyText: string
   projects: Project[]
-  confirmDelete: string | null
   onDeleteRequest: (id: string) => void
-  onDeleteCancel: () => void
-  onDeleteConfirm: (id: string) => Promise<void>
+  onNewDraft: () => void
+  onOpenDraft: (id: string) => void
   finalized?: boolean
 }) {
   return (
@@ -280,7 +511,7 @@ function ProjectSection({
               gap: 16,
             }}
           >
-            <NewDraftCard />
+            <NewDraftCard onClick={onNewDraft} />
           </div>
         )
       ) : (
@@ -291,16 +522,14 @@ function ProjectSection({
             gap: 16,
           }}
         >
-          {!finalized && <NewDraftCard />}
+          {!finalized && <NewDraftCard onClick={onNewDraft} />}
           {projects.map((project) => (
             <DraftCard
               key={project.id}
               project={project}
               dimensions={formatDimensions(project)}
-              confirmingDelete={confirmDelete === project.id}
               onDeleteRequest={() => onDeleteRequest(project.id)}
-              onDeleteCancel={onDeleteCancel}
-              onDeleteConfirm={() => void onDeleteConfirm(project.id)}
+              onOpen={() => onOpenDraft(project.id)}
               finalized={finalized}
             />
           ))}
@@ -310,10 +539,11 @@ function ProjectSection({
   )
 }
 
-function NewDraftCard() {
+function NewDraftCard({ onClick }: { onClick: () => void }) {
   return (
-    <Link
-      href="/studio"
+    <button
+      type="button"
+      onClick={onClick}
       style={{
         minHeight: 282,
         border: '2px dashed #d7d0c8',
@@ -321,9 +551,11 @@ function NewDraftCard() {
         background: '#fffdf8',
         display: 'grid',
         placeItems: 'center',
-        textDecoration: 'none',
         color: '#7f776d',
         boxSizing: 'border-box',
+        cursor: 'pointer',
+        width: '100%',
+        fontFamily: 'inherit',
       }}
     >
       <span
@@ -344,25 +576,21 @@ function NewDraftCard() {
       >
         +
       </span>
-    </Link>
+    </button>
   )
 }
 
 function DraftCard({
   project,
   dimensions,
-  confirmingDelete,
   onDeleteRequest,
-  onDeleteCancel,
-  onDeleteConfirm,
+  onOpen,
   finalized = false,
 }: {
   project: Project
   dimensions: string | null
-  confirmingDelete: boolean
   onDeleteRequest: () => void
-  onDeleteCancel: () => void
-  onDeleteConfirm: () => void
+  onOpen: () => void
   finalized?: boolean
 }) {
   const reportUrl = assetUrl(project.pdf_url)
@@ -372,7 +600,7 @@ function DraftCard({
       style={{
         background: '#fff',
         border: '1px solid #e7e1d8',
-        borderRadius: 14,
+        borderRadius: 10,
         overflow: 'hidden',
         boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
         display: 'grid',
@@ -430,56 +658,36 @@ function DraftCard({
           Edited {formatDate(project.updated_at)}
         </div>
 
-        {confirmingDelete ? (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>Delete this design?</p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="button" onClick={onDeleteConfirm} style={{ ...btnSecondary, color: '#b0453a', borderColor: '#e0b0aa', flex: 1 }}>
-                Delete
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {finalized ? (
+            <>
+              <button type="button" onClick={onOpen} style={{ ...btnPrimary, flex: 1, minWidth: 92 }}>
+                Manage
               </button>
-              <button type="button" onClick={onDeleteCancel} style={{ ...btnSecondary, flex: 1 }}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {finalized ? (
-              <>
-                <Link
-                  href={`/studio?project=${project.id}`}
-                  style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
+              {reportUrl ? (
+                <a
+                  href={reportUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
                 >
-                  Manage
-                </Link>
-                {reportUrl ? (
-                  <a
-                    href={reportUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
-                  >
-                    View PDF
-                  </a>
-                ) : (
-                  <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', flex: 1, minWidth: 92 }}>
-                    PDF unavailable
-                  </button>
-                )}
-              </>
-            ) : (
-              <Link
-                href={`/studio?project=${project.id}`}
-                style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center' }}
-              >
-                Open
-              </Link>
-            )}
-            <button type="button" onClick={onDeleteRequest} style={{ ...btnSecondary, padding: '7px 10px' }}>
-              ×
+                  View PDF
+                </a>
+              ) : (
+                <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', flex: 1, minWidth: 92 }}>
+                  PDF unavailable
+                </button>
+              )}
+            </>
+          ) : (
+            <button type="button" onClick={onOpen} style={{ ...btnPrimary, flex: 1 }}>
+              Open
             </button>
-          </div>
-        )}
+          )}
+          <button type="button" onClick={onDeleteRequest} style={{ ...btnSecondary, padding: '7px 10px' }}>
+            ×
+          </button>
+        </div>
       </div>
     </div>
   )

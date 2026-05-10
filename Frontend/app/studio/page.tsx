@@ -16,6 +16,7 @@ import ChatPanel from '../../components/ChatPanel'
 import GridEditor, { type DesignSelectionRect } from '../../components/GridEditor'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
+import { ColorBrowserModal } from '../../components/ColorBrowserModal'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { ProfileModal } from '../../components/ProfileModal'
@@ -28,6 +29,7 @@ import {
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
+  fetchGalleryItemByProject,
   finalizePreview,
   formatCents,
   getCanvasForDesign,
@@ -36,6 +38,7 @@ import {
   PaletteColor,
   publishGalleryItem,
   saveProject,
+  updateGalleryItem,
   updateProject,
   uploadImage,
 } from '../../lib/api'
@@ -79,6 +82,11 @@ const MIN_PALETTE_STATE_OVERLAP_RATIO = 0.6
 const MOBILE_BREAKPOINT = 980
 const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
+
+function estimateSkeins(stitchCount: number, meshCount: number): number {
+  const stitchesPerSkein = meshCount >= 18 ? 350 : 200
+  return Math.max(1, Math.ceil(stitchCount / stitchesPerSkein))
+}
 
 function cloneCells(source: string[][]) {
   return source.map((row) => [...row])
@@ -358,6 +366,19 @@ function getSettingsKey(settings: PreviewSettings | null) {
   })
 }
 
+const MAX_PRINT_SHORT = 6
+const MAX_PRINT_LONG = 10
+
+function clampPrintDimensions(w: number, h: number): { width_inches: number; height_inches: number } {
+  let width = Math.max(0.5, Math.min(w, MAX_PRINT_LONG))
+  let height = Math.max(0.5, Math.min(h, MAX_PRINT_LONG))
+  if (width > MAX_PRINT_SHORT && height > MAX_PRINT_SHORT) {
+    if (height <= width) height = MAX_PRINT_SHORT
+    else width = MAX_PRINT_SHORT
+  }
+  return { width_inches: Number(width.toFixed(2)), height_inches: Number(height.toFixed(2)) }
+}
+
 const DEFAULT_SETTINGS: PreviewSettings = {
   width_inches: 5,
   height_inches: 5,
@@ -435,8 +456,10 @@ function StudioPage() {
   const [redoStack, setRedoStack] = useState<ColorEditSnapshot[]>([])
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge'>('paint')
   const [shapeType, setShapeType] = useState<'box' | 'semicircle' | 'line'>('box')
+  const [arcFlipped, setArcFlipped] = useState(false)
+  const [arcFullCircle, setArcFullCircle] = useState(false)
   const [shapeFillColor, setShapeFillColor] = useState<string | null>(null)
   const [shapeBorderColor, setShapeBorderColor] = useState<string | null>(null)
   const [shapeBorderSize, setShapeBorderSize] = useState(1)
@@ -444,6 +467,7 @@ function StudioPage() {
   const [selectedRegions, setSelectedRegions] = useState<DesignSelectionRect[]>([])
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
   const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
+  const [finishApplied, setFinishApplied] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [finalizeError, setFinalizeError] = useState('')
@@ -457,8 +481,9 @@ function StudioPage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(1280)
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
-  const [showChatDrawer, setShowChatDrawer] = useState(false)
+  const [showChatDrawer, _setShowChatDrawer] = useState(false)
   const [stagedUploadDragActive, setStagedUploadDragActive] = useState(false)
+  const [uploadTipsOpen, setUploadTipsOpen] = useState(false)
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('Untitled')
   const [showDraftNameModal, setShowDraftNameModal] = useState(false)
@@ -467,6 +492,8 @@ function StudioPage() {
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
+  const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
+  const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
@@ -476,15 +503,22 @@ function StudioPage() {
   const [printCheckoutLoading, setPrintCheckoutLoading] = useState(false)
   const [printCheckoutError, setPrintCheckoutError] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
+  const [dimensionLimitHit, setDimensionLimitHit] = useState(false)
   const [draftSaveError, setDraftSaveError] = useState('')
+  const [showColorBrowser, setShowColorBrowser] = useState(false)
+  const [colorBrowserTarget, setColorBrowserTarget] = useState<'add' | 'swap' | 'fill' | 'border'>('add')
+  const [colorBrowserSwapFrom, setColorBrowserSwapFrom] = useState<PaletteColor | null>(null)
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
   const stagedUploadInputRef = useRef<HTMLInputElement | null>(null)
   const projectLoadedRef = useRef(false)
+  const toolModeRef = useRef(toolMode)
+  useEffect(() => { toolModeRef.current = toolMode }, [toolMode])
   const searchParams = useSearchParams()
 
   const clearActiveCanvas = useCallback(() => {
+    localStorage.removeItem('mns_active_design')
     latestApplyRequestIdRef.current += 1
     setActiveImagePath(null)
     setImportedAspectRatio(null)
@@ -512,6 +546,7 @@ function StudioPage() {
     setSelectedRegions([])
     setManualCellOverrides({})
     setFinishOutlineBackups({})
+    setFinishApplied(false)
     setLoading(false)
     setShowFinalizeModal(false)
     setFinalPdfPath(null)
@@ -564,6 +599,30 @@ function StudioPage() {
   }, [clearActiveCanvas, router, signOut])
 
   const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts') => {
+    if (previewImagePath || cells.length > 0) {
+      try {
+        localStorage.setItem('mns_active_design', JSON.stringify({
+          activeImagePath,
+          previewImagePath,
+          originalPreviewImagePath,
+          lastVisibleImageUrl,
+          allPalette,
+          previewPalette,
+          enabledColorHexes,
+          cells,
+          originalCells,
+          manualCellOverrides,
+          draftSettings,
+          lastSettings,
+          savedProjectId,
+          draftName,
+          hasGeneratedPreview,
+          viewMode,
+          activeWorkflowStep,
+          importedAspectRatio,
+        }))
+      } catch {}
+    }
     setAuthPrompt(null)
     setShowLogoutConfirm(false)
     setShowProfileModal(false)
@@ -571,12 +630,23 @@ function StudioPage() {
     setShowFinalizeModal(false)
     setShowGalleryPublishModal(false)
     router.push(href)
-  }, [router])
+  }, [router, activeImagePath, previewImagePath, originalPreviewImagePath, lastVisibleImageUrl, allPalette, previewPalette, enabledColorHexes, cells, originalCells, manualCellOverrides, draftSettings, lastSettings, savedProjectId, draftName, hasGeneratedPreview, viewMode, activeWorkflowStep, importedAspectRatio])
 
   useEffect(() => {
     router.prefetch('/gallery')
     router.prefetch('/drafts')
   }, [router])
+
+  useEffect(() => {
+    if (!hasGeneratedPreview) return
+    if (toolMode === 'paint') {
+      setColorBrowserTarget('add')
+      setColorBrowserSwapFrom(null)
+      setShowColorBrowser(true)
+    } else if (toolMode === 'select' || toolMode === 'merge') {
+      setShowColorBrowser(false)
+    }
+  }, [toolMode, hasGeneratedPreview])
 
   useEffect(() => {
     const updateViewportWidth = () => {
@@ -596,7 +666,46 @@ function StudioPage() {
 
   useEffect(() => {
     const projectId = searchParams.get('project')
-    if (!projectId || !session?.access_token || projectLoadedRef.current) return
+
+    if (!projectId) {
+      if (projectLoadedRef.current) return
+      const saved = localStorage.getItem('mns_active_design')
+      if (!saved) return
+      projectLoadedRef.current = true
+      try {
+        const d = JSON.parse(saved)
+        if (d.activeImagePath) setActiveImagePath(d.activeImagePath)
+        if (d.previewImagePath) {
+          setPreviewImagePath(d.previewImagePath)
+          setOriginalPreviewImagePath(d.originalPreviewImagePath ?? d.previewImagePath)
+          setLastVisibleImageUrl(d.lastVisibleImageUrl ?? d.previewImagePath)
+        }
+        if (d.allPalette?.length) {
+          setAllPalette(d.allPalette)
+          setPreviewPalette(d.previewPalette ?? d.allPalette)
+          setEnabledColorHexes(d.enabledColorHexes ?? d.allPalette.map((c: PaletteColor) => c.hex))
+          setActivePaintColor(d.allPalette[0]?.hex ?? null)
+        }
+        if (d.cells?.length) {
+          setCells(d.cells)
+          setOriginalCells(d.originalCells ?? d.cells)
+        }
+        if (d.manualCellOverrides) setManualCellOverrides(d.manualCellOverrides)
+        if (d.draftSettings) {
+          setDraftSettings(d.draftSettings)
+          setImportedAspectRatio(d.importedAspectRatio ?? null)
+        }
+        if (d.lastSettings) setLastSettings(d.lastSettings)
+        if (d.savedProjectId) setSavedProjectId(d.savedProjectId)
+        if (d.draftName) setDraftName(d.draftName)
+        if (d.hasGeneratedPreview) setHasGeneratedPreview(true)
+        if (d.viewMode) setViewMode(d.viewMode)
+        if (d.activeWorkflowStep) setActiveWorkflowStep(d.activeWorkflowStep)
+      } catch {}
+      return
+    }
+
+    if (!session?.access_token || projectLoadedRef.current) return
     projectLoadedRef.current = true
 
     getProject(projectId, session.access_token).then((project) => {
@@ -622,6 +731,11 @@ function StudioPage() {
       const isSupabaseUrl = (url: string) => url.includes('supabase.co')
       if (project.pdf_url && isSupabaseUrl(project.pdf_url)) setFinalPdfPath(project.pdf_url)
       if (project.finalized && project.preview_image_url && isSupabaseUrl(project.preview_image_url)) setFinalPreviewImagePath(project.preview_image_url)
+      if (project.finalized) {
+        fetchGalleryItemByProject(project.id).then((item) => {
+          if (item) setGalleryItemId(item.id)
+        }).catch(() => {})
+      }
 
       if (loadedCells.length > 0) {
         const settings: PreviewSettings = {
@@ -675,7 +789,8 @@ function StudioPage() {
     () => hasGeneratedPreview && getSettingsKey(draftSettings) !== getSettingsKey(lastSettings),
     [draftSettings, hasGeneratedPreview, lastSettings]
   )
-  const currentDesignPalette = useMemo(() => buildPaletteForCells(cells), [allDmcColors, allPalette, cells, previewPalette])
+  const isBlankCanvas = !activeImagePath && hasGeneratedPreview
+  const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
   const currentDesignStitchCount = useMemo(
     () => Object.values(currentDesignColorCounts).reduce((total, count) => total + count, 0),
@@ -774,22 +889,6 @@ function StudioPage() {
       .filter((color): color is PaletteColor => Boolean(color))
       .slice(0, 6)
   }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegionBounds])
-  const selectionOtherColors = useMemo(() => {
-    const preferredHexOrder = ['#FFFFFF', '#000000']
-    const suggestionHexes = new Set(selectionMergeSuggestions.map((color) => color.hex))
-    const availableColors = allDmcColors
-      .filter((color, index, source) => {
-        if (color.hex === activePaintColor || suggestionHexes.has(color.hex)) return false
-        return source.findIndex((candidate) => candidate.hex === color.hex) === index
-      })
-    const preferredColors = preferredHexOrder
-      .map((hex) => availableColors.find((color) => color.hex === hex))
-      .filter((color): color is PaletteColor => Boolean(color))
-    const preferredSet = new Set(preferredColors.map((color) => color.hex))
-
-    return [...preferredColors, ...availableColors.filter((color) => !preferredSet.has(color.hex))]
-  }, [activePaintColor, allDmcColors, selectionMergeSuggestions])
-
   const applyImportedImage = useCallback((url: string) => {
     latestApplyRequestIdRef.current += 1
     setUploadError(null)
@@ -1060,10 +1159,11 @@ function StudioPage() {
       )
       setOriginalCells(nextOriginalCells)
       setCells(finalCells)
-      setActivePaintColor(nextActivePaintColor)
+      setActivePaintColor(toolModeRef.current === 'select' ? null : nextActivePaintColor)
       setRemovalMode(shouldReapplyPaletteState ? previousRemovalMode : 'fill')
       setManualCellOverrides(shouldReapplyManualOverrides ? previousManualCellOverrides : {})
       setFinishOutlineBackups({})
+      setFinishApplied(false)
       setUndoStack([])
       setRedoStack([])
       setLastSettings(previewSettings)
@@ -1073,6 +1173,7 @@ function StudioPage() {
       setFinalPreviewImagePath(null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
+      if (!hasGeneratedPreview) { setToolMode('select'); setActivePaintColor(null) }
       setActiveWorkflowStep(2)
       setSelectedRegions([])
     } finally {
@@ -1120,7 +1221,11 @@ function StudioPage() {
   }, [activeImagePath, draftSettings, hasGeneratedPreview, lastSettings])
 
   function updateSettings(patch: Partial<PreviewSettings>) {
-    setDraftSettings((current) => ({ ...current, ...patch }))
+    setDraftSettings((current) => {
+      const next = { ...current, ...patch }
+      const { width_inches, height_inches } = clampPrintDimensions(next.width_inches, next.height_inches)
+      return { ...next, width_inches, height_inches }
+    })
   }
 
   function applyEnabledPalette(nextEnabledColorHexes: string[], nextRemovalMode = removalMode) {
@@ -1137,7 +1242,7 @@ function StudioPage() {
       setCells(sourceCells)
       setRemovalMode(nextRemovalMode)
       setActivePaintColor((current) => {
-        if (!current) return sourcePalette[0]?.hex ?? '#FFFFFF'
+        if (!current) return toolModeRef.current === 'select' ? null : sourcePalette[0]?.hex ?? '#FFFFFF'
         if (current === BLANK_CELL) return current
         if (current === '#FFFFFF') return current
         return fullPaletteHexes.includes(current) ? current : sourcePalette[0]?.hex ?? '#FFFFFF'
@@ -1165,7 +1270,7 @@ function StudioPage() {
     setCells(collapsed.cells)
     setRemovalMode(nextRemovalMode)
     setActivePaintColor((current) => {
-      if (!current) return collapsed.palette[0]?.hex ?? '#FFFFFF'
+      if (!current) return toolModeRef.current === 'select' ? null : collapsed.palette[0]?.hex ?? '#FFFFFF'
       if (current === BLANK_CELL) return current
       if (current === '#FFFFFF') return current
       return resolvedEnabledColorHexes.includes(current) ? current : collapsed.palette[0]?.hex ?? '#FFFFFF'
@@ -1312,6 +1417,45 @@ function StudioPage() {
     setFinalPreviewImagePath(null)
   }
 
+  function handleMergeCells(coords: Array<[number, number]>) {
+    if (!coords.length) return
+    const palette = displayPalette
+
+    let nextCells: string[][] | null = null
+    setCells((current) => {
+      let changed = false
+      const updatedCells = current.map((row) => [...row])
+      coords.forEach(([row, col]) => {
+        if (row < 0 || row >= updatedCells.length || col < 0 || col >= updatedCells[row].length) return
+        const currentColor = updatedCells[row][col]
+        if (!currentColor || currentColor === BLANK_CELL || currentColor === FINISH_OUTLINE_CELL) return
+        const nearest = palette
+          .filter((c) => c.hex !== currentColor)
+          .sort((a, b) => {
+            const dr1 = parseInt(currentColor.slice(1,3),16)-parseInt(a.hex.slice(1,3),16)
+            const dg1 = parseInt(currentColor.slice(3,5),16)-parseInt(a.hex.slice(3,5),16)
+            const db1 = parseInt(currentColor.slice(5,7),16)-parseInt(a.hex.slice(5,7),16)
+            const dr2 = parseInt(currentColor.slice(1,3),16)-parseInt(b.hex.slice(1,3),16)
+            const dg2 = parseInt(currentColor.slice(3,5),16)-parseInt(b.hex.slice(3,5),16)
+            const db2 = parseInt(currentColor.slice(5,7),16)-parseInt(b.hex.slice(5,7),16)
+            return (dr1**2+dg1**2+db1**2) - (dr2**2+dg2**2+db2**2)
+          })[0]
+        if (!nearest || nearest.hex === currentColor) return
+        updatedCells[row][col] = nearest.hex
+        changed = true
+      })
+      if (!changed) return current
+      nextCells = updatedCells
+      return updatedCells
+    })
+
+    if (nextCells) {
+      refreshPreviewPalette(nextCells)
+      setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
+    }
+  }
+
   function handleApplyColorToSelection(targetHex: string) {
     if (!activePaintColor || !cells.length) return
 
@@ -1437,6 +1581,7 @@ function StudioPage() {
 
     pushUndoSnapshot()
     setFinishOutlineBackups({})
+    setFinishApplied(true)
     updateCellsWithManualOverrides(nextCells)
   }
 
@@ -1492,6 +1637,7 @@ function StudioPage() {
 
     pushUndoSnapshot()
     setFinishOutlineBackups(nextOutlineBackups)
+    setFinishApplied(true)
     updateCellsWithManualOverrides(nextCells)
   }
 
@@ -1689,40 +1835,6 @@ function StudioPage() {
     return `Top palette colors: ${lines.join(', ')}.`
   }
 
-  async function handleEyedropperSelection() {
-    if (!selectedRegions.length) return
-
-    const EyeDropperApi = (window as typeof window & { EyeDropper?: EyeDropperConstructor }).EyeDropper
-    if (!EyeDropperApi) {
-      setUploadError('Eyedropper is not supported in this browser.')
-      return
-    }
-
-    try {
-      const eyeDropper = new EyeDropperApi()
-      const result = await eyeDropper.open()
-      const nearestColor = allDmcColors.reduce<PaletteColor | null>((closest, candidate) => {
-        if (!closest) return candidate
-        return colorDistance(result.sRGBHex, candidate.hex) < colorDistance(result.sRGBHex, closest.hex)
-          ? candidate
-          : closest
-      }, null)
-
-      if (!nearestColor) {
-        setUploadError('Could not match the sampled color to a DMC color.')
-        return
-      }
-
-      handleApplyColorToSelection(nearestColor.hex)
-      setActivePaintColor(nearestColor.hex)
-      setUploadError(null)
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      setUploadError('Could not sample a color from the screen.')
-    }
-  }
 
   function recolorOutsideBorder(targetHex: string) {
     if (!cells.length) return 0
@@ -2236,7 +2348,7 @@ function StudioPage() {
     await handleChatUpload(file)
   }
 
-  async function handleFinalize() {
+  async function handleFinalize(previousPdfUrl: string | null = null) {
     if (!session?.access_token) {
       setAuthPrompt('finalize')
       setShowFinalizeModal(false)
@@ -2244,36 +2356,33 @@ function StudioPage() {
     }
 
     const settingsForFinalize = lastSettings
-    if (
-      finalPdfPath ||
-      !settingsForFinalize ||
-      !cells.length ||
-      hasPendingPreviewSettings
-    ) {
+    if (!settingsForFinalize || !cells.length || hasPendingPreviewSettings) {
       return
     }
 
     setLoading(true)
     setFinalizeError('')
     try {
+      const finalWidth = contentBounds?.width_inches ?? settingsForFinalize.width_inches
+      const finalHeight = contentBounds?.height_inches ?? settingsForFinalize.height_inches
       const result = await finalizePreview({
         preview_url: previewImagePath,
-        width_inches: settingsForFinalize.width_inches,
-        height_inches: settingsForFinalize.height_inches,
+        width_inches: finalWidth,
+        height_inches: finalHeight,
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
         show_grid: settingsForFinalize.show_grid,
         palette: currentDesignPalette,
         cells,
-        previous_pdf_url: finalPdfPath,
+        previous_pdf_url: previousPdfUrl,
       })
 
       const existingId = activeDraftProjectId
       const finalizedPayload = {
         name: draftName.trim() || 'Untitled',
-        width_inches: settingsForFinalize.width_inches,
-        height_inches: settingsForFinalize.height_inches,
+        width_inches: finalWidth,
+        height_inches: finalHeight,
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
@@ -2298,6 +2407,20 @@ function StudioPage() {
         setSavedProjectId(project.id)
       }
 
+      if (galleryItemId) {
+        await updateGalleryItem(
+          galleryItemId,
+          {
+            preview_image_url: result.preview_image_url,
+            pdf_url: result.pdf_url,
+            color_count: currentDesignPalette.length,
+            palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
+            has_outline: Object.keys(finishOutlineBackups).length > 0,
+          },
+          session.access_token,
+        ).catch(() => {})
+      }
+
       setFinalPdfPath(result.pdf_url)
       setFinalPreviewImagePath(result.preview_image_url)
       setPreviewImagePath(result.preview_image_url)
@@ -2310,6 +2433,7 @@ function StudioPage() {
       setGalleryStep('form')
       setPrintCheckoutError('')
       setShowFinalizeModal(false)
+      setShowRefinalizeConfirm(false)
       setShowPostFinalizeOptions(true)
     } catch (err) {
       setFinalizeError(err instanceof Error ? err.message : 'Something went wrong generating the PDF.')
@@ -2341,7 +2465,7 @@ function StudioPage() {
     setGalleryStatus('posting')
     setGalleryError('')
     try {
-      await publishGalleryItem(
+      const publishedItem = await publishGalleryItem(
         {
           title,
           tags: galleryTags
@@ -2357,9 +2481,11 @@ function StudioPage() {
           color_count: currentDesignPalette.length,
           palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
           has_outline: Object.keys(finishOutlineBackups).length > 0,
+          project_id: savedProjectId ?? null,
         },
         session.access_token,
       )
+      setGalleryItemId(publishedItem.id)
       setGalleryStatus('posted')
       finishFinalizeFlow()
     } catch (err) {
@@ -2395,8 +2521,11 @@ function StudioPage() {
 
   const statusBlock = (
     <>
-      {loading && <p style={{ margin: 0 }}>Working...</p>}
+      {loading && !hasGeneratedPreview && <p style={{ margin: 0 }}>Working...</p>}
       {uploadError && <p style={{ color: '#b00020', margin: 0 }}>{uploadError}</p>}
+      {dimensionLimitHit && (
+        <p style={{ margin: 0, color: '#b00020' }}>Max Print Area is 10&quot; x 6&quot;.</p>
+      )}
       {hasPendingPreviewSettings && !loading && (
         <p style={{ margin: 0, color: '#8a5a00' }}>
           Settings changed. Waiting for the stitch preview to refresh before finalizing.
@@ -2465,8 +2594,13 @@ function StudioPage() {
         importedAspectRatio={importedAspectRatio}
         settings={draftSettings}
         lockAspectRatio={lockAspectRatio}
+        isBlankCanvas={isBlankCanvas}
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
+        onDimensionClamped={() => {
+          setDimensionLimitHit(true)
+          setTimeout(() => setDimensionLimitHit(false), 3000)
+        }}
       />
       <label
         style={{
@@ -2477,6 +2611,8 @@ function StudioPage() {
           fontSize: 12,
           lineHeight: 1.1,
           color: '#3f382f',
+          opacity: isBlankCanvas ? 0.4 : 1,
+          pointerEvents: isBlankCanvas ? 'none' : undefined,
         }}
       >
         <input
@@ -2584,15 +2720,21 @@ function StudioPage() {
         finalized: Boolean(finalPdfPath),
       }
       const existingId = activeDraftProjectId
+      let isNewProject = false
       if (existingId) {
         await updateProject(existingId, payload, session.access_token)
         if (!savedProjectId) setSavedProjectId(existingId)
       } else {
         const project = await saveProject(payload, session.access_token)
         setSavedProjectId(project.id)
+        isNewProject = true
       }
       setDraftName(normalizedDraftName)
-      setShowDraftNameModal(false)
+      if (isNewProject) {
+        setShowDraftNameModal(true)
+      } else {
+        setShowDraftNameModal(false)
+      }
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2500)
     } catch (err) {
@@ -2608,7 +2750,7 @@ function StudioPage() {
   }
 
   const btnPrimary = {
-    padding: '10px 20px',
+    padding: '9px 18px',
     borderRadius: 8,
     border: '1px solid #5c7856',
     background: '#6e8d67',
@@ -2623,7 +2765,7 @@ function StudioPage() {
   const btnSecondary = {
     padding: '8px 14px',
     borderRadius: 8,
-    border: '1px solid #d0c9bf',
+    border: '1px solid #d7d0c8',
     background: '#fff',
     color: '#3f382f',
     fontFamily: 'inherit',
@@ -2664,13 +2806,8 @@ function StudioPage() {
       ? `${contentBounds.width_inches}" × ${contentBounds.height_inches}"`
       : `${previewStatsSettings.width_inches.toFixed(1)}" × ${previewStatsSettings.height_inches.toFixed(1)}"`
     : 'N/A'
-  const previewCanvasLabel = previewStatsSettings
-    ? `${(previewStatsSettings.width_inches + 2).toFixed(1)}" × ${(previewStatsSettings.height_inches + 2).toFixed(1)}"`
-    : 'N/A'
-  const previewStitchesLabel = previewStatsSettings
-    ? `${Math.round(previewStatsSettings.width_inches * previewStatsSettings.mesh_count)} × ${Math.round(
-        previewStatsSettings.height_inches * previewStatsSettings.mesh_count
-      )}`
+  const previewStitchesLabel = hasGeneratedPreview
+    ? currentDesignStitchCount.toLocaleString()
     : 'N/A'
   const previewMeshLabel = previewStatsSettings ? `${previewStatsSettings.mesh_count}ct` : 'N/A'
   const isFinalized = Boolean(finalPdfPath)
@@ -2696,8 +2833,23 @@ function StudioPage() {
           <strong style={{ fontSize: 13 }}>{previewDesignLabel}</strong>
         </div>
         <div>
-          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>CANVAS</div>
-          <strong style={{ fontSize: 13 }}>{previewCanvasLabel}</strong>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>SUGGESTED CANVAS</div>
+          <strong style={{ fontSize: 13 }}>
+            {previewStatsSettings
+              ? (() => {
+                  const w = contentBounds?.width_inches ?? previewStatsSettings.width_inches
+                  const h = contentBounds?.height_inches ?? previewStatsSettings.height_inches
+                  const rw = w + 2
+                  const rh = h + 2
+                  const fit = availableCanvasSizes.find(
+                    (c) =>
+                      (rw <= c.width && rh <= c.height) ||
+                      (rw <= c.height && rh <= c.width)
+                  ) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
+                  return fit.label + '"'
+                })()
+              : 'N/A'}
+          </strong>
         </div>
         <div>
           <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>STITCHES</div>
@@ -2727,6 +2879,49 @@ function StudioPage() {
               Start with a photo, screenshot, or artwork file.
             </p>
           </div>
+
+          <div
+            style={{
+              borderRadius: 10,
+              border: '1px solid #e4ddd5',
+              background: '#faf7f3',
+              fontSize: 12,
+              color: '#6f665b',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setUploadTipsOpen((o) => !o)}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                width: '100%',
+                padding: '10px 14px',
+                background: 'none',
+                border: 'none',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#3f382f',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              Tips for best results
+              <span style={{ fontSize: 10, color: '#9a9287' }}>{uploadTipsOpen ? '▲' : '▼'}</span>
+            </button>
+            {uploadTipsOpen && (
+              <ul style={{ margin: 0, paddingLeft: 16, paddingRight: 14, paddingBottom: 10, display: 'grid', gap: 2, lineHeight: 1.6 }}>
+                <li>Crop tight to your subject before uploading</li>
+                <li>Simpler images with clear shapes work better than busy scenes</li>
+                <li>High contrast and bold outlines translate well to stitch</li>
+                <li>Too much fine detail or similar background colors can muddy the result</li>
+                <li style={{ color: '#8a8177' }}>Supported formats: JPEG, PNG, WebP, GIF, BMP — AVIF, HEIC, SVG, RAW files are not supported</li>
+              </ul>
+            )}
+          </div>
+
           <div
             onDragEnter={(event) => {
               event.preventDefault()
@@ -2885,7 +3080,8 @@ function StudioPage() {
               <div><strong>Design:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot;</div>
               <div><strong>Mesh:</strong> {designMeshCount}</div>
               <div><strong>Colors:</strong> {currentDesignPalette.length}</div>
-              <div><strong>Stitches:</strong> {currentDesignStitchCount}</div>
+              <div><strong>Stitches:</strong> {currentDesignStitchCount.toLocaleString()}</div>
+              <div><strong>Est. skeins:</strong> {currentDesignPalette.reduce((sum, c) => sum + estimateSkeins(currentDesignColorCounts[c.hex] ?? 0, designMeshCount), 0)}</div>
             </div>
           </div>
           <a
@@ -2941,15 +3137,18 @@ function StudioPage() {
         >
           <strong>Canvas summary</strong>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
-            <div><strong>Design:</strong> {designWidthInches.toFixed(1)}&quot; x {designHeightInches.toFixed(1)}&quot;</div>
+            <div><strong>Design:</strong> {(contentBounds?.width_inches ?? designWidthInches).toFixed(1)}&quot; x {(contentBounds?.height_inches ?? designHeightInches).toFixed(1)}&quot;</div>
             <div><strong>Mesh:</strong> {designMeshCount}</div>
             <div><strong>Colors:</strong> {currentDesignPalette.length}</div>
-            <div><strong>Stitches:</strong> {currentDesignStitchCount}</div>
+            <div><strong>Stitches:</strong> {currentDesignStitchCount.toLocaleString()}</div>
+            <div><strong>Est. skeins:</strong> {currentDesignPalette.reduce((sum, c) => sum + estimateSkeins(currentDesignColorCounts[c.hex] ?? 0, designMeshCount), 0)}</div>
             <div>
               <strong>Finishing:</strong>{' '}
-              {finishShape === 'circle'
-                ? `${resolvedFinishSize.toFixed(1)}" round`
-                : `${resolvedFinishSize.toFixed(1)}" square`}
+              {finishApplied
+                ? finishShape === 'circle'
+                  ? `${resolvedFinishSize.toFixed(1)}" round`
+                  : `${resolvedFinishSize.toFixed(1)}" square`
+                : 'N/A'}
             </div>
             <div><strong>Canvas:</strong> {selectedCanvasSize.label}</div>
           </div>
@@ -3028,12 +3227,16 @@ function StudioPage() {
               return
             }
             setFinalizeError('')
-            setShowFinalizeModal(true)
+            if (finalPdfPath) {
+              setShowRefinalizeConfirm(true)
+            } else {
+              setShowFinalizeModal(true)
+            }
           }}
-          disabled={!cells.length || (!!activeImagePath && !previewImagePath) || hasPendingPreviewSettings || loading || Boolean(finalPdfPath)}
+          disabled={!cells.length || (!!activeImagePath && !previewImagePath) || hasPendingPreviewSettings || loading}
           style={btnPrimary}
         >
-          Finalize & Export PDF
+          {finalPdfPath ? 'Regenerate PDF' : 'Finalize & Export PDF'}
         </button>
         {statusBlock}
       </>
@@ -3109,8 +3312,8 @@ function StudioPage() {
           </button>
           {!isMobile && (
             <>
-              <span style={{ color: '#d8d0c4' }}>|</span>
-              <div style={{ display: 'flex', gap: 28, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap', position: 'relative', zIndex: 2 }}>
+              <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
+              <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
                 <button
                   type="button"
                   onClick={() => navigateAwayFromStudio('/gallery')}
@@ -3247,17 +3450,13 @@ function StudioPage() {
                   setAuthPrompt('save')
                   return
                 }
-                if (activeDraftProjectId) {
-                  void handleSaveDraft()
-                  return
-                }
-                setShowDraftNameModal(true)
+                void handleSaveDraft()
               }}
-              disabled={!activeImagePath || saveStatus === 'saving'}
+              disabled={(!activeImagePath && !isBlankCanvas) || saveStatus === 'saving'}
               style={{
                 ...btnSecondary,
                 width: '100%',
-                opacity: !activeImagePath ? 0.5 : 1,
+                opacity: (!activeImagePath && !isBlankCanvas) ? 0.5 : 1,
                 fontSize: isMobile ? 12 : undefined,
               }}
             >
@@ -3281,8 +3480,10 @@ function StudioPage() {
         >
           {previewToolbar}
 
+          <div style={{ display: 'flex', minHeight: 0, overflow: 'hidden' }}>
           <div
             style={{
+              flex: 1,
               minWidth: 0,
               minHeight: 0,
               height: '100%',
@@ -3311,12 +3512,35 @@ function StudioPage() {
                   meshCount={lastSettings?.mesh_count ?? 13}
                   brushDensity={brushDensity}
                   shapeType={shapeType}
+                  arcFlipped={arcFlipped}
+                  arcFullCircle={arcFullCircle}
                   shapeFillColor={shapeFillColor}
                   shapeBorderColor={shapeBorderColor}
                   shapeBorderSize={shapeBorderSize}
-                  onSelectionChange={(selection) => setSelectedRegions(selection ?? [])}
+                  onSelectionChange={(selection) => {
+                    const rects = selection ?? []
+                    setSelectedRegions(rects)
+                    if (rects.length > 0) {
+                      const counts: Record<string, number> = {}
+                      for (const rect of rects) {
+                        const minRow = Math.max(0, Math.min(rect.startRow, rect.endRow))
+                        const maxRow = Math.min(cells.length - 1, Math.max(rect.startRow, rect.endRow))
+                        const minCol = Math.max(0, Math.min(rect.startCol, rect.endCol))
+                        const maxCol = Math.min((cells[0]?.length ?? 1) - 1, Math.max(rect.startCol, rect.endCol))
+                        for (let r = minRow; r <= maxRow; r++) {
+                          for (let c = minCol; c <= maxCol; c++) {
+                            const hex = cells[r]?.[c]
+                            if (hex && hex !== BLANK_CELL) counts[hex] = (counts[hex] ?? 0) + 1
+                          }
+                        }
+                      }
+                      const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+                      if (dominant) setActivePaintColor(dominant)
+                    }
+                  }}
+                  onDesignAreaMiss={() => { setActivePaintColor(null); setSelectedRegions([]) }}
                   onPaintStart={pushUndoSnapshot}
-                  onPaintCells={handlePaintCells}
+                  onPaintCells={toolMode === 'merge' ? handleMergeCells : handlePaintCells}
                   onApplyShapeCells={handleApplyShapeCells}
                 />
               </div>
@@ -3337,6 +3561,84 @@ function StudioPage() {
                 title={isPreviewExpanded ? '' : 'Original image'}
               />
             </div>
+
+            {loading && hasGeneratedPreview && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(255, 253, 248, 0.6)',
+                  zIndex: 10,
+                  pointerEvents: 'none',
+                  borderRadius: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '12px 20px',
+                    background: 'rgba(255, 253, 248, 0.92)',
+                    borderRadius: 10,
+                    border: '1px solid #d9d0c5',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+                  }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 20 20" style={{ animation: 'spin 1s linear infinite' }}>
+                    <circle cx="10" cy="10" r="8" fill="none" stroke="#d9d0c5" strokeWidth="2.5" />
+                    <path d="M10 2 A8 8 0 0 1 18 10" fill="none" stroke="#7a6e63" strokeWidth="2.5" strokeLinecap="round" />
+                  </svg>
+                  <span style={{ fontSize: 12, color: '#7a6e63', fontWeight: 500 }}>Regenerating…</span>
+                </div>
+              </div>
+            )}
+          </div>
+          <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+
+          {showColorBrowser && !isFinalizeReview && (
+            <ColorBrowserModal
+              mode={colorBrowserTarget === 'swap' ? 'swap' : 'add'}
+              allColors={allDmcColors}
+              paletteHexes={new Set(displayPalette.map((c) => c.hex))}
+              swapFromColor={colorBrowserSwapFrom ?? undefined}
+              onSelect={(color) => {
+                if (colorBrowserTarget === 'swap' && colorBrowserSwapFrom) {
+                  if (toolMode === 'select') {
+                    handleApplyColorToSelection(color.hex)
+                  } else {
+                    setAllPalette((prev) =>
+                      prev.some((c) => c.hex === color.hex)
+                        ? prev.filter((c) => c.hex !== colorBrowserSwapFrom.hex)
+                        : prev.map((c) => (c.hex === colorBrowserSwapFrom.hex ? color : c))
+                    )
+                    mergeColorsIntoTarget([colorBrowserSwapFrom.hex], color.hex)
+                  }
+                  setColorBrowserSwapFrom(null)
+                  setShowColorBrowser(false)
+                } else {
+                  setActivePaintColor(color.hex)
+                  setPreviewPalette((prev) =>
+                    prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
+                  )
+                  if (colorBrowserTarget === 'fill') {
+                    setShapeFillColor(color.hex)
+                    setColorBrowserTarget('border')
+                  } else if (colorBrowserTarget === 'border') {
+                    setShapeBorderColor(color.hex)
+                    setShowColorBrowser(false)
+                  } else if (colorBrowserTarget !== 'add') {
+                    setShowColorBrowser(false)
+                  }
+                }
+              }}
+              onClose={() => setShowColorBrowser(false)}
+            />
+          )}
           </div>
 
           {!isFinalizeReview && (
@@ -3390,15 +3692,21 @@ function StudioPage() {
           >
             <PalettePanel
               colors={displayPalette}
+              activeDesignColors={currentDesignPalette}
               activeColor={activePaintColor}
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
                 setToolMode(mode)
                 if (mode !== 'select') setSelectedRegions([])
+                if (mode === 'select') setActivePaintColor(null)
               }}
               shapeType={shapeType}
               onShapeTypeChange={setShapeType}
+              arcFlipped={arcFlipped}
+              onArcFlippedChange={setArcFlipped}
+              arcFullCircle={arcFullCircle}
+              onArcFullCircleChange={setArcFullCircle}
               shapeFillColor={shapeFillColor}
               onShapeFillColorChange={setShapeFillColor}
               shapeBorderColor={shapeBorderColor}
@@ -3410,20 +3718,65 @@ function StudioPage() {
               hasSelectedRegion={selectedRegions.length > 0}
               selectedRegionCount={selectedRegionCount}
               selectionMergeSuggestions={selectionMergeSuggestions}
-              selectionOtherColors={selectionOtherColors}
+
               onApplyColorToSelection={handleApplyColorToSelection}
               onClearSelection={handleClearSelection}
-              onEyedropperSelection={() => void handleEyedropperSelection()}
               onSelect={(color) => {
                 setActivePaintColor(color.hex)
-                setPreviewPalette((prev) =>
-                  prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
-                )
+                if (toolMode !== 'select') {
+                  setPreviewPalette((prev) =>
+                    prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
+                  )
+                }
               }}
               onSelectBlankCanvas={() => setActivePaintColor(BLANK_CELL)}
               moreColors={allDmcColors.filter(
                 (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
               )}
+              onOpenAddBrowser={() => { setColorBrowserTarget('add'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+              onOpenSwapBrowser={(color) => { setColorBrowserTarget('swap'); setColorBrowserSwapFrom(color); setShowColorBrowser(true) }}
+              onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+              onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+              onResetPalette={() => {
+                const originalPalette = buildPaletteForCells(originalCells)
+                setAllPalette(originalPalette)
+                setPreviewPalette(originalPalette)
+                setActivePaintColor(originalPalette[0]?.hex ?? null)
+              }}
+              onMergeColor={(color) => {
+                const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
+                const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
+                const nearest = displayPalette
+                  .filter((c) => c.hex !== color.hex)
+                  .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
+                if (nearest) {
+                  mergeColorsIntoTarget([color.hex], nearest.hex)
+                  setAllPalette((prev) => prev.filter((c) => c.hex !== color.hex))
+                  setActivePaintColor((current) => current === color.hex ? nearest.hex : current)
+                }
+              }}
+              onMergeColorInSelection={(color) => {
+                if (!selectedRegionBounds.length) return
+                const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
+                const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
+                const nearest = displayPalette
+                  .filter((c) => c.hex !== color.hex)
+                  .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
+                if (!nearest) return
+                pushUndoSnapshot()
+                setCells((current) => {
+                  const updated = current.map((row) => [...row])
+                  selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
+                    for (let r = top; r <= bottom; r++) {
+                      for (let c = left; c <= right; c++) {
+                        if (updated[r]?.[c] === color.hex) updated[r][c] = nearest.hex
+                      }
+                    }
+                  })
+                  refreshPreviewPalette(updated)
+                  return updated
+                })
+              }}
             />
           </aside>
         )}
@@ -3547,7 +3900,7 @@ function StudioPage() {
           <div
             onClick={(event) => event.stopPropagation()}
             style={{
-              background: 'white',
+              background: '#fffdf8',
               padding: 24,
               borderRadius: 12,
               width: 360,
@@ -3582,7 +3935,9 @@ function StudioPage() {
       )}
 
       {showPostFinalizeOptions && (() => {
-        const canvas = lastSettings ? getCanvasForDesign(lastSettings.width_inches, lastSettings.height_inches) : null
+        const designW = contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0
+        const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
+        const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
         const printTotal = canvas ? 1500 + canvas.priceCents : null
         return (
           <div
@@ -3591,7 +3946,7 @@ function StudioPage() {
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
           >
             <div
-              style={{ background: '#fffdf8', borderRadius: 14, width: 480, maxWidth: '100%', display: 'grid', gap: 0, boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8' }}
+              style={{ background: '#fffdf8', borderRadius: 12, width: 480, maxWidth: '100%', display: 'grid', gap: 0, boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8' }}
             >
               <div style={{ padding: '22px 24px 16px', borderBottom: '1px solid #e7e1d8' }}>
                 <h2 style={{ margin: 0, fontSize: 20 }}>Your design is ready</h2>
@@ -3629,7 +3984,7 @@ function StudioPage() {
                   <div>
                     <strong style={{ fontSize: 15 }}>Share to gallery</strong>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
-                      Let the MNS community see your work.
+                      Let the MNS community see your work. If someone buys your design, earn $4.50 in canvas credit!
                     </p>
                   </div>
                   <div style={{ fontSize: 13, color: '#5f574f' }}>
@@ -3670,7 +4025,7 @@ function StudioPage() {
         >
           <div
             onClick={(event) => event.stopPropagation()}
-            style={{ background: 'white', padding: 24, borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}
+            style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}
           >
             {galleryStep === 'form' ? (
               <>
@@ -3732,7 +4087,7 @@ function StudioPage() {
                   )}
                   {lastSettings && (
                     <span style={{ fontSize: 12, color: '#8a8177' }}>
-                      {lastSettings.width_inches}" × {lastSettings.height_inches}" · {lastSettings.mesh_count} mesh · {currentDesignPalette.length} colors
+                      {(contentBounds?.width_inches ?? lastSettings.width_inches).toFixed(1)}" × {(contentBounds?.height_inches ?? lastSettings.height_inches).toFixed(1)}" · {lastSettings.mesh_count} mesh · {currentDesignPalette.length} colors{Object.keys(finishOutlineBackups).length > 0 ? ' · outline' : ''}
                     </span>
                   )}
                 </div>
@@ -3782,9 +4137,8 @@ function StudioPage() {
           }}
         >
           <div
-            onClick={(event) => event.stopPropagation()}
             style={{
-              background: 'white',
+              background: '#fffdf8',
               padding: 24,
               borderRadius: 12,
               width: 380,
@@ -3795,9 +4149,9 @@ function StudioPage() {
             }}
           >
             <div style={{ display: 'grid', gap: 6 }}>
-              <h2 style={{ margin: 0 }}>Name this draft</h2>
+              <h2 style={{ margin: 0 }}>Draft saved</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                This name will show up in your saved projects.
+                Name your design
               </p>
             </div>
             <input
@@ -3808,7 +4162,6 @@ function StudioPage() {
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void handleSaveDraft()
-                if (event.key === 'Escape') setShowDraftNameModal(false)
               }}
               placeholder="Draft name"
               autoFocus
@@ -3830,10 +4183,10 @@ function StudioPage() {
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setShowDraftNameModal(false)} style={btnSecondary}>
-                Cancel
+                Skip
               </button>
               <button type="button" onClick={() => void handleSaveDraft()} disabled={saveStatus === 'saving'} style={btnPrimary}>
-                {saveStatus === 'saving' ? 'Saving...' : 'Save Draft'}
+                {saveStatus === 'saving' ? 'Saving...' : 'Save name'}
               </button>
             </div>
           </div>
@@ -3853,7 +4206,7 @@ function StudioPage() {
         >
           <div
             style={{
-              background: 'white',
+              background: '#fffdf8',
               padding: 24,
               borderRadius: 12,
               width: 360,
@@ -3878,7 +4231,7 @@ function StudioPage() {
             >
               <div>
                 <strong>Size:</strong>{' '}
-                {`${lastSettings?.width_inches ?? 0}" x ${lastSettings?.height_inches ?? 0}"`}
+                {`${(contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0).toFixed(1)}" x ${(contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0).toFixed(1)}"`}
               </div>
               <div>
                 <strong>Mesh:</strong> {lastSettings?.mesh_count ?? 0}
@@ -3887,8 +4240,36 @@ function StudioPage() {
                 <strong>Colors used:</strong> {currentDesignPalette.length}
               </div>
               <div>
-                <strong>Total stitches:</strong> {currentDesignStitchCount}
+                <strong>Total stitches:</strong> {currentDesignStitchCount.toLocaleString()}
               </div>
+              <div>
+                <strong>Est. total skeins:</strong>{' '}
+                {currentDesignPalette.reduce(
+                  (sum, color) => sum + estimateSkeins(currentDesignColorCounts[color.hex] ?? 0, lastSettings?.mesh_count ?? draftSettings.mesh_count),
+                  0
+                )}
+                <span style={{ fontSize: 12, color: '#888', marginLeft: 6 }}>
+                  ({lastSettings?.mesh_count ?? draftSettings.mesh_count}-mesh estimate)
+                </span>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: '#4a4540' }}>Design name</label>
+              <input
+                type="text"
+                value={draftName === 'Untitled' ? '' : draftName}
+                placeholder="e.g. Autumn Garden"
+                onChange={e => setDraftName(e.target.value || 'Untitled')}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #d7d0c8',
+                  fontSize: 14,
+                  outline: 'none',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+              />
             </div>
             {hasPendingPreviewSettings && (
               <p style={{ margin: 0, color: '#8a5a00', fontSize: 14 }}>
@@ -3902,13 +4283,50 @@ function StudioPage() {
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setShowFinalizeModal(false)} style={btnSecondary}>Cancel</button>
-              <button onClick={handleFinalize} disabled={loading || !cells.length || hasPendingPreviewSettings || Boolean(finalPdfPath)} style={btnPrimary}>
+              <button onClick={() => void handleFinalize(null)} disabled={loading || !cells.length || hasPendingPreviewSettings} style={btnPrimary}>
                 Confirm and generate PDF
               </button>
             </div>
           </div>
         </div>
       )}
+      {showRefinalizeConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 100, padding: 18 }}
+        >
+          <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Regenerate PDF?</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                This will replace your existing PDF report with an updated version.
+                {galleryItemId && ' Your gallery post will also be updated to reflect the new design.'}
+              </p>
+            </div>
+            {finalizeError && <p style={{ margin: 0, color: '#b00020', fontSize: 13 }}>{finalizeError}</p>}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => { setShowRefinalizeConfirm(false); setFinalizeError('') }}
+                style={btnSecondary}
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleFinalize(finalPdfPath)}
+                disabled={loading || !cells.length || hasPendingPreviewSettings}
+                style={btnPrimary}
+              >
+                {loading ? 'Generating...' : 'Regenerate PDF'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
     </main>
   )

@@ -20,51 +20,25 @@ const MAX_PRINTABLE_SHORT_SIDE = 6
 const MAX_PRINTABLE_LONG_SIDE = 10
 
 
-function clampToPrintableArea(width: number, height: number) {
-  const safeWidth = Math.max(1, width)
-  const safeHeight = Math.max(1, height)
-  const fitsPortrait =
-    safeWidth <= MAX_PRINTABLE_SHORT_SIDE && safeHeight <= MAX_PRINTABLE_LONG_SIDE
-  const fitsLandscape =
-    safeWidth <= MAX_PRINTABLE_LONG_SIDE && safeHeight <= MAX_PRINTABLE_SHORT_SIDE
-
-  if (fitsPortrait || fitsLandscape) {
-    return {
-      width: Number(safeWidth.toFixed(2)),
-      height: Number(safeHeight.toFixed(2)),
-    }
-  }
-
-  const portraitScale = Math.min(
-    MAX_PRINTABLE_SHORT_SIDE / safeWidth,
-    MAX_PRINTABLE_LONG_SIDE / safeHeight
-  )
-  const landscapeScale = Math.min(
-    MAX_PRINTABLE_LONG_SIDE / safeWidth,
-    MAX_PRINTABLE_SHORT_SIDE / safeHeight
-  )
-  const scale = Math.max(portraitScale, landscapeScale)
-
-  return {
-    width: Number((safeWidth * scale).toFixed(2)),
-    height: Number((safeHeight * scale).toFixed(2)),
-  }
-}
 
 type Props = {
   importedAspectRatio: number | null
   settings: PreviewSettings
   lockAspectRatio: boolean
+  isBlankCanvas?: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
+  onDimensionClamped?: () => void
 }
 
 export default function PreviewControls({
   importedAspectRatio,
   settings,
   lockAspectRatio,
+  isBlankCanvas = false,
   onSettingsChange,
   onLockAspectRatioChange,
+  onDimensionClamped,
 }: Props) {
   const {
     width_inches: widthInches,
@@ -78,7 +52,8 @@ export default function PreviewControls({
   useEffect(() => {
     if (!lockAspectRatio || !importedAspectRatio) return
 
-    const nextHeight = Number((widthInches / importedAspectRatio).toFixed(2))
+    const maxHeight = widthInches > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
+    const nextHeight = Number(Math.min(widthInches / importedAspectRatio, maxHeight).toFixed(2))
     if (nextHeight === heightInches) return
 
     onSettingsChange({
@@ -86,6 +61,19 @@ export default function PreviewControls({
       height_inches: nextHeight,
     })
   }, [heightInches, importedAspectRatio, lockAspectRatio, onSettingsChange, settings, widthInches])
+
+  const controlStyle = {
+    fontSize: 11.5,
+    padding: '4px 6px',
+    minWidth: 0,
+    width: '100%',
+    boxSizing: 'border-box',
+    border: '1px solid #d7d0c8',
+    borderRadius: 6,
+    background: '#fffdf8',
+    color: '#3f382f',
+    fontFamily: 'inherit',
+  } as const
 
   return (
     <div
@@ -98,8 +86,8 @@ export default function PreviewControls({
         maxWidth: '100%',
       }}
     >
-      {/* Source type */}
-      <div style={{ display: 'grid', gap: 4 }}>
+      {/* Source type — grayed out in blank canvas mode */}
+      <div style={{ display: 'grid', gap: 4, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#8a8177', textTransform: 'uppercase' }}>Source type</span>
         <div
           style={{
@@ -157,7 +145,7 @@ export default function PreviewControls({
         }}
       >
         <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
-          <span>Width</span>
+          <span>Import Width</span>
           <input
             type="number"
             min="1"
@@ -165,36 +153,20 @@ export default function PreviewControls({
             step="0.5"
             value={widthInches}
             onChange={(e) => {
-              const newWidth = Number(e.target.value)
-              if (lockAspectRatio && importedAspectRatio) {
-                const clamped = clampToPrintableArea(newWidth, newWidth / importedAspectRatio)
-                onSettingsChange({
-                  ...settings,
-                  width_inches: clamped.width,
-                  height_inches: clamped.height,
-                })
-                return
-              }
-
-              const clamped = clampToPrintableArea(newWidth, heightInches)
-              onSettingsChange({
-                ...settings,
-                width_inches: clamped.width,
-                height_inches: clamped.height,
-              })
+              const newWidth = Math.max(1, Math.min(Number(e.target.value), MAX_PRINTABLE_LONG_SIDE))
+              const maxHeight = newWidth > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
+              const newHeight = lockAspectRatio && importedAspectRatio
+                ? Math.min(Number((newWidth / importedAspectRatio).toFixed(2)), maxHeight)
+                : Math.min(heightInches, maxHeight)
+              if (Number(e.target.value) > MAX_PRINTABLE_LONG_SIDE || heightInches > maxHeight) onDimensionClamped?.()
+              onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
-            style={{
-              fontSize: 11.5,
-              padding: '4px 6px',
-              minWidth: 0,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
+            style={controlStyle}
           />
         </label>
 
         <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
-          <span>Height</span>
+          <span>Import Height</span>
           <input
             type="number"
             min="1"
@@ -202,31 +174,15 @@ export default function PreviewControls({
             step="0.5"
             value={heightInches}
             onChange={(e) => {
-              const newHeight = Number(e.target.value)
-              if (lockAspectRatio && importedAspectRatio) {
-                const clamped = clampToPrintableArea(newHeight * importedAspectRatio, newHeight)
-                onSettingsChange({
-                  ...settings,
-                  width_inches: clamped.width,
-                  height_inches: clamped.height,
-                })
-                return
-              }
-
-              const clamped = clampToPrintableArea(widthInches, newHeight)
-              onSettingsChange({
-                ...settings,
-                width_inches: clamped.width,
-                height_inches: clamped.height,
-              })
+              const newHeight = Math.max(1, Math.min(Number(e.target.value), MAX_PRINTABLE_LONG_SIDE))
+              const maxWidth = newHeight > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
+              const newWidth = lockAspectRatio && importedAspectRatio
+                ? Math.min(Number((newHeight * importedAspectRatio).toFixed(2)), maxWidth)
+                : Math.min(widthInches, maxWidth)
+              if (Number(e.target.value) > MAX_PRINTABLE_LONG_SIDE || widthInches > maxWidth) onDimensionClamped?.()
+              onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
-            style={{
-              fontSize: 11.5,
-              padding: '4px 6px',
-              minWidth: 0,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
+            style={controlStyle}
           />
         </label>
 
@@ -240,20 +196,14 @@ export default function PreviewControls({
                 mesh_count: Number(e.target.value) as 13 | 18,
               })
             }
-            style={{
-              fontSize: 11.5,
-              padding: '4px 6px',
-              minWidth: 0,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
+            style={controlStyle}
           >
             <option value={13}>13 mesh</option>
             <option value={18}>18 mesh</option>
           </select>
         </label>
 
-        <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
+        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
           <span>Contrast</span>
           <select
             value={contrastLevel}
@@ -268,13 +218,7 @@ export default function PreviewControls({
                   | 'super_super_high',
               })
             }
-            style={{
-              fontSize: 11.5,
-              padding: '4px 6px',
-              minWidth: 0,
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
+            style={controlStyle}
           >
             <option value="low">Low</option>
             <option value="normal">Normal</option>
@@ -284,6 +228,7 @@ export default function PreviewControls({
           </select>
         </label>
       </div>
+
 
       <div
         style={{

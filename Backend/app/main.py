@@ -49,6 +49,12 @@ from app.services.supabase_db import (
     list_gallery_items,
     create_gallery_item,
     toggle_gallery_like,
+    get_public_project_by_gallery_item,
+    get_gallery_item_by_project_id,
+    update_gallery_item,
+    delete_gallery_item,
+    get_creator_profile,
+    increment_gallery_share,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds
 from app.data.dmc_colors import DMC_COLORS
@@ -458,6 +464,9 @@ def patch_project(project_id: str, request: ProjectSaveRequest, user_id: str = D
 
 @app.delete("/projects/{project_id}", status_code=204)
 def remove_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    gallery_item = get_gallery_item_by_project_id(project_id)
+    if gallery_item:
+        delete_gallery_item(gallery_item["id"], user_id)
     ok = delete_project(project_id, user_id)
     if not ok:
         raise HTTPException(status_code=502, detail="Could not delete project.")
@@ -503,6 +512,49 @@ def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id))
     result = toggle_gallery_like(item_id, user_id)
     if result is None:
         raise HTTPException(status_code=502, detail="Could not update gallery like.")
+    return result
+
+
+@app.post("/gallery/{item_id}/share", response_model=GalleryItemResponse)
+def share_gallery_item(item_id: str):
+    result = increment_gallery_share(item_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not record share.")
+    return result
+
+
+@app.get("/gallery/creator/{slug}")
+def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_user_id)):
+    result = get_creator_profile(slug, user_id=user_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Creator not found.")
+    return result
+
+
+@app.get("/gallery/by-project/{project_id}")
+def get_gallery_by_project(project_id: str):
+    result = get_gallery_item_by_project_id(project_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No gallery item found for this project.")
+    return result
+
+
+@app.patch("/gallery/{item_id}", response_model=GalleryItemResponse)
+def patch_gallery_item(item_id: str, request: GalleryCreateRequest, user_id: str = Depends(get_current_user_id)):
+    data = {k: v for k, v in request.model_dump(exclude_none=True).items()
+            if k in {"preview_image_url", "pdf_url", "width_inches", "height_inches",
+                     "color_count", "palette", "has_outline"}}
+    result = update_gallery_item(item_id, data)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not update gallery item.")
+    return result
+
+
+@app.get("/gallery/{item_id}/project")
+def get_gallery_item_project(item_id: str):
+    result = get_public_project_by_gallery_item(item_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found for this gallery item.")
     return result
 
 

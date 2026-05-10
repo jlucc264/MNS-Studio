@@ -315,6 +315,8 @@ export type GalleryItem = {
   has_outline: boolean
   like_count: number
   liked_by_me: boolean
+  share_count: number
+  project_id: string | null
 }
 
 export type GalleryCreatePayload = {
@@ -329,6 +331,7 @@ export type GalleryCreatePayload = {
   color_count?: number | null
   palette?: GalleryPaletteColor[] | null
   has_outline?: boolean | null
+  project_id?: string | null
 }
 
 export async function listGalleryItems(
@@ -365,6 +368,15 @@ export async function publishGalleryItem(payload: GalleryCreatePayload, accessTo
   return res.json()
 }
 
+export async function incrementGalleryShare(id: string): Promise<GalleryItem> {
+  const res = await fetch(`${API_BASE}/gallery/${id}/share`, { method: 'POST' })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not record share')
+  }
+  return res.json()
+}
+
 export async function toggleGalleryLike(id: string, accessToken?: string | null): Promise<GalleryItem> {
   const res = await fetch(`${API_BASE}/gallery/${id}/like`, {
     method: 'POST',
@@ -373,6 +385,39 @@ export async function toggleGalleryLike(id: string, accessToken?: string | null)
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail ?? 'Could not update like')
+  }
+  return res.json()
+}
+
+export async function fetchGalleryItemProject(itemId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`${API_BASE}/gallery/${itemId}/project`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not load template project')
+  }
+  return res.json()
+}
+
+export async function fetchGalleryItemByProject(projectId: string): Promise<GalleryItem | null> {
+  const res = await fetch(`${API_BASE}/gallery/by-project/${projectId}`)
+  if (res.status === 404) return null
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function updateGalleryItem(
+  itemId: string,
+  payload: Partial<GalleryCreatePayload>,
+  accessToken?: string | null,
+): Promise<GalleryItem> {
+  const res = await fetch(`${API_BASE}/gallery/${itemId}`, {
+    method: 'PATCH',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not update gallery item')
   }
   return res.json()
 }
@@ -430,6 +475,64 @@ export async function createTemplateCheckout(galleryItemId: string): Promise<Che
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail ?? 'Could not create checkout session')
+  }
+  return res.json()
+}
+
+// ── Creator profiles ──────────────────────────────────────────────────────────
+
+export function slugify(name: string): string {
+  return (
+    name.toLowerCase().trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'creator'
+  )
+}
+
+export function buildCreatorSlugMap(items: GalleryItem[]): Map<string, string> {
+  const userFirstSeen: Record<string, string> = {}
+  const userNames: Record<string, string> = {}
+  for (const item of items) {
+    const existing = userFirstSeen[item.user_id]
+    if (!existing || item.created_at < existing) {
+      userFirstSeen[item.user_id] = item.created_at
+      userNames[item.user_id] = item.submitter_name || 'creator'
+    }
+  }
+  const sortedUsers = Object.entries(userFirstSeen)
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([userId]) => userId)
+  const slugGroups: Record<string, string[]> = {}
+  for (const userId of sortedUsers) {
+    const base = slugify(userNames[userId] || 'creator')
+    if (!slugGroups[base]) slugGroups[base] = []
+    slugGroups[base].push(userId)
+  }
+  const result = new Map<string, string>()
+  for (const base of Object.keys(slugGroups)) {
+    slugGroups[base].forEach((userId: string, i: number) => {
+      result.set(userId, i === 0 ? base : `${base}-${i + 1}`)
+    })
+  }
+  return result
+}
+
+export type CreatorProfile = {
+  user_id: string
+  submitter_name: string
+  slug: string
+  items: GalleryItem[]
+}
+
+export async function getCreatorProfile(slug: string, accessToken?: string | null): Promise<CreatorProfile> {
+  const res = await fetch(`${API_BASE}/gallery/creator/${encodeURIComponent(slug)}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not load creator profile')
   }
   return res.json()
 }

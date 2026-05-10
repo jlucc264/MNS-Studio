@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 from io import BytesIO
 from collections import Counter
@@ -17,6 +18,20 @@ PAGE_MARGIN = 42
 CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
+
+_CANVAS_SIZES = [
+    ("5 x 6", 5, 6),
+    ("8 x 6", 8, 6),
+    ("8 x 12", 8, 12),
+]
+
+def _suggested_canvas_label(width_inches: float, height_inches: float) -> str:
+    rw = width_inches + 2
+    rh = height_inches + 2
+    for label, cw, ch in _CANVAS_SIZES:
+        if (rw <= cw and rh <= ch) or (rw <= ch and rh <= cw):
+            return f'{label}"'
+    return f'{_CANVAS_SIZES[-1][0]}"'
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
@@ -82,7 +97,12 @@ def _render_preview_image_from_cells(
     return preview
 
 
-def _build_report_rows(cells: list[list[str]], palette: list[dict]) -> list[dict]:
+def _calculate_skeins(stitch_count: int, mesh_count: int) -> int:
+    stitches_per_skein = 350 if mesh_count >= 18 else 200
+    return max(1, math.ceil(stitch_count / stitches_per_skein))
+
+
+def _build_report_rows(cells: list[list[str]], palette: list[dict], mesh_count: int = 13) -> list[dict]:
     counts = Counter(
         cell
         for row in cells
@@ -107,6 +127,7 @@ def _build_report_rows(cells: list[list[str]], palette: list[dict]) -> list[dict
                 "dmc_code": color["dmc_code"],
                 "dmc_name": color["dmc_name"],
                 "count": count,
+                "skeins": _calculate_skeins(count, mesh_count),
             }
         )
 
@@ -130,7 +151,7 @@ def _draw_report_page(
     content_width = page_width - margin * 2
     y = page_height - margin
 
-    rows = _build_report_rows(cells, palette)
+    rows = _build_report_rows(cells, palette, mesh_count)
     total_stitches = sum(row["count"] for row in rows)
     used_colors = len(rows)
     export_date = datetime.now().strftime("%b %d, %Y")
@@ -169,7 +190,7 @@ def _draw_report_page(
     summary_y = page_height - 112
     summary_pairs = [
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
-        ("Suggested canvas", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
+        ("Canvas", _suggested_canvas_label(width_inches, height_inches)),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Total stitches", str(total_stitches)),
@@ -208,12 +229,19 @@ def _draw_report_page(
     swatch_x = margin + 6
     code_x = swatch_x + 28
     name_x = margin + 132
+    stitches_x = page_width - margin - 58
+    skeins_x = page_width - margin
     table_text_color = colors.HexColor("#2D332F")
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.setFillColor(table_text_color)
-    pdf.drawString(code_x, y, "Code")
-    pdf.drawString(name_x, y, "Color")
-    pdf.drawRightString(page_width - margin, y, "Stitches")
+
+    def _draw_table_header(y_pos: float) -> None:
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.setFillColor(table_text_color)
+        pdf.drawString(code_x, y_pos, "Code")
+        pdf.drawString(name_x, y_pos, "Color")
+        pdf.drawRightString(stitches_x, y_pos, "Stitches")
+        pdf.drawRightString(skeins_x, y_pos, "Skeins")
+
+    _draw_table_header(y)
     y -= 14
     pdf.setStrokeColor(colors.HexColor("#E6E6E6"))
     pdf.line(margin, y, margin + content_width, y)
@@ -233,12 +261,9 @@ def _draw_report_page(
             pdf.setFillColor(colors.HexColor("#173F2A"))
             pdf.drawString(margin + 16, page_height - 58, "MNS Studio Finalized Report")
             y = page_height - 98
-            pdf.setFont("Helvetica-Bold", 11)
-            pdf.setFillColor(table_text_color)
-            pdf.drawString(code_x, y, "Code")
-            pdf.drawString(name_x, y, "Color")
-            pdf.drawRightString(page_width - margin, y, "Stitches")
+            _draw_table_header(y)
             y -= 14
+            pdf.setStrokeColor(colors.HexColor("#E6E6E6"))
             pdf.line(margin, y, margin + content_width, y)
             y -= 16
             pdf.setFont("Helvetica", 10)
@@ -264,8 +289,9 @@ def _draw_report_page(
 
         pdf.setFillColor(table_text_color)
         pdf.drawString(code_x, text_y, row["dmc_code"])
-        pdf.drawString(name_x, text_y, _truncate_text(row["dmc_name"], 42))
-        pdf.drawRightString(page_width - margin, text_y, str(row["count"]))
+        pdf.drawString(name_x, text_y, _truncate_text(row["dmc_name"], 36))
+        pdf.drawRightString(stitches_x, text_y, str(row["count"]))
+        pdf.drawRightString(skeins_x, text_y, str(row["skeins"]))
         y -= row_height
 
 
@@ -332,7 +358,7 @@ def _draw_cover_page(
     footer_y = margin + 28
     stat_pairs = [
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
-        ("Suggested canvas", f'{width_inches + BORDER_INCHES * 2:.1f}" x {height_inches + BORDER_INCHES * 2:.1f}"'),
+        ("Canvas", _suggested_canvas_label(width_inches, height_inches)),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Stitches", str(total_stitches)),
