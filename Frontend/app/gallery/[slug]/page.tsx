@@ -2,9 +2,9 @@
 
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
-import { assetUrl, getCreatorProfile, toggleGalleryLike, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -16,6 +16,10 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+function formatYear(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
 function submitterInitials(name: string) {
   const parts = name.split(/[._\-\s]+/).filter(Boolean)
   if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
@@ -23,12 +27,16 @@ function submitterInitials(name: string) {
 }
 
 function designSpecs(item: GalleryItem) {
+  const canvas = item.width_inches && item.height_inches
+    ? getCanvasForDesign(item.width_inches, item.height_inches)
+    : null
   return [
     item.width_inches && item.height_inches
       ? `${item.width_inches.toFixed(1)}" × ${item.height_inches.toFixed(1)}"`
       : null,
     item.mesh_count ? `${item.mesh_count} mesh` : null,
     item.color_count ? `${item.color_count} colors` : null,
+    canvas ? `${canvas.label} canvas` : null,
   ].filter(Boolean)
 }
 
@@ -71,15 +79,40 @@ const btnSecondary = {
   lineHeight: 1.3,
 } as const
 
+const inputStyle = {
+  width: '100%',
+  boxSizing: 'border-box' as const,
+  border: '1px solid #d7d0c8',
+  borderRadius: 8,
+  padding: '9px 12px',
+  fontFamily: 'inherit',
+  fontSize: 14,
+  color: '#3f382f',
+  background: '#fffdf8',
+}
+
 export default function CreatorProfilePage() {
   const params = useParams()
   const slug = typeof params.slug === 'string' ? params.slug : ''
-  const { session } = useAuth()
+  const { session, user, updateProfile } = useAuth()
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
+
+  // earnings (own profile only)
+  const [earnings, setEarnings] = useState<CreatorEarnings | null>(null)
+
+  // edit mode state
+  const [editing, setEditing] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editBio, setEditBio] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  const isOwnProfile = !!(profile && user && profile.user_id === user.id)
 
   useEffect(() => {
     if (!slug) return
@@ -94,6 +127,24 @@ export default function CreatorProfilePage() {
       .finally(() => setLoading(false))
   }, [slug, session?.access_token])
 
+  // Fetch earnings once we know it's the own profile
+  useEffect(() => {
+    if (!isOwnProfile || !session?.access_token) return
+    getCreatorEarnings(session.access_token)
+      .then(setEarnings)
+      .catch(() => { /* non-critical */ })
+  }, [isOwnProfile, session?.access_token])
+
+  // Pre-fill edit fields from auth user_metadata when entering edit mode
+  useEffect(() => {
+    if (editing && user) {
+      setEditName((user.user_metadata?.full_name as string | undefined) ?? profile?.submitter_name ?? '')
+      setEditBio((user.user_metadata?.bio as string | undefined) ?? '')
+      setSaveError('')
+      setSaved(false)
+    }
+  }, [editing, user, profile])
+
   async function handleLike(item: GalleryItem) {
     if (!session?.access_token) return
     try {
@@ -102,6 +153,29 @@ export default function CreatorProfilePage() {
       if (selectedPreview?.id === item.id) setSelectedPreview(updated)
     } catch { /* ignore */ }
   }
+
+  async function handleSaveProfile(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true)
+    setSaveError('')
+    try {
+      await updateProfile({ full_name: editName.trim() || undefined, bio: editBio.trim() || undefined })
+      setSaved(true)
+      setTimeout(() => setEditing(false), 600)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save profile.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const memberSince = items.length > 0
+    ? formatYear([...items].sort((a, b) => a.created_at.localeCompare(b.created_at))[0].created_at)
+    : null
+
+  const bio = isOwnProfile
+    ? (user?.user_metadata?.bio as string | undefined) ?? ''
+    : ''
 
   return (
     <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>
@@ -114,14 +188,15 @@ export default function CreatorProfilePage() {
 
       <main style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px' }}>
         {loading && <p style={{ color: '#8a8177' }}>Loading…</p>}
-        {error && <p style={{ color: '#b0453a' }}>{error}</p>}
+        {error && <p style={{ color: '#b04030' }}>{error}</p>}
 
         {profile && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 36 }}>
+            {/* Profile header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 36, flexWrap: 'wrap' }}>
               <div style={{
-                width: 64,
-                height: 64,
+                width: 72,
+                height: 72,
                 borderRadius: '50%',
                 display: 'grid',
                 placeItems: 'center',
@@ -129,22 +204,120 @@ export default function CreatorProfilePage() {
                 background: '#f0ece5',
                 color: '#3f382f',
                 fontFamily: 'Georgia, "Times New Roman", serif',
-                fontSize: 22,
+                fontSize: 24,
                 fontWeight: 700,
                 flexShrink: 0,
               }}>
                 {submitterInitials(profile.submitter_name)}
               </div>
-              <div style={{ display: 'grid', gap: 4 }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'grid', gap: 6, alignContent: 'start' }}>
                 <h1 style={{ margin: 0, fontSize: 26, fontFamily: 'Georgia, "Times New Roman", serif' }}>
-                  {profile.submitter_name}&apos;s Studio
+                  {profile.submitter_name}
                 </h1>
-                <span style={{ fontSize: 13, color: '#8a8177' }}>
-                  {items.length} {items.length === 1 ? 'design' : 'designs'} published
-                </span>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', color: '#8a8177', fontSize: 13 }}>
+                  <span>{items.length} {items.length === 1 ? 'design' : 'designs'}</span>
+                  {memberSince && <span>Member since {memberSince}</span>}
+                </div>
+                {bio && (
+                  <p style={{ margin: '4px 0 0', fontSize: 14, color: '#5f574f', maxWidth: 480, lineHeight: 1.5 }}>{bio}</p>
+                )}
               </div>
+              {isOwnProfile && !editing && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  style={{ ...btnSecondary, flexShrink: 0, alignSelf: 'flex-start' }}
+                >
+                  Edit profile
+                </button>
+              )}
             </div>
 
+            {/* Edit form (own profile only) */}
+            {isOwnProfile && editing && (
+              <form
+                onSubmit={handleSaveProfile}
+                style={{
+                  background: '#fffdf8',
+                  border: '1px solid #e7e1d8',
+                  borderRadius: 10,
+                  padding: 24,
+                  marginBottom: 32,
+                  display: 'grid',
+                  gap: 16,
+                  maxWidth: 480,
+                }}
+              >
+                <h2 style={{ margin: 0, fontSize: 17, fontFamily: 'Georgia, "Times New Roman", serif' }}>Edit profile</h2>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600 }}>Display name</label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Your name"
+                    autoComplete="name"
+                    style={inputStyle}
+                  />
+                  <p style={{ margin: '2px 0 0', fontSize: 12, color: '#8a8177' }}>
+                    Used as your name on future posts. Existing posts keep their original name.
+                  </p>
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600 }}>Bio</label>
+                  <textarea
+                    value={editBio}
+                    onChange={(e) => setEditBio(e.target.value)}
+                    placeholder="A few words about you or your stitching style"
+                    rows={3}
+                    style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
+                  />
+                </div>
+                {saveError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{saveError}</p>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="submit" disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.65 : 1 }}>
+                    {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button type="button" onClick={() => setEditing(false)} style={btnSecondary}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Earnings (own profile only) */}
+            {isOwnProfile && earnings && (
+              <div style={{
+                background: '#fffdf8',
+                border: '1px solid #e7e1d8',
+                borderRadius: 10,
+                padding: '20px 24px',
+                marginBottom: 32,
+                display: 'grid',
+                gap: 16,
+              }}>
+                <h2 style={{ margin: 0, fontSize: 16, fontFamily: 'Georgia, "Times New Roman", serif' }}>Sales & Canvas Credit</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+                  {[
+                    { label: 'Template sales', value: earnings.template_sales },
+                    { label: 'Print sales', value: earnings.print_sales },
+                    { label: 'Total credit earned', value: `$${(earnings.total_cents / 100).toFixed(2)}` },
+                    { label: 'Credit available', value: `$${(earnings.pending_cents / 100).toFixed(2)}` },
+                    { label: 'Credit used', value: `$${(earnings.paid_cents / 100).toFixed(2)}` },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ background: '#f5f1ea', borderRadius: 8, padding: '12px 14px' }}>
+                      <div style={{ fontSize: 12, color: '#8a8177', marginBottom: 4 }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Georgia, "Times New Roman", serif', color: '#3f382f' }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
+                  Each sale earns canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
+                </p>
+              </div>
+            )}
+
+            {/* Designs grid */}
             {items.length === 0 ? (
               <p style={{ color: '#8a8177' }}>No designs published yet.</p>
             ) : (
@@ -181,12 +354,40 @@ export default function CreatorProfilePage() {
                     </div>
                     <div style={{ padding: 14, display: 'grid', gap: 8 }}>
                       <strong style={{ fontSize: 15 }}>{item.title}</strong>
-                      <span style={{ fontSize: 12, color: '#8a8177' }}>
-                        {designSpecs(item).join(' · ') || 'Finalized stitch design'}
-                      </span>
+                      {item.width_inches && item.height_inches && (
+                        <span style={{ fontSize: 12, color: '#8a8177' }}>
+                          {item.width_inches.toFixed(1)}" × {item.height_inches.toFixed(1)}"
+                        </span>
+                      )}
+                      {item.tags && item.tags.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {item.tags.map((tag) => (
+                            <span key={tag} style={{ fontSize: 10, padding: '2px 7px', background: '#f0ece5', borderRadius: 999, color: '#5f574f', border: '1px solid #e3ddd6' }}>
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <button type="button" onClick={() => void handleLike(item)} style={btnSecondary}>
-                          {item.liked_by_me ? 'Liked' : 'Like'} · {item.like_count}
+                        <button
+                          type="button"
+                          onClick={() => void handleLike(item)}
+                          style={{
+                            ...btnSecondary,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            borderColor: item.liked_by_me ? '#5c7856' : '#d7d0c8',
+                            background: item.liked_by_me ? '#dfe8dd' : '#fff',
+                            color: item.liked_by_me ? '#3f6b38' : '#3f382f',
+                          }}
+                        >
+                          ♥ {item.liked_by_me ? 'Liked' : 'Like'}
+                          {item.like_count > 0 && (
+                            <span style={{ background: 'rgba(0,0,0,0.07)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                              {item.like_count}
+                            </span>
+                          )}
                         </button>
                       </div>
                     </div>
@@ -234,8 +435,25 @@ export default function CreatorProfilePage() {
                 )}
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
-                <button type="button" onClick={() => void handleLike(selectedPreview)} style={btnPrimary}>
-                  {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
+                <button
+                  type="button"
+                  onClick={() => void handleLike(selectedPreview)}
+                  style={{
+                    ...btnPrimary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    background: selectedPreview.liked_by_me ? '#4a7444' : '#6e8d67',
+                    borderColor: selectedPreview.liked_by_me ? '#4a7444' : '#5c7856',
+                  }}
+                >
+                  ♥ {selectedPreview.liked_by_me ? 'Liked' : 'Like'}
+                  {selectedPreview.like_count > 0 && (
+                    <span style={{ background: 'rgba(255,255,255,0.22)', borderRadius: 999, padding: '1px 7px', fontSize: 11 }}>
+                      {selectedPreview.like_count}
+                    </span>
+                  )}
                 </button>
                 <button type="button" onClick={() => setSelectedPreview(null)} style={btnSecondary}>Close</button>
               </div>

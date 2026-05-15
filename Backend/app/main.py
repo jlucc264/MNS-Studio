@@ -53,7 +53,9 @@ from app.services.supabase_db import (
     get_gallery_item_by_project_id,
     update_gallery_item,
     delete_gallery_item,
+    get_creator_earnings,
     get_creator_profile,
+    get_my_creator_profile,
     increment_gallery_share,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds
@@ -523,6 +525,19 @@ def share_gallery_item(item_id: str):
     return result
 
 
+@app.get("/gallery/creator/me")
+def get_my_gallery_creator(user_id: str = Depends(get_current_user_id)):
+    result = get_my_creator_profile(user_id)
+    if result is None:
+        return {"user_id": user_id, "submitter_name": "", "slug": None, "items": []}
+    return result
+
+
+@app.get("/gallery/creator/me/earnings")
+def get_my_earnings(user_id: str = Depends(get_current_user_id)):
+    return get_creator_earnings(user_id)
+
+
 @app.get("/gallery/creator/{slug}")
 def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_user_id)):
     result = get_creator_profile(slug, user_id=user_id)
@@ -565,16 +580,26 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
     canvas = get_canvas_for_design(request.width_inches, request.height_inches)
     if not canvas:
         raise HTTPException(status_code=422, detail="Design exceeds the largest available canvas (8×12).")
+
+    creator_user_id = None
+    if request.parent_gallery_item_id:
+        from app.services.supabase_db import get_gallery_item
+        parent = get_gallery_item(request.parent_gallery_item_id)
+        if parent:
+            creator_user_id = parent.get("user_id")
+
     try:
         url = create_print_own_checkout(
             pdf_url=request.pdf_url,
             width_inches=request.width_inches,
             height_inches=request.height_inches,
             user_id=user_id,
+            gallery_item_id=request.parent_gallery_item_id,
+            creator_user_id=creator_user_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return CheckoutResponse(checkout_url=url)
+    return CheckoutResponse(client_secret=url)
 
 
 @app.post("/checkout/template/{item_id}", response_model=CheckoutResponse)
@@ -592,7 +617,7 @@ def checkout_template(item_id: str):
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return CheckoutResponse(checkout_url=url)
+    return CheckoutResponse(client_secret=url)
 
 
 @app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
@@ -619,7 +644,7 @@ def checkout_print_gallery(item_id: str):
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return CheckoutResponse(checkout_url=url)
+    return CheckoutResponse(client_secret=url)
 
 
 # ── Stripe webhook ────────────────────────────────────────────────────────────

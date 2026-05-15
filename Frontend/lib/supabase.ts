@@ -10,7 +10,9 @@ export const isSupabaseAuthConfigured = Boolean(supabaseUrl && supabaseAnonKey)
 export function getSupabaseClient() {
   if (!isSupabaseAuthConfigured) return null
   if (!client) {
-    client = createClient(supabaseUrl, supabaseAnonKey)
+    client = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { storageKey: 'mns-studio-auth' },
+    })
   }
   return client
 }

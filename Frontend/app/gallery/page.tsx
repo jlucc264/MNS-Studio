@@ -5,11 +5,11 @@ import { type CSSProperties, useEffect, useMemo, useState, Suspense } from 'reac
 import { useRouter, useSearchParams } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
-import { ProfileModal } from '../../components/ProfileModal'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { assetUrl, buildCreatorSlugMap, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import GuideDialog from '../../components/GuideDialog'
+import CheckoutModal from '../../components/CheckoutModal'
 
 const MOBILE_BREAKPOINT = 768
 
@@ -67,12 +67,16 @@ function submitterInitials(name: string) {
 }
 
 function designSpecs(item: GalleryItem) {
+  const canvas = item.width_inches && item.height_inches
+    ? getCanvasForDesign(item.width_inches, item.height_inches)
+    : null
   return [
     item.width_inches && item.height_inches
-      ? `${item.width_inches.toFixed(1)}" x ${item.height_inches.toFixed(1)}"`
+      ? `${item.width_inches.toFixed(1)}" × ${item.height_inches.toFixed(1)}"`
       : null,
     item.mesh_count ? `${item.mesh_count} mesh` : null,
     item.color_count ? `${item.color_count} colors` : null,
+    canvas ? `${canvas.label} canvas` : null,
   ].filter(Boolean)
 }
 
@@ -130,25 +134,26 @@ function GalleryPage() {
   const [error, setError] = useState('')
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
-  const [showProfileModal, setShowProfileModal] = useState(false)
   const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
   const [viewportWidth, setViewportWidth] = useState(1200)
   const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
-  const [hasActiveDesign] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try {
-      const saved = localStorage.getItem('mns_active_design')
-      if (!saved) return false
-      const d = JSON.parse(saved)
-      return !!(d.previewImagePath || d.cells?.length > 0)
-    } catch { return false }
-  })
+  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
+  const [hasActiveDesign, setHasActiveDesign] = useState(false)
   const [shareToast, setShareToast] = useState(false)
 
   const slugMap = useMemo(() => buildCreatorSlugMap(items), [items])
 
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('mns_active_design')
+      if (!saved) return
+      const d = JSON.parse(saved)
+      setHasActiveDesign(!!(d.previewImagePath || d.cells?.length > 0))
+    } catch {}
+  }, [])
 
   useEffect(() => {
     const update = () => setViewportWidth(window.innerWidth)
@@ -200,14 +205,22 @@ function GalleryPage() {
       preserve_accents: false,
     }
 
-    let cells: unknown = null
+    let cells: string[][] | null = null
     if (item.project_id) {
       try {
         const project = await fetchGalleryItemProject(item.id)
-        cells = (project as { cells?: unknown }).cells ?? null
+        cells = (project as { cells?: string[][] }).cells ?? null
       } catch {
         // proceed without cells — user gets preview-only mode
       }
+    }
+
+    // Derive dimensions from the actual cell grid to avoid cascading shrink
+    // (gallery stores content-bounds inches; cells give the true grid size)
+    const meshCount = item.mesh_count ?? 13
+    if (cells?.length && cells[0]?.length) {
+      settings.width_inches = cells[0].length / meshCount
+      settings.height_inches = cells.length / meshCount
     }
 
     localStorage.setItem('mns_active_design', JSON.stringify({
@@ -224,6 +237,7 @@ function GalleryPage() {
       hasGeneratedPreview: true,
       viewMode: 'stitch',
       activeWorkflowStep: 2,
+      parentGalleryItemId: item.id,
     }))
     router.push('/studio')
   }
@@ -232,10 +246,11 @@ function GalleryPage() {
     setCheckoutError('')
     setCheckoutLoading('print')
     try {
-      const { checkout_url } = await createGalleryPrintCheckout(item.id)
-      window.location.href = checkout_url
+      const { client_secret } = await createGalleryPrintCheckout(item.id)
+      setCheckoutClientSecret(client_secret)
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+    } finally {
       setCheckoutLoading(null)
     }
   }
@@ -296,7 +311,6 @@ function GalleryPage() {
           borderBottom: '1px solid #e7e1d8',
           background: '#fffdf8',
           boxSizing: 'border-box',
-          overflow: 'hidden',
           position: 'sticky',
           top: 0,
           zIndex: 50,
@@ -317,7 +331,6 @@ function GalleryPage() {
               <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
                 <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
                 <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Your Studio</Link>
-                <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
               </div>
             </>
           )}
@@ -333,7 +346,10 @@ function GalleryPage() {
               <NavAccountControls
                 user={user}
                 isMobile={isMobile}
-                onProfile={() => setShowProfileModal(true)}
+                onProfile={() => {
+                  const slug = user?.id ? slugMap.get(user.id) : undefined
+                  if (slug) router.push(`/gallery/${slug}`)
+                }}
                 onLogout={() => setShowLogoutConfirm(true)}
               />
             </>
@@ -359,7 +375,7 @@ function GalleryPage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by title or tag"
+              placeholder="Search by title, tag, or creator"
               style={{
                 border: '1px solid #d7d0c8',
                 borderRadius: 8,
@@ -461,6 +477,9 @@ function GalleryPage() {
                       </Link>
                     ) : submitterLabel(item, user)}
                   </div>
+                  {item.parent_gallery_item_id && (
+                    <span style={{ fontSize: 9, color: '#8a8177', background: '#f0ece5', borderRadius: 999, padding: '1px 6px', marginTop: 2, display: 'inline-block' }}>↩ remix</span>
+                  )}
                 </div>
               </article>
             ))}
@@ -529,8 +548,8 @@ function GalleryPage() {
                     <span style={{ color: '#8a8177' }}>No preview</span>
                   )}
                 </div>
-                <div style={{ padding: 14, display: 'grid', gap: 10 }}>
-                  <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{ padding: 14, display: 'grid', gridTemplateRows: '1fr auto', gap: 10 }}>
+                  <div style={{ display: 'grid', gap: 4, alignContent: 'start' }}>
                     <strong style={{ fontSize: 16 }}>{item.title}</strong>
                     <span style={{ fontSize: 12, color: '#6f675f' }}>
                       By{' '}
@@ -540,31 +559,72 @@ function GalleryPage() {
                         </Link>
                       ) : submitterLabel(item, user)}
                       {' '}· {formatDate(item.created_at)}
+                      {item.parent_gallery_item_id && (
+                        <span style={{ marginLeft: 6, fontSize: 10, color: '#8a8177', background: '#f0ece5', borderRadius: 999, padding: '2px 7px' }}>↩ remix</span>
+                      )}
                     </span>
-                    <span style={{ fontSize: 12, color: '#8a8177' }}>
-                      {designSpecs(item).join(' · ') || 'Finalized stitch design'}
-                    </span>
+                    {(item.width_inches && item.height_inches) || item.mesh_count || item.color_count ? (
+                      <span style={{ fontSize: 11, color: '#8a8177' }}>
+                        {[
+                          item.width_inches && item.height_inches ? `${item.width_inches.toFixed(1)}" × ${item.height_inches.toFixed(1)}"` : null,
+                          item.mesh_count ? `${item.mesh_count} mesh` : null,
+                          item.color_count ? `${item.color_count} colors` : null,
+                        ].filter(Boolean).join(' · ')}
+                      </span>
+                    ) : null}
                   </div>
                   {item.tags.length > 0 && (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {item.tags.map((tag) => (
-                        <span key={tag} style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: '#6f675f' }}>
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setSearch(tag)}
+                          style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '2px 7px', fontSize: 10, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                        >
                           #{tag}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   )}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <button type="button" onClick={() => void handleLike(item)} style={btnSecondary}>
-                      {item.liked_by_me ? 'Liked' : 'Like'} · {item.like_count}
+                    <button
+                      type="button"
+                      onClick={() => void handleLike(item)}
+                      style={{
+                        ...btnSecondary,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        borderColor: item.liked_by_me ? '#5c7856' : '#d7d0c8',
+                        background: item.liked_by_me ? '#dfe8dd' : '#fff',
+                        color: item.liked_by_me ? '#3f6b38' : '#3f382f',
+                      }}
+                    >
+                      ♥ {item.liked_by_me ? 'Liked' : 'Like'}
+                      {item.like_count > 0 && (
+                        <span style={{ background: 'rgba(0,0,0,0.07)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                          {item.like_count}
+                        </span>
+                      )}
                     </button>
-                    <button type="button" onClick={() => void handleShare(item)} style={{ ...btnSecondary, padding: '7px 9px', display: 'flex', alignItems: 'center', gap: 5 }} title="Share">
+                    <button
+                      type="button"
+                      onClick={() => void handleShare(item)}
+                      style={{ ...btnSecondary, display: 'flex', alignItems: 'center', gap: 5 }}
+                      title="Share"
+                    >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
                         <polyline points="16 6 12 2 8 6"/>
                         <line x1="12" y1="2" x2="12" y2="15"/>
                       </svg>
-                      {item.share_count > 0 && <span style={{ fontSize: 11 }}>{item.share_count}</span>}
+                      Share
+                      {item.share_count > 0 && (
+                        <span style={{ background: 'rgba(0,0,0,0.07)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                          {item.share_count}
+                        </span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -748,6 +808,22 @@ function GalleryPage() {
                           ✓ 4&#34; finish outline applied
                         </span>
                       )}
+                      {selectedPreview.parent_gallery_item_id && (() => {
+                        const parent = items.find((i) => i.id === selectedPreview.parent_gallery_item_id)
+                        if (!parent) return null
+                        const parentSlug = slugMap.get(parent.user_id)
+                        return (
+                          <span style={{ fontSize: 12, color: '#7a6d5f' }}>
+                            Remixed from{' '}
+                            {parentSlug ? (
+                              <Link href={`/gallery?item=${parent.id}`} style={{ color: '#5a7a52', textDecoration: 'underline' }} onClick={() => setSelectedPreview(parent)}>
+                                {parent.title}
+                              </Link>
+                            ) : parent.title}
+                            {parent.submitter_name ? ` by ${parent.submitter_name}` : ''}
+                          </span>
+                        )
+                      })()}
                     </div>
 
                     {selectedPreview.palette && selectedPreview.palette.length > 0 && (
@@ -775,25 +851,57 @@ function GalleryPage() {
                     {selectedPreview.tags.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {selectedPreview.tags.map((tag) => (
-                          <span key={tag} style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: '#6f675f' }}>
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => { setSearch(tag); setSelectedPreview(null) }}
+                            style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '2px 7px', fontSize: 10, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                          >
                             #{tag}
-                          </span>
+                          </button>
                         ))}
                       </div>
                     )}
                   </div>
 
                   <div style={{ display: 'grid', gap: 8 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-                      <button type="button" onClick={() => void handleLike(selectedPreview)} style={btnPrimary}>
-                        {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void handleLike(selectedPreview)}
+                        style={{
+                          ...btnPrimary,
+                          flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 7,
+                          background: selectedPreview.liked_by_me ? '#4a7244' : '#6e8d67',
+                          borderColor: selectedPreview.liked_by_me ? '#3f6b38' : '#5c7856',
+                        }}
+                      >
+                        ♥ {selectedPreview.liked_by_me ? 'Liked' : 'Like'}
+                        {selectedPreview.like_count > 0 && (
+                          <span style={{ background: 'rgba(255,255,255,0.22)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                            {selectedPreview.like_count}
+                          </span>
+                        )}
                       </button>
-                      <button type="button" onClick={() => void handleShare(selectedPreview)} style={{ ...btnSecondary, padding: '9px 11px', display: 'flex', alignItems: 'center', gap: 5 }} title="Share">
+                      <button
+                        type="button"
+                        onClick={() => void handleShare(selectedPreview)}
+                        style={{ ...btnSecondary, padding: '9px 11px', display: 'flex', alignItems: 'center', gap: 5 }}
+                        title="Share"
+                      >
                         {shareToast
                           ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                           : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
                         }
-                        {selectedPreview.share_count > 0 && <span style={{ fontSize: 12 }}>{selectedPreview.share_count}</span>}
+                        {selectedPreview.share_count > 0 && (
+                          <span style={{ background: 'rgba(0,0,0,0.07)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                            {selectedPreview.share_count}
+                          </span>
+                        )}
                       </button>
                     </div>
                     {(() => {
@@ -835,61 +943,103 @@ function GalleryPage() {
             </div>
             {isMobile && (
               <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '12px 16px',
+                display: 'grid',
                 borderTop: '1px solid rgba(255,255,255,0.12)',
-                gap: 10,
+                background: '#1a1714',
               }}>
-                <div style={{ display: 'grid', gap: 3, minWidth: 0 }}>
-                  <span style={{ fontSize: 12, color: '#fff', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {submitterLabel(selectedPreview, user)}
-                  </span>
-                  <span style={{ fontSize: 11, color: '#b0a898' }}>
-                    {designSpecs(selectedPreview).join(' · ') || formatDate(selectedPreview.created_at)}
-                  </span>
-                  {selectedPreview.has_outline && (
-                    <span style={{ fontSize: 11, color: '#8fcf87' }}>✓ 4&#34; finish outline</span>
-                  )}
-                  {selectedPreview.palette && selectedPreview.palette.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2 }}>
-                      {selectedPreview.palette.map((color) => (
-                        <div
-                          key={color.hex}
-                          title={`${color.dmc_code} — ${color.dmc_name}`}
-                          style={{
-                            width: 14,
-                            height: 14,
-                            borderRadius: '50%',
-                            background: color.hex,
-                            border: '1px solid rgba(255,255,255,0.2)',
-                            flexShrink: 0,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {selectedPreview.tags.length > 0 && (
-                    <span style={{ fontSize: 11, color: '#8a8177', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {selectedPreview.tags.map(t => `#${t}`).join(' ')}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  padding: '10px 16px 8px',
+                  gap: 10,
+                }}>
+                  <div style={{ display: 'grid', gap: 3, minWidth: 0 }}>
+                    <span style={{ fontSize: 12, color: '#fff', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {submitterLabel(selectedPreview, user)}
                     </span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: '#b0a898' }}>
+                      {designSpecs(selectedPreview).join(' · ') || formatDate(selectedPreview.created_at)}
+                    </span>
+                    {selectedPreview.has_outline && (
+                      <span style={{ fontSize: 11, color: '#8fcf87' }}>✓ 4&quot; finish outline</span>
+                    )}
+                    {selectedPreview.palette && selectedPreview.palette.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2 }}>
+                        {selectedPreview.palette.map((color) => (
+                          <div
+                            key={color.hex}
+                            title={`${color.dmc_code} — ${color.dmc_name}`}
+                            style={{
+                              width: 14,
+                              height: 14,
+                              borderRadius: '50%',
+                              background: color.hex,
+                              border: '1px solid rgba(255,255,255,0.2)',
+                              flexShrink: 0,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => void handleLike(selectedPreview)}
                     style={{
                       ...btnSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      flexShrink: 0,
                       borderColor: selectedPreview.liked_by_me ? '#6e8d67' : 'rgba(255,255,255,0.3)',
                       background: selectedPreview.liked_by_me ? '#dfe8dd' : 'rgba(255,255,255,0.1)',
                       color: selectedPreview.liked_by_me ? '#3f6b38' : '#fff',
                     }}
                   >
-                    {selectedPreview.liked_by_me ? 'Liked' : 'Like'} · {selectedPreview.like_count}
+                    ♥ {selectedPreview.liked_by_me ? 'Liked' : 'Like'}
+                    {selectedPreview.like_count > 0 && (
+                      <span style={{ background: 'rgba(0,0,0,0.10)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                        {selectedPreview.like_count}
+                      </span>
+                    )}
                   </button>
                 </div>
+                <div style={{ display: 'flex', gap: 8, padding: '0 16px 14px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => void handleUseTemplate(selectedPreview!)}
+                    style={{ ...btnSecondary, flex: 1, borderColor: 'rgba(255,255,255,0.3)', background: 'rgba(255,255,255,0.1)', color: '#fff' }}
+                  >
+                    Use template
+                  </button>
+                  {(() => {
+                    const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                      ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
+                      : null
+                    const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => void handlePrintCheckout(selectedPreview)}
+                        disabled={!printPrice || checkoutLoading !== null}
+                        style={{
+                          ...btnSecondary,
+                          flex: 1,
+                          borderColor: printPrice ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)',
+                          background: printPrice ? 'rgba(255,255,255,0.1)' : 'transparent',
+                          color: printPrice ? '#fff' : '#6f675f',
+                          cursor: printPrice ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {checkoutLoading === 'print' ? 'Loading…' : printPrice ? `Print — ${printPrice}` : 'Print unavailable'}
+                      </button>
+                    )
+                  })()}
+                </div>
+                {checkoutError && (
+                  <p style={{ margin: '0 16px 10px', fontSize: 12, color: '#f08080' }}>{checkoutError}</p>
+                )}
               </div>
             )}
           </div>
@@ -912,8 +1062,13 @@ function GalleryPage() {
           </div>
         </div>
       )}
-      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
+      {checkoutClientSecret && (
+        <CheckoutModal
+          clientSecret={checkoutClientSecret}
+          onClose={() => setCheckoutClientSecret(null)}
+        />
+      )}
     </div>
   )
 }

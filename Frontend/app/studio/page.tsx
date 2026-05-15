@@ -17,9 +17,9 @@ import GridEditor, { type DesignSelectionRect } from '../../components/GridEdito
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
 import { ColorBrowserModal } from '../../components/ColorBrowserModal'
+import CheckoutModal from '../../components/CheckoutModal'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
-import { ProfileModal } from '../../components/ProfileModal'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { useAuth } from '../../components/AuthProvider'
@@ -33,6 +33,7 @@ import {
   finalizePreview,
   formatCents,
   getCanvasForDesign,
+  getMyCreatorProfile,
   getProject,
   importImageFromUrl,
   PaletteColor,
@@ -162,13 +163,6 @@ function makeCellKey(row: number, col: number) {
   return `${row}:${col}`
 }
 
-type EyeDropperResult = {
-  sRGBHex: string
-}
-
-type EyeDropperConstructor = new () => {
-  open: () => Promise<EyeDropperResult>
-}
 
 function applyManualOverrides(sourceCells: string[][], manualCellOverrides: Record<string, string>) {
   const entries = Object.entries(manualCellOverrides)
@@ -385,7 +379,7 @@ const DEFAULT_SETTINGS: PreviewSettings = {
   mesh_count: 13,
   color_count: 128,
   show_grid: true,
-  clean_background: false,
+  clean_background: true,
   simplify_colors: false,
   strengthen_dark_detail: false,
   preserve_accents: false,
@@ -456,6 +450,7 @@ function StudioPage() {
   const [redoStack, setRedoStack] = useState<ColorEditSnapshot[]>([])
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
+  const [gridKey, setGridKey] = useState(0)
   const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge'>('paint')
   const [shapeType, setShapeType] = useState<'box' | 'semicircle' | 'line'>('box')
   const [arcFlipped, setArcFlipped] = useState(false)
@@ -489,19 +484,21 @@ function StudioPage() {
   const [showDraftNameModal, setShowDraftNameModal] = useState(false)
   const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
-  const [showProfileModal, setShowProfileModal] = useState(false)
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
+  const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
   const [galleryAcknowledged, setGalleryAcknowledged] = useState(false)
   const [galleryStatus, setGalleryStatus] = useState<'idle' | 'posting' | 'posted' | 'error'>('idle')
   const [galleryError, setGalleryError] = useState('')
+  const [traceOpacity, setTraceOpacity] = useState(0)
   const [printCheckoutLoading, setPrintCheckoutLoading] = useState(false)
   const [printCheckoutError, setPrintCheckoutError] = useState('')
+  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
   const [dimensionLimitHit, setDimensionLimitHit] = useState(false)
   const [draftSaveError, setDraftSaveError] = useState('')
@@ -581,6 +578,20 @@ function StudioPage() {
     finishFinalizeFlow()
   }, [finishFinalizeFlow, galleryStatus])
 
+  async function handleViewProfile() {
+    if (!session?.access_token) return
+    try {
+      const profile = await getMyCreatorProfile(session.access_token)
+      if (profile.slug) {
+        router.push(`/gallery/${profile.slug}`)
+      } else {
+        router.push('/gallery')
+      }
+    } catch {
+      router.push('/gallery')
+    }
+  }
+
   const openGalleryPublishModal = useCallback(() => {
     setGalleryStatus('idle')
     setGalleryError('')
@@ -625,7 +636,6 @@ function StudioPage() {
     }
     setAuthPrompt(null)
     setShowLogoutConfirm(false)
-    setShowProfileModal(false)
     setShowDraftNameModal(false)
     setShowFinalizeModal(false)
     setShowGalleryPublishModal(false)
@@ -701,6 +711,7 @@ function StudioPage() {
         if (d.hasGeneratedPreview) setHasGeneratedPreview(true)
         if (d.viewMode) setViewMode(d.viewMode)
         if (d.activeWorkflowStep) setActiveWorkflowStep(d.activeWorkflowStep)
+        if (d.parentGalleryItemId) setParentGalleryItemId(d.parentGalleryItemId)
       } catch {}
       return
     }
@@ -937,11 +948,15 @@ function StudioPage() {
   }, [])
 
   function handleStartFresh() {
-    const w = Math.max(1, Math.round(DEFAULT_SETTINGS.width_inches * DEFAULT_SETTINGS.mesh_count))
-    const h = Math.max(1, Math.round(DEFAULT_SETTINGS.height_inches * DEFAULT_SETTINGS.mesh_count))
+    const BLANK_W = 10
+    const BLANK_H = 6
+    const mesh = DEFAULT_SETTINGS.mesh_count
+    const w = BLANK_W * mesh
+    const h = BLANK_H * mesh
     const blankGrid = Array.from({ length: h }, () => Array(w).fill(BLANK_CELL))
+    const blankSettings = { ...DEFAULT_SETTINGS, width_inches: BLANK_W, height_inches: BLANK_H }
     setActiveImagePath(null)
-    setImportedAspectRatio(DEFAULT_SETTINGS.width_inches / DEFAULT_SETTINGS.height_inches)
+    setImportedAspectRatio(BLANK_W / BLANK_H)
     setPreviewImagePath(null)
     setOriginalPreviewImagePath(null)
     setLastVisibleImageUrl(null)
@@ -957,11 +972,12 @@ function StudioPage() {
     setRedoStack([])
     setFinalPdfPath(null)
     setFinalPreviewImagePath(null)
-    setLastSettings(DEFAULT_SETTINGS)
-    setDraftSettings(DEFAULT_SETTINGS)
-    setLockAspectRatio(true)
+    setLastSettings(blankSettings)
+    setDraftSettings(blankSettings)
+    setLockAspectRatio(false)
     setHasGeneratedPreview(true)
     setViewMode('stitch')
+    setGridKey((k) => k + 1)
     setActiveWorkflowStep(2)
   }
 
@@ -1641,6 +1657,7 @@ function StudioPage() {
     updateCellsWithManualOverrides(nextCells)
   }
 
+
   function handleUndoColorChange() {
     setUndoStack((current) => {
       const previous = current[current.length - 1]
@@ -1761,6 +1778,7 @@ function StudioPage() {
     setRemovalMode('fill')
     setManualCellOverrides({})
     setFinishOutlineBackups({})
+    setTraceOpacity(0)
     setUndoStack([])
     setRedoStack([])
     setFinalPdfPath(null)
@@ -2372,7 +2390,7 @@ function StudioPage() {
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
-        show_grid: settingsForFinalize.show_grid,
+        show_grid: true,
         palette: currentDesignPalette,
         cells,
         previous_pdf_url: previousPdfUrl,
@@ -2387,7 +2405,7 @@ function StudioPage() {
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
         source_type: settingsForFinalize.source_type,
-        show_grid: settingsForFinalize.show_grid,
+        show_grid: true,
         clean_background: settingsForFinalize.clean_background,
         simplify_colors: settingsForFinalize.simplify_colors,
         strengthen_dark_detail: settingsForFinalize.strengthen_dark_detail,
@@ -2475,13 +2493,14 @@ function StudioPage() {
           submitter_name: userDisplayName(user),
           preview_image_url: finalPreviewImagePath ?? previewImagePath,
           pdf_url: finalPdfPath,
-          width_inches: lastSettings?.width_inches ?? null,
-          height_inches: lastSettings?.height_inches ?? null,
+          width_inches: contentBounds?.width_inches ?? lastSettings?.width_inches ?? null,
+          height_inches: contentBounds?.height_inches ?? lastSettings?.height_inches ?? null,
           mesh_count: lastSettings?.mesh_count ?? null,
           color_count: currentDesignPalette.length,
           palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
           has_outline: Object.keys(finishOutlineBackups).length > 0,
           project_id: savedProjectId ?? null,
+          parent_gallery_item_id: parentGalleryItemId ?? null,
         },
         session.access_token,
       )
@@ -2504,17 +2523,19 @@ function StudioPage() {
     setPrintCheckoutLoading(true)
     setPrintCheckoutError('')
     try {
-      const { checkout_url } = await createPrintOwnCheckout(
+      const { client_secret } = await createPrintOwnCheckout(
         {
           pdf_url: finalPdfPath,
-          width_inches: lastSettings.width_inches,
-          height_inches: lastSettings.height_inches,
+          width_inches: contentBounds?.width_inches ?? lastSettings.width_inches,
+          height_inches: contentBounds?.height_inches ?? lastSettings.height_inches,
+          parent_gallery_item_id: parentGalleryItemId ?? null,
         },
         session.access_token,
       )
-      window.location.href = checkout_url
+      setCheckoutClientSecret(client_secret)
     } catch (err) {
       setPrintCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+    } finally {
       setPrintCheckoutLoading(false)
     }
   }
@@ -2818,51 +2839,61 @@ function StudioPage() {
     <div
       style={{
         display: 'flex',
-        gap: 18,
+        gap: isMobile ? 8 : 18,
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '10px 14px',
+        padding: isMobile ? '8px 12px' : '10px 14px',
         borderBottom: '1px solid #e8e4db',
         background: '#fffdf8',
         flexWrap: 'wrap',
+        flexShrink: 0,
       }}
     >
-      <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: isMobile ? 10 : 18, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
         <div>
           <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>DESIGN</div>
           <strong style={{ fontSize: 13 }}>{previewDesignLabel}</strong>
         </div>
-        <div>
-          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>SUGGESTED CANVAS</div>
-          <strong style={{ fontSize: 13 }}>
-            {previewStatsSettings
-              ? (() => {
-                  const w = contentBounds?.width_inches ?? previewStatsSettings.width_inches
-                  const h = contentBounds?.height_inches ?? previewStatsSettings.height_inches
-                  const rw = w + 2
-                  const rh = h + 2
-                  const fit = availableCanvasSizes.find(
-                    (c) =>
-                      (rw <= c.width && rh <= c.height) ||
-                      (rw <= c.height && rh <= c.width)
-                  ) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
-                  return fit.label + '"'
-                })()
-              : 'N/A'}
-          </strong>
-        </div>
-        <div>
-          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>STITCHES</div>
-          <strong style={{ fontSize: 13 }}>{previewStitchesLabel}</strong>
-        </div>
-        <div>
-          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#6d8568', fontWeight: 700 }}>MESH</div>
-          <strong style={{ fontSize: 13, color: '#5f7f5a' }}>{previewMeshLabel}</strong>
-        </div>
+        {!isMobile && (
+          <>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>SUGGESTED CANVAS</div>
+              <strong style={{ fontSize: 13 }}>
+                {previewStatsSettings
+                  ? (() => {
+                      const w = contentBounds?.width_inches ?? previewStatsSettings.width_inches
+                      const h = contentBounds?.height_inches ?? previewStatsSettings.height_inches
+                      const rw = w + 2
+                      const rh = h + 2
+                      const fit = availableCanvasSizes.find(
+                        (c) =>
+                          (rw <= c.width && rh <= c.height) ||
+                          (rw <= c.height && rh <= c.width)
+                      ) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
+                      return fit.label + '"'
+                    })()
+                  : 'N/A'}
+              </strong>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>STITCHES</div>
+              <strong style={{ fontSize: 13 }}>{previewStitchesLabel}</strong>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#6d8568', fontWeight: 700 }}>MESH</div>
+              <strong style={{ fontSize: 13, color: '#5f7f5a' }}>{previewMeshLabel}</strong>
+            </div>
+          </>
+        )}
+        {isMobile && previewStatsSettings && (
+          <div style={{ fontSize: 12, color: '#8a8177' }}>
+            {previewStitchesLabel} stitches · {previewMeshLabel}
+          </div>
+        )}
       </div>
 
-      <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)} style={btnSecondary}>
-        {isPreviewExpanded ? 'Collapse preview' : 'Expand preview'}
+      <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 14px' }}>
+        {isPreviewExpanded ? 'Collapse' : 'Expand'}
       </button>
     </div>
   )
@@ -2980,8 +3011,8 @@ function StudioPage() {
                 cursor: loading ? 'default' : 'pointer',
               }}
             >
-              <strong style={{ color: '#3f382f', fontSize: 18 }}>Drop image file here</strong>
-              <span>or click to choose a file</span>
+              <strong style={{ color: '#3f382f', fontSize: 18 }}>{isMobile ? 'Tap to choose a photo' : 'Drop image file here'}</strong>
+              {!isMobile && <span>or click to choose a file</span>}
             </div>
             <button type="button" disabled style={{ ...btnSecondary, opacity: 0.5, cursor: 'default' }}>
               Import URL in chat (Coming Soon)
@@ -3039,6 +3070,54 @@ function StudioPage() {
             </button>
           )}
           {statusBlock}
+          {isMobile && hasGeneratedPreview && currentDesignPalette.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                Paint color
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                {currentDesignPalette.map((color) => {
+                  const isActive = activePaintColor === color.hex && toolMode === 'paint'
+                  return (
+                    <button
+                      key={color.hex}
+                      type="button"
+                      title={`${color.dmc_code} ${color.dmc_name}`}
+                      onClick={() => {
+                        setActivePaintColor(color.hex)
+                        setToolMode('paint')
+                        setSelectedRegions([])
+                      }}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '50%',
+                        background: color.hex,
+                        border: isActive ? '3px solid #3f382f' : color.hex === '#FFFFFF' ? '1px solid #ccc' : '2px solid rgba(0,0,0,0.15)',
+                        boxShadow: isActive ? '0 0 0 2px #fff, 0 0 0 4px #3f382f' : undefined,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        padding: 0,
+                      }}
+                    />
+                  )
+                })}
+                <button
+                  type="button"
+                  onClick={() => { setToolMode('paint'); setActivePaintColor(BLANK_CELL); setSelectedRegions([]) }}
+                  style={{
+                    ...btnSecondary,
+                    fontSize: 11,
+                    padding: '4px 10px',
+                    background: activePaintColor === BLANK_CELL ? '#ede9e2' : undefined,
+                    fontWeight: activePaintColor === BLANK_CELL ? 700 : undefined,
+                  }}
+                >
+                  Eraser
+                </button>
+              </div>
+            </div>
+          )}
           {hasGeneratedPreview && !finalPdfPath && (
             <button
               type="button"
@@ -3092,6 +3171,11 @@ function StudioPage() {
           >
             Download PDF report
           </a>
+          {parentGalleryItemId && (
+            <div style={{ background: '#f0ece5', border: '1px solid #ddd5c8', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#5f574f' }}>
+              Working from a gallery template · print includes $4.50 creator credit
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
             <button
               type="button"
@@ -3099,7 +3183,7 @@ function StudioPage() {
               disabled={!lastSettings || printCheckoutLoading}
               style={{ ...btnSecondary, opacity: !lastSettings ? 0.55 : 1, cursor: !lastSettings ? 'not-allowed' : 'pointer' }}
             >
-              {printCheckoutLoading ? 'Redirecting...' : 'Order print'}
+              {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
             </button>
             <button type="button" onClick={openGalleryPublishModal} style={btnSecondary}>
               Share to gallery
@@ -3339,11 +3423,11 @@ function StudioPage() {
             <NavAccountControls
               user={user}
               isMobile={isMobile}
-              onProfile={() => setShowProfileModal(true)}
+              onProfile={() => void handleViewProfile()}
               onLogout={() => setShowLogoutConfirm(true)}
             />
           ) : (
-            <button type="button" onClick={() => setAuthPrompt('login')} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer' }}>
+            <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
               Log in
             </button>
           )}
@@ -3438,6 +3522,7 @@ function StudioPage() {
               padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
               minHeight: 0,
               overflow: 'auto',
+              WebkitOverflowScrolling: 'touch',
             }}
           >
             {leftPanelContent}
@@ -3457,7 +3542,6 @@ function StudioPage() {
                 ...btnSecondary,
                 width: '100%',
                 opacity: (!activeImagePath && !isBlankCanvas) ? 0.5 : 1,
-                fontSize: isMobile ? 12 : undefined,
               }}
             >
               {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Limit reached' : saveStatus === 'error' ? 'Error saving' : 'Save Draft'}
@@ -3506,6 +3590,9 @@ function StudioPage() {
                 }}
               >
                 <GridEditor
+                  centerKey={gridKey}
+                  traceImageUrl={traceOpacity > 0 ? assetUrl(activeImagePath) : null}
+                  traceOpacity={traceOpacity}
                   cells={cells}
                   activeColor={shouldAllowCanvasEditing ? activePaintColor : null}
                   toolMode={toolMode}
@@ -3600,7 +3687,7 @@ function StudioPage() {
           </div>
           <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
 
-          {showColorBrowser && !isFinalizeReview && (
+          {showColorBrowser && activeWorkflowStep === 2 && !isFinalizeReview && (
             <ColorBrowserModal
               mode={colorBrowserTarget === 'swap' ? 'swap' : 'add'}
               allColors={allDmcColors}
@@ -3656,10 +3743,22 @@ function StudioPage() {
                 pointerEvents: 'auto',
               }}
             >
-              <button type="button" onClick={() => setViewMode('original')} style={btnSecondary}>Original</button>
-              <button type="button" onClick={() => setViewMode('stitch')} disabled={!previewImagePath} style={btnSecondary}>
-                Stitch preview
-              </button>
+              {shouldShowStitchGrid && activeImagePath && (
+                <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8a8177', userSelect: 'none' }}>
+                    Trace
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={traceOpacity}
+                      onChange={(e) => setTraceOpacity(parseFloat(e.target.value))}
+                      style={{ width: 80, accentColor: '#6e8d67', cursor: 'pointer' }}
+                    />
+                  </label>
+                </>
+              )}
               <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>
                 Undo
               </button>
@@ -3786,7 +3885,7 @@ function StudioPage() {
         style={{
           borderTop: '1px solid #e0d9cf',
           background: '#fffdf8',
-          height: showChatDrawer ? 440 : 64,
+          height: isPreviewExpanded ? 0 : showChatDrawer ? 440 : 64,
           display: 'grid',
           gridTemplateRows: '64px minmax(0, 1fr)',
           minHeight: 0,
@@ -3938,7 +4037,8 @@ function StudioPage() {
         const designW = contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
-        const printTotal = canvas ? 1500 + canvas.priceCents : null
+        const printBase = parentGalleryItemId ? 2000 : 1500
+        const printTotal = canvas ? printBase + canvas.priceCents : null
         return (
           <div
             role="dialog"
@@ -3965,10 +4065,19 @@ function StudioPage() {
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
                       <div>{canvas.label} canvas</div>
                       <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
+                      {parentGalleryItemId && (
+                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes $4.50 creator credit</div>
+                      )}
                     </div>
                   ) : (
                     <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>No printable canvas size available.</p>
                   )}
+                  <div style={{ fontSize: 11, color: '#a09890', lineHeight: 1.6 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 2 }}>Canvas sizes available</div>
+                    <div>5×6″ — fits designs up to 3″×4″</div>
+                    <div>6×8″ — fits designs up to 4″×6″</div>
+                    <div>8×12″ — fits designs up to 6″×10″</div>
+                  </div>
                   {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
                   <button
                     type="button"
@@ -3976,7 +4085,7 @@ function StudioPage() {
                     disabled={!canvas || printCheckoutLoading}
                     style={{ ...btnPrimary, opacity: !canvas ? 0.5 : 1, cursor: !canvas ? 'not-allowed' : 'pointer' }}
                   >
-                    {printCheckoutLoading ? 'Redirecting...' : 'Order print'}
+                    {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
                   </button>
                 </div>
 
@@ -4327,7 +4436,12 @@ function StudioPage() {
         </div>
       )}
 
-      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
+      {checkoutClientSecret && (
+        <CheckoutModal
+          clientSecret={checkoutClientSecret}
+          onClose={() => setCheckoutClientSecret(null)}
+        />
+      )}
     </main>
   )
 }

@@ -122,6 +122,17 @@ export async function createPreview(payload: VisualizePayload): Promise<Visualiz
   return res.json()
 }
 
+export async function createPreviewV2(payload: VisualizePayload): Promise<VisualizeResponse> {
+  const res = await fetch(`${API_BASE}/visualize/v2`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!res.ok) throw new Error('Preview generation failed (v2)')
+  return res.json()
+}
+
 export async function fetchDmcColors(): Promise<PaletteColor[]> {
   const res = await fetch(`${API_BASE}/dmc-colors`)
 
@@ -317,6 +328,7 @@ export type GalleryItem = {
   liked_by_me: boolean
   share_count: number
   project_id: string | null
+  parent_gallery_item_id: string | null
 }
 
 export type GalleryCreatePayload = {
@@ -332,6 +344,7 @@ export type GalleryCreatePayload = {
   palette?: GalleryPaletteColor[] | null
   has_outline?: boolean | null
   project_id?: string | null
+  parent_gallery_item_id?: string | null
 }
 
 export async function listGalleryItems(
@@ -450,10 +463,10 @@ export function formatCents(cents: number): string {
 
 // ── Checkout ──────────────────────────────────────────────────────────────────
 
-export type CheckoutResponse = { checkout_url: string }
+export type CheckoutResponse = { client_secret: string }
 
 export async function createPrintOwnCheckout(
-  payload: { pdf_url: string; width_inches: number; height_inches: number },
+  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null },
   accessToken?: string | null,
 ): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/print-own`, {
@@ -524,6 +537,33 @@ export type CreatorProfile = {
   submitter_name: string
   slug: string
   items: GalleryItem[]
+}
+
+export type CreatorEarnings = {
+  template_sales: number
+  print_sales: number
+  total_cents: number
+  paid_cents: number
+  pending_cents: number
+}
+
+export async function getCreatorEarnings(accessToken: string): Promise<CreatorEarnings> {
+  const res = await fetch(`${API_BASE}/gallery/creator/me/earnings`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load earnings')
+  return res.json()
+}
+
+export async function getMyCreatorProfile(accessToken: string): Promise<CreatorProfile & { slug: string | null }> {
+  const res = await fetch(`${API_BASE}/gallery/creator/me`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not load your profile')
+  }
+  return res.json()
 }
 
 export async function getCreatorProfile(slug: string, accessToken?: string | null): Promise<CreatorProfile> {

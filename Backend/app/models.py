@@ -131,10 +131,11 @@ class PrintOwnCheckoutRequest(BaseModel):
     pdf_url: str
     width_inches: float
     height_inches: float
+    parent_gallery_item_id: Optional[str] = None
 
 
 class CheckoutResponse(BaseModel):
-    checkout_url: str
+    client_secret: str
 
 
 class GalleryCreateRequest(BaseModel):
@@ -150,6 +151,7 @@ class GalleryCreateRequest(BaseModel):
     palette: Optional[list] = None
     has_outline: Optional[bool] = None
     project_id: Optional[str] = None
+    parent_gallery_item_id: Optional[str] = None
 
 
 class GalleryItemResponse(BaseModel):
@@ -171,3 +173,4 @@ class GalleryItemResponse(BaseModel):
     liked_by_me: bool = False
     share_count: int = 0
     project_id: Optional[str] = None
+    parent_gallery_item_id: Optional[str] = None

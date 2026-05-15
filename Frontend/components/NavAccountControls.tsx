@@ -1,25 +1,8 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { UserAvatar } from './UserAvatar'
-
-const navButton = {
-  border: 0,
-  background: 'transparent',
-  padding: 0,
-  cursor: 'pointer',
-  font: 'inherit',
-} as const
-
-const logoutButton = {
-  padding: '7px 14px',
-  border: '1px solid #d7d0c8',
-  borderRadius: 8,
-  fontFamily: 'inherit',
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-  background: '#fff',
-  color: '#3f382f',
-} as const
 
 export function NavAccountControls({
   user,
@@ -32,15 +15,83 @@ export function NavAccountControls({
   onProfile: () => void
   onLogout: () => void
 }) {
+  const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, flexShrink: 0 }}>
-      <button type="button" aria-label="Open profile" onClick={onProfile} style={navButton}>
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        aria-label="Account menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', display: 'block' }}
+      >
         <UserAvatar user={user} />
       </button>
-      {!isMobile && (
-        <button type="button" onClick={onLogout} style={logoutButton}>
-          Log out
-        </button>
+
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            right: 0,
+            minWidth: 168,
+            background: '#fffdf8',
+            border: '1px solid #e7e1d8',
+            borderRadius: 10,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.10)',
+            overflow: 'hidden',
+            zIndex: 200,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => { setOpen(false); onProfile() }}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '11px 16px',
+              border: 0,
+              background: 'transparent',
+              font: 'inherit',
+              fontSize: 14,
+              textAlign: 'left',
+              cursor: 'pointer',
+              color: '#3f382f',
+            }}
+          >
+            View profile
+          </button>
+          <div style={{ height: 1, background: '#f0ece5', margin: '0 12px' }} />
+          <button
+            type="button"
+            onClick={() => { setOpen(false); onLogout() }}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '11px 16px',
+              border: 0,
+              background: 'transparent',
+              font: 'inherit',
+              fontSize: 14,
+              textAlign: 'left',
+              cursor: 'pointer',
+              color: '#b04030',
+            }}
+          >
+            Log out
+          </button>
+        </div>
       )}
     </div>
   )

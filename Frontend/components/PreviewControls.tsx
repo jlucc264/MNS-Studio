@@ -134,6 +134,55 @@ export default function PreviewControls({
         </p>
       </div>
 
+      {/* Orientation toggle — blank canvas only */}
+      {isBlankCanvas && (
+        <div style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#8a8177', textTransform: 'uppercase' }}>Orientation</span>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: 3,
+              padding: 3,
+              border: '1px solid #d7d0c8',
+              borderRadius: 10,
+              background: '#f0ece5',
+            }}
+          >
+            {([
+              { label: 'Landscape', landscape: true },
+              { label: 'Portrait', landscape: false },
+            ] as const).map(({ label, landscape }) => {
+              const isActive = landscape ? widthInches >= heightInches : widthInches < heightInches
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    if (isActive) return
+                    onSettingsChange({ ...settings, width_inches: heightInches, height_inches: widthInches })
+                  }}
+                  style={{
+                    padding: '6px 4px',
+                    border: 'none',
+                    borderRadius: 7,
+                    fontFamily: 'inherit',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: isActive ? 'default' : 'pointer',
+                    background: isActive ? '#fff' : 'transparent',
+                    color: isActive ? '#3f382f' : '#8a8177',
+                    boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: 'grid',
@@ -144,7 +193,7 @@ export default function PreviewControls({
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
+        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
           <span>Import Width</span>
           <input
             type="number"
@@ -165,7 +214,7 @@ export default function PreviewControls({
           />
         </label>
 
-        <label style={{ display: 'grid', gap: 3, minWidth: 0 }}>
+        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
           <span>Import Height</span>
           <input
             type="number"
@@ -238,7 +287,7 @@ export default function PreviewControls({
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0 }}>
+        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
             <input
               type="checkbox"
               checked={lockAspectRatio}

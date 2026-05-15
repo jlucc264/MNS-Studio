@@ -21,12 +21,31 @@ def create_print_own_checkout(
     width_inches: float,
     height_inches: float,
     user_id: str,
+    gallery_item_id: str | None = None,
+    creator_user_id: str | None = None,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
     if not canvas:
         raise ValueError("Design dimensions exceed the largest available canvas (8×12).")
 
-    total = print_own_total_cents(canvas)
+    is_remixed = bool(gallery_item_id and creator_user_id)
+    total = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
+    name = f"Custom needlepoint canvas print — {canvas['label']}\""
+    if is_remixed:
+        name += " (remixed template)"
+
+    metadata: dict = {
+        "type": "print_gallery" if is_remixed else "print_own",
+        "pdf_url": pdf_url,
+        "canvas_size": canvas["label"],
+        "width_inches": str(width_inches),
+        "height_inches": str(height_inches),
+        "user_id": user_id,
+    }
+    if is_remixed:
+        metadata["gallery_item_id"] = gallery_item_id
+        metadata["creator_user_id"] = creator_user_id
+
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
         line_items=[{
@@ -34,7 +53,7 @@ def create_print_own_checkout(
                 "currency": "usd",
                 "unit_amount": total,
                 "product_data": {
-                    "name": f"Custom needlepoint canvas print — {canvas['label']}\"",
+                    "name": name,
                     "description": (
                         f"{width_inches}\" × {height_inches}\" design on a "
                         f"{canvas['label']}\" canvas · includes PDF report"
@@ -44,19 +63,12 @@ def create_print_own_checkout(
             "quantity": 1,
         }],
         mode="payment",
+        ui_mode="embedded",
         shipping_address_collection={"allowed_countries": ["US"]},
-        success_url=f"{FRONTEND_URL}/studio?order=success",
-        cancel_url=f"{FRONTEND_URL}/studio",
-        metadata={
-            "type": "print_own",
-            "pdf_url": pdf_url,
-            "canvas_size": canvas["label"],
-            "width_inches": str(width_inches),
-            "height_inches": str(height_inches),
-            "user_id": user_id,
-        },
+        return_url=f"{FRONTEND_URL}/studio?order=success",
+        metadata=metadata,
     )
-    return session.url
+    return session.client_secret
 
 
 def create_template_checkout(
@@ -79,8 +91,8 @@ def create_template_checkout(
             "quantity": 1,
         }],
         mode="payment",
-        success_url=f"{FRONTEND_URL}/gallery?order=success",
-        cancel_url=f"{FRONTEND_URL}/gallery",
+        ui_mode="embedded",
+        return_url=f"{FRONTEND_URL}/gallery?order=success",
         metadata={
             "type": "template",
             "gallery_item_id": gallery_item_id,
@@ -89,7 +101,7 @@ def create_template_checkout(
             "title": gallery_item_title,
         },
     )
-    return session.url
+    return session.client_secret
 
 
 def create_gallery_print_checkout(
@@ -122,9 +134,9 @@ def create_gallery_print_checkout(
             "quantity": 1,
         }],
         mode="payment",
+        ui_mode="embedded",
         shipping_address_collection={"allowed_countries": ["US"]},
-        success_url=f"{FRONTEND_URL}/gallery?order=success",
-        cancel_url=f"{FRONTEND_URL}/gallery",
+        return_url=f"{FRONTEND_URL}/gallery?order=success",
         metadata={
             "type": "print_gallery",
             "gallery_item_id": gallery_item_id,
@@ -136,4 +148,4 @@ def create_gallery_print_checkout(
             "height_inches": str(height_inches),
         },
     )
-    return session.url
+    return session.client_secret

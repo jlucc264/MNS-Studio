@@ -5,8 +5,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
-import { assetUrl, deleteProject, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
-import { ProfileModal } from '../../components/ProfileModal'
+import { assetUrl, deleteProject, getCanvasForDesign, getMyCreatorProfile, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
 import { NavAccountControls } from '../../components/NavAccountControls'
 
 const btnPrimary = {
@@ -58,18 +57,10 @@ export default function DraftsPage() {
   const [error, setError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
-  const [showProfileModal, setShowProfileModal] = useState(false)
-  const [hasActiveDesign] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try {
-      const saved = localStorage.getItem('mns_active_design')
-      if (!saved) return false
-      const d = JSON.parse(saved)
-      return !!(d.previewImagePath || d.cells?.length > 0)
-    } catch { return false }
-  })
+  const [hasActiveDesign, setHasActiveDesign] = useState(false)
   const [showNewDraftConfirm, setShowNewDraftConfirm] = useState(false)
   const [pendingOpenProjectId, setPendingOpenProjectId] = useState<string | null>(null)
+  const [pendingReworkProjectId, setPendingReworkProjectId] = useState<string | null>(null)
   const [activeDraftName, setActiveDraftName] = useState('Untitled')
   const [showNamingModal, setShowNamingModal] = useState(false)
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | null>(null)
@@ -80,6 +71,7 @@ export default function DraftsPage() {
       if (saved) {
         const d = JSON.parse(saved)
         if (d.draftName) setActiveDraftName(d.draftName)
+        setHasActiveDesign(!!(d.previewImagePath || d.cells?.length > 0))
       }
     } catch {}
   }, [])
@@ -129,6 +121,54 @@ export default function DraftsPage() {
       setPendingOpenProjectId(projectId)
     } else {
       router.push(`/studio?project=${projectId}`)
+    }
+  }
+
+  function launchRework(projectId: string) {
+    const project = projects.find((p) => p.id === projectId)
+    if (!project) return
+    const palette = project.palette ?? []
+    const cells = project.cells ?? []
+    const meshCount = project.mesh_count ?? 13
+    const effectiveWidth = cells[0]?.length ? cells[0].length / meshCount : (project.width_inches ?? 4)
+    const effectiveHeight = cells.length ? cells.length / meshCount : (project.height_inches ?? 4)
+    const settings = {
+      width_inches: effectiveWidth,
+      height_inches: effectiveHeight,
+      mesh_count: meshCount,
+      color_count: project.color_count ?? palette.length,
+      contrast_level: project.contrast_level ?? 'normal',
+      source_type: project.source_type ?? 'photo',
+      show_grid: project.show_grid ?? true,
+      clean_background: false,
+      simplify_colors: false,
+      strengthen_dark_detail: false,
+      preserve_accents: false,
+    }
+    localStorage.setItem('mns_active_design', JSON.stringify({
+      previewImagePath: project.preview_image_url,
+      originalPreviewImagePath: project.preview_image_url,
+      lastVisibleImageUrl: project.preview_image_url,
+      activeImagePath: project.source_image_url,
+      allPalette: palette,
+      previewPalette: palette,
+      enabledColorHexes: palette.map((c) => c.hex),
+      cells,
+      originalCells: cells,
+      draftSettings: settings,
+      lastSettings: settings,
+      hasGeneratedPreview: true,
+      viewMode: 'stitch',
+      activeWorkflowStep: 2,
+    }))
+    router.push('/studio')
+  }
+
+  function handleRework(projectId: string) {
+    if (hasActiveDesign) {
+      setPendingReworkProjectId(projectId)
+    } else {
+      launchRework(projectId)
     }
   }
 
@@ -278,7 +318,6 @@ export default function DraftsPage() {
           <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
             <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
             <span style={{ color: '#3f382f', fontWeight: 700 }}>Your Studio</span>
-            <Link href="/studio" style={{ color: '#7f776d', textDecoration: 'none' }}>Active Canvas</Link>
           </div>
         </div>
 
@@ -286,7 +325,15 @@ export default function DraftsPage() {
           {session && (
             <NavAccountControls
               user={user}
-              onProfile={() => setShowProfileModal(true)}
+              onProfile={async () => {
+                if (!session?.access_token) return
+                try {
+                  const profile = await getMyCreatorProfile(session.access_token)
+                  router.push(profile.slug ? `/gallery/${profile.slug}` : '/gallery')
+                } catch {
+                  router.push('/gallery')
+                }
+              }}
               onLogout={() => setShowLogoutConfirm(true)}
             />
           )}
@@ -301,7 +348,7 @@ export default function DraftsPage() {
       )}
 
       {/* Content */}
-      <main style={{ padding: '32px 32px 48px', maxWidth: 1000, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+      <main style={{ padding: 'clamp(16px, 4vw, 32px) clamp(16px, 4vw, 32px) 48px', maxWidth: 1000, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
         <div style={{ display: 'grid', gap: 24 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>Your Designs</h1>
@@ -340,6 +387,7 @@ export default function DraftsPage() {
                   onDeleteRequest={setConfirmDelete}
                   onNewDraft={() => void handleNewDraft()}
                   onOpenDraft={handleOpenDraft}
+                  onRework={handleRework}
                   finalized
                 />
               )}
@@ -363,8 +411,6 @@ export default function DraftsPage() {
           </div>
         </div>
       )}
-      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
-
       {showNewDraftConfirm && (
         <div role="dialog" aria-modal="true" onClick={() => setShowNewDraftConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
@@ -406,6 +452,30 @@ export default function DraftsPage() {
                 Discard and open
               </button>
               <button type="button" onClick={() => setPendingOpenProjectId(null)} style={{ ...btnSecondary, color: '#8a8177' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingReworkProjectId && (
+        <div role="dialog" aria-modal="true" onClick={() => setPendingReworkProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0 }}>Rework this design?</h2>
+              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                You have an active design in progress. Save it before starting a rework?
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="button" onClick={async () => { await saveActiveDraft(activeDraftName); localStorage.removeItem('mns_active_design'); launchRework(pendingReworkProjectId); setPendingReworkProjectId(null) }} style={btnPrimary}>
+                Save and rework
+              </button>
+              <button type="button" onClick={() => { localStorage.removeItem('mns_active_design'); launchRework(pendingReworkProjectId); setPendingReworkProjectId(null) }} style={btnSecondary}>
+                Discard and rework
+              </button>
+              <button type="button" onClick={() => setPendingReworkProjectId(null)} style={{ ...btnSecondary, color: '#8a8177' }}>
                 Cancel
               </button>
             </div>
@@ -482,6 +552,7 @@ function ProjectSection({
   onDeleteRequest,
   onNewDraft,
   onOpenDraft,
+  onRework,
   finalized = false,
 }: {
   title: string
@@ -490,6 +561,7 @@ function ProjectSection({
   onDeleteRequest: (id: string) => void
   onNewDraft: () => void
   onOpenDraft: (id: string) => void
+  onRework?: (id: string) => void
   finalized?: boolean
 }) {
   return (
@@ -530,6 +602,7 @@ function ProjectSection({
               dimensions={formatDimensions(project)}
               onDeleteRequest={() => onDeleteRequest(project.id)}
               onOpen={() => onOpenDraft(project.id)}
+              onRework={onRework ? () => onRework(project.id) : undefined}
               finalized={finalized}
             />
           ))}
@@ -585,12 +658,14 @@ function DraftCard({
   dimensions,
   onDeleteRequest,
   onOpen,
+  onRework,
   finalized = false,
 }: {
   project: Project
   dimensions: string | null
   onDeleteRequest: () => void
   onOpen: () => void
+  onRework?: () => void
   finalized?: boolean
 }) {
   const reportUrl = assetUrl(project.pdf_url)
@@ -648,6 +723,9 @@ function DraftCard({
               dimensions,
               project.mesh_count ? `${project.mesh_count} mesh` : null,
               project.color_count ? `${project.color_count} colors` : null,
+              project.width_inches && project.height_inches
+                ? (() => { const c = getCanvasForDesign(project.width_inches, project.height_inches); return c ? `${c.label} canvas` : null })()
+                : null,
             ]
               .filter(Boolean)
               .join(' · ') || 'No preview yet'}
@@ -661,7 +739,7 @@ function DraftCard({
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {finalized ? (
             <>
-              <button type="button" onClick={onOpen} style={{ ...btnPrimary, flex: 1, minWidth: 92 }}>
+              <button type="button" onClick={onOpen} style={{ ...btnSecondary, flex: 1, minWidth: 80 }}>
                 Manage
               </button>
               {reportUrl ? (
@@ -669,13 +747,18 @@ function DraftCard({
                   href={reportUrl}
                   target="_blank"
                   rel="noreferrer"
-                  style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 92 }}
+                  style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-block', lineHeight: 1, flex: 1, textAlign: 'center', minWidth: 80 }}
                 >
                   View PDF
                 </a>
               ) : (
-                <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', flex: 1, minWidth: 92 }}>
+                <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', flex: 1, minWidth: 80 }}>
                   PDF unavailable
+                </button>
+              )}
+              {onRework && (
+                <button type="button" onClick={onRework} style={{ ...btnPrimary, flex: 1, minWidth: 80 }}>
+                  Rework
                 </button>
               )}
             </>

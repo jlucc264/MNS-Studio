@@ -13,7 +13,7 @@ type AuthContextValue = {
   signUp: (email: string, password: string, name?: string) => Promise<void>
   sendPasswordReset: (email: string) => Promise<void>
   updatePassword: (password: string) => Promise<void>
-  updateProfile: (data: { full_name?: string }) => Promise<void>
+  updateProfile: (data: { full_name?: string; bio?: string }) => Promise<void>
   signOut: () => Promise<void>
 }
 

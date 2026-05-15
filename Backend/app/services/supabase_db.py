@@ -148,6 +148,7 @@ def list_gallery_items(search: str | None = None, sort: str = "recent", user_id:
                 item for item in items
                 if needle in str(item.get("title", "")).lower()
                 or any(needle in str(tag).lower() for tag in (item.get("tags") or []))
+                or needle in str(item.get("submitter_name", "")).lower()
             ]
 
     liked_ids = _liked_gallery_ids(user_id)
@@ -270,6 +271,49 @@ def _build_creator_slug_map(items: list[dict]) -> dict[str, str]:
         for i, uid in enumerate(uids):
             slug_to_uid[base if i == 0 else f'{base}-{i + 1}'] = uid
     return slug_to_uid
+
+
+def get_creator_earnings(user_id: str) -> dict:
+    encoded_user_id = quote(user_id, safe="")
+    result = _request(
+        "GET",
+        "/creator_earnings",
+        params=f"creator_user_id=eq.{encoded_user_id}&select=order_type,amount_cents,paid_out",
+    )
+    rows = result if isinstance(result, list) else []
+    template_sales = sum(1 for r in rows if r.get("order_type") == "template")
+    print_sales = sum(1 for r in rows if r.get("order_type") == "print_gallery")
+    total_cents = sum(int(r.get("amount_cents") or 0) for r in rows)
+    paid_cents = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("paid_out"))
+    pending_cents = total_cents - paid_cents
+    return {
+        "template_sales": template_sales,
+        "print_sales": print_sales,
+        "total_cents": total_cents,
+        "paid_cents": paid_cents,
+        "pending_cents": pending_cents,
+    }
+
+
+def get_my_creator_profile(user_id: str) -> dict | None:
+    all_items = list_gallery_items()
+    slug_map = _build_creator_slug_map(all_items)
+    my_slug = next((slug for slug, uid in slug_map.items() if uid == user_id), None)
+    if my_slug is None:
+        return None
+    creator_items = [i for i in all_items if i.get('user_id') == user_id]
+    liked_ids = _liked_gallery_ids(user_id)
+    normalized = [_normalize_gallery_item(i, liked_ids) for i in creator_items]
+    submitter_name = next(
+        (i['submitter_name'] for i in creator_items if i.get('submitter_name')),
+        'creator',
+    )
+    return {
+        'user_id': user_id,
+        'submitter_name': submitter_name,
+        'slug': my_slug,
+        'items': normalized,
+    }
 
 
 def get_creator_profile(slug: str, user_id: str | None = None) -> dict | None:
