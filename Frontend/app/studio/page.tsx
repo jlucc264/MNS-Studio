@@ -22,6 +22,7 @@ import PreviewControls, { PreviewSettings } from '../../components/PreviewContro
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
@@ -431,6 +432,7 @@ function applySourceTypeDefaults(
 function StudioPage() {
   const { session, user, signOut } = useAuth()
   const router = useRouter()
+  const tutorial = useTutorial()
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
@@ -666,6 +668,19 @@ function StudioPage() {
     updateViewportWidth()
     window.addEventListener('resize', updateViewportWidth)
     return () => window.removeEventListener('resize', updateViewportWidth)
+  }, [])
+
+  const [showPortraitWarning, setShowPortraitWarning] = useState(false)
+  useEffect(() => {
+    const check = () => {
+      const portrait = window.matchMedia('(orientation: portrait)').matches
+      const narrow = window.innerWidth < 600
+      const touch = navigator.maxTouchPoints > 0
+      setShowPortraitWarning(portrait && narrow && touch)
+    }
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
   }, [])
 
   useEffect(() => {
@@ -2591,6 +2606,7 @@ function StudioPage() {
 
   const settingsPanel = (
     <div
+      data-tutorial="design-settings"
       style={{
         display: 'grid',
         gap: 9,
@@ -2648,6 +2664,7 @@ function StudioPage() {
 
   const paletteReductionPanel = hasGeneratedPreview && allPalette.length > 2 && (
     <div
+      data-tutorial="palette-slider"
       style={{
         display: 'grid',
         gap: 8,
@@ -2954,6 +2971,7 @@ function StudioPage() {
           </div>
 
           <div
+            data-tutorial="upload-zone"
             onDragEnter={(event) => {
               event.preventDefault()
               if (!loading) setStagedUploadDragActive(true)
@@ -3360,7 +3378,7 @@ function StudioPage() {
           boxSizing: 'border-box',
           zIndex: 10000,
           pointerEvents: 'auto',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
@@ -3419,10 +3437,16 @@ function StudioPage() {
         </div>
 
         <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={tutorial.open}
+            aria-label="Show tutorial"
+            title="Tutorial"
+            style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
+          >?</button>
           {session ? (
             <NavAccountControls
               user={user}
-              isMobile={isMobile}
               onProfile={() => void handleViewProfile()}
               onLogout={() => setShowLogoutConfirm(true)}
             />
@@ -3437,16 +3461,13 @@ function StudioPage() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile
-            ? 'minmax(0, 1fr)'
-            : isPreviewExpanded && activeWorkflowStep === 2
-              ? 'minmax(0, 1fr) minmax(240px, 280px)'
-              : isPreviewExpanded
-                ? 'minmax(0, 1fr)'
-                : activeWorkflowStep === 2
-                  ? 'minmax(280px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
-                  : 'minmax(300px, 380px) minmax(0, 1fr)',
-          gridTemplateRows: isMobile ? 'auto minmax(0, 1fr)' : undefined,
+          gridTemplateColumns: isPreviewExpanded && activeWorkflowStep === 2
+            ? 'minmax(0, 1fr) minmax(240px, 280px)'
+            : isPreviewExpanded
+              ? 'minmax(0, 1fr)'
+              : activeWorkflowStep === 2
+                ? 'minmax(240px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
+                : 'minmax(240px, 340px) minmax(0, 1fr)',
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
@@ -3458,18 +3479,16 @@ function StudioPage() {
           style={{
             display: 'grid',
             gridTemplateRows: 'auto minmax(0, 1fr) auto',
-            borderRight: isMobile ? 'none' : '1px solid #e0d9cf',
-            borderBottom: isMobile ? '1px solid #e0d9cf' : 'none',
+            borderRight: '1px solid #e0d9cf',
             background: '#fffdf8',
             minWidth: 0,
             minHeight: 0,
-            maxHeight: isMobile ? '44vh' : undefined,
             position: 'relative',
             zIndex: 30,
             pointerEvents: 'auto',
           }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
+          <div data-tutorial="workflow-steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
             {workflowSteps.map((step) => {
               const active = activeWorkflowStep === step.id
               const locked = Boolean(finalPdfPath) && step.id < 3
@@ -3529,6 +3548,7 @@ function StudioPage() {
           </div>
           <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', borderTop: '1px solid #eee8df' }}>
             <button
+              data-tutorial="save-button"
               type="button"
               onClick={() => {
                 if (!session?.access_token) {
@@ -3551,6 +3571,7 @@ function StudioPage() {
         )}
 
         <section
+          data-tutorial="canvas-section"
           style={{
             display: 'grid',
             gridTemplateRows: 'auto minmax(0, 1fr) auto',
@@ -3774,6 +3795,7 @@ function StudioPage() {
 
         {!isMobile && activeWorkflowStep === 2 && !isFinalizeReview && (
           <aside
+            data-tutorial="palette-panel"
             style={{
               display: 'grid',
               gridTemplateRows: 'minmax(0, 1fr)',
@@ -4011,22 +4033,40 @@ function StudioPage() {
           >
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
-              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You will need to log back in to save drafts, finalize designs, or post to the gallery.
-              </p>
+              {(activeImagePath || cells.length > 0) && !savedProjectId ? (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You have an unsaved canvas. Save it as a draft first, or log out and lose your work.
+                </p>
+              ) : (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You will need to log back in to save drafts, finalize designs, or post to the gallery.
+                </p>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>
                 Cancel
               </button>
+              {(activeImagePath || cells.length > 0) && !savedProjectId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLogoutConfirm(false)
+                    void handleSaveDraft()
+                  }}
+                  style={btnSecondary}
+                >
+                  Save draft
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   void handleLogoutAndReturnToGallery()
                 }}
-                style={btnPrimary}
+                style={{ ...btnPrimary, background: '#a03428', borderColor: '#a03428' }}
               >
-                Log out
+                Log out anyway
               </button>
             </div>
           </div>
@@ -4442,6 +4482,51 @@ function StudioPage() {
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}
+      {saveStatus !== 'idle' && (
+        <div style={{
+          position: 'fixed',
+          bottom: 28,
+          right: 24,
+          zIndex: 9998,
+          background:
+            saveStatus === 'saved' ? '#4a7244'
+            : saveStatus === 'saving' ? '#6e8d67'
+            : saveStatus === 'limit' ? '#8a6a2a'
+            : '#a03428',
+          color: '#fff',
+          padding: '12px 18px',
+          borderRadius: 10,
+          fontSize: 14,
+          fontWeight: 600,
+          boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
+          maxWidth: 'min(300px, calc(100vw - 48px))',
+          lineHeight: 1.4,
+          pointerEvents: 'none',
+        }}>
+          {saveStatus === 'saving' && 'Saving draft…'}
+          {saveStatus === 'saved' && `"${draftName.trim() || 'Untitled'}" saved ✓`}
+          {(saveStatus === 'error' || saveStatus === 'limit') && (draftSaveError || 'Error saving draft')}
+        </div>
+      )}
+      {showPortraitWarning && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 99999,
+          background: '#3f382f', color: '#f5f1ea',
+          display: 'grid', placeItems: 'center',
+          textAlign: 'center', padding: 32,
+          fontFamily: 'Georgia, "Times New Roman", serif',
+        }}>
+          <div style={{ display: 'grid', gap: 16 }}>
+            <div style={{ fontSize: 52, lineHeight: 1 }}>↻</div>
+            <strong style={{ fontSize: 20 }}>Rotate your device</strong>
+            <p style={{ margin: 0, fontSize: 15, color: '#c9bfb4', maxWidth: 260 }}>
+              MNS Studio works best in landscape mode.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {tutorial.show && <StudioTutorial onClose={tutorial.close} />}
     </main>
   )
 }

@@ -6,14 +6,14 @@ import { UserAvatar } from './UserAvatar'
 
 export function NavAccountControls({
   user,
-  isMobile = false,
   onProfile,
   onLogout,
+  onStudio,
 }: {
   user?: User | null
-  isMobile?: boolean
   onProfile: () => void
   onLogout: () => void
+  onStudio?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -54,6 +54,29 @@ export function NavAccountControls({
             zIndex: 200,
           }}
         >
+          {onStudio && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onStudio() }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '11px 16px',
+                  border: 0,
+                  background: 'transparent',
+                  font: 'inherit',
+                  fontSize: 14,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  color: '#3f382f',
+                }}
+              >
+                Go to Studio
+              </button>
+              <div style={{ height: 1, background: '#f0ece5', margin: '0 12px' }} />
+            </>
+          )}
           <button
             type="button"
             onClick={() => { setOpen(false); onProfile() }}

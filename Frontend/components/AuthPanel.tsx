@@ -27,7 +27,7 @@ const buttonStyle = {
   color: '#fff',
 } as const
 
-export function AuthPanel({ title = 'Log in to view drafts', onSuccess }: { title?: string; onSuccess?: () => void }) {
+export function AuthPanel({ title = 'Log in to Create/View Templates', onSuccess }: { title?: string; onSuccess?: () => void }) {
   const { signIn, signUp, sendPasswordReset, configured } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

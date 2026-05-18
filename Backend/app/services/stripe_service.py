@@ -63,7 +63,7 @@ def create_print_own_checkout(
             "quantity": 1,
         }],
         mode="payment",
-        ui_mode="embedded",
+        ui_mode="embedded_page",
         shipping_address_collection={"allowed_countries": ["US"]},
         return_url=f"{FRONTEND_URL}/studio?order=success",
         metadata=metadata,
@@ -91,7 +91,7 @@ def create_template_checkout(
             "quantity": 1,
         }],
         mode="payment",
-        ui_mode="embedded",
+        ui_mode="embedded_page",
         return_url=f"{FRONTEND_URL}/gallery?order=success",
         metadata={
             "type": "template",
@@ -134,7 +134,7 @@ def create_gallery_print_checkout(
             "quantity": 1,
         }],
         mode="payment",
-        ui_mode="embedded",
+        ui_mode="embedded_page",
         shipping_address_collection={"allowed_countries": ["US"]},
         return_url=f"{FRONTEND_URL}/gallery?order=success",
         metadata={

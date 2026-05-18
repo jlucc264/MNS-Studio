@@ -13,6 +13,41 @@ import CheckoutModal from '../../components/CheckoutModal'
 
 const MOBILE_BREAKPOINT = 768
 
+const shimmerKeyframes = `
+@keyframes gallery-shimmer {
+  0% { background-position: -600px 0 }
+  100% { background-position: 600px 0 }
+}
+`
+
+function SkeletonCard({ isMobile }: { isMobile: boolean }) {
+  const shimmer: CSSProperties = {
+    background: 'linear-gradient(90deg, #ede8df 25%, #e2dbd0 50%, #ede8df 75%)',
+    backgroundSize: '600px 100%',
+    animation: 'gallery-shimmer 1.4s infinite linear',
+  }
+  if (isMobile) {
+    return (
+      <div style={{ background: '#fff' }}>
+        <div style={{ aspectRatio: '1', width: '100%', ...shimmer }} />
+        <div style={{ padding: '6px 8px 8px', display: 'grid', gap: 5 }}>
+          <div style={{ height: 12, borderRadius: 4, width: '60%', ...shimmer }} />
+          <div style={{ height: 10, borderRadius: 4, width: '40%', ...shimmer }} />
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #e7e1d8' }}>
+      <div style={{ aspectRatio: '1', width: '100%', ...shimmer }} />
+      <div style={{ padding: 14, display: 'grid', gap: 8 }}>
+        <div style={{ height: 16, borderRadius: 4, width: '55%', ...shimmer }} />
+        <div style={{ height: 12, borderRadius: 4, width: '35%', ...shimmer }} />
+      </div>
+    </div>
+  )
+}
+
 const btnPrimary = {
   padding: '9px 18px',
   border: '1px solid #5c7856',
@@ -317,7 +352,7 @@ function GalleryPage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0 }}>
-          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
+          <Link href="/gallery" onClick={() => setSearch('')} style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
             <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
               {Array.from({ length: 9 }, (_, i) => (
                 <span key={i} style={{ width: 9, height: 9, border: '2px solid #111', borderRadius: 2, boxSizing: 'border-box' }} />
@@ -329,7 +364,7 @@ function GalleryPage() {
             <>
               <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
               <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                <span style={{ color: '#3f382f', fontWeight: 700 }}>Gallery</span>
+                <button type="button" onClick={() => setSearch('')} style={{ border: 0, background: 'none', font: 'inherit', fontWeight: 700, color: '#3f382f', cursor: 'pointer', padding: 0 }}>Gallery</button>
                 <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Your Studio</Link>
               </div>
             </>
@@ -345,12 +380,12 @@ function GalleryPage() {
               )}
               <NavAccountControls
                 user={user}
-                isMobile={isMobile}
                 onProfile={() => {
                   const slug = user?.id ? slugMap.get(user.id) : undefined
                   if (slug) router.push(`/gallery/${slug}`)
                 }}
                 onLogout={() => setShowLogoutConfirm(true)}
+                onStudio={() => router.push('/studio')}
               />
             </>
           ) : (
@@ -362,7 +397,7 @@ function GalleryPage() {
       </nav>
 
       {hasActiveDesign && (
-        <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center' }}>
+        <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center' }}>
           <span style={{ color: '#5c4a3a', fontSize: 14 }}>You have an active design in progress.</span>
           <Link href="/studio" style={{ color: '#3f382f', fontWeight: 700, fontSize: 14 }}>Continue editing →</Link>
         </div>
@@ -372,20 +407,32 @@ function GalleryPage() {
         <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '12px 12px 12px' : '14px 24px 14px', display: 'grid', gap: 10 }}>
           <h1 style={{ margin: 0, fontSize: isMobile ? 20 : 28 }}>Gallery</h1>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by title, tag, or creator"
-              style={{
-                border: '1px solid #d7d0c8',
-                borderRadius: 8,
-                padding: '9px 12px',
-                font: 'inherit',
-                fontSize: isMobile ? 14 : undefined,
-                background: '#fffdf8',
-                color: '#3f382f',
-              }}
-            />
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by title, tag, or creator"
+                style={{
+                  width: '100%',
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 8,
+                  padding: search ? '9px 32px 9px 12px' : '9px 12px',
+                  font: 'inherit',
+                  fontSize: isMobile ? 14 : undefined,
+                  background: '#fffdf8',
+                  color: '#3f382f',
+                  boxSizing: 'border-box',
+                }}
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  aria-label="Clear search"
+                  style={{ position: 'absolute', right: 8, border: 0, background: 'none', cursor: 'pointer', fontSize: 16, color: '#9a9287', padding: 0, lineHeight: 1, display: 'grid', placeItems: 'center' }}
+                >✕</button>
+              )}
+            </div>
             <select
               value={sort}
               onChange={(event) => setSort(event.target.value as 'recent' | 'popular')}
@@ -411,13 +458,24 @@ function GalleryPage() {
         {error && <p style={{ margin: 0, color: '#b0453a', padding: isMobile ? '0 12px' : 0 }}>{error}</p>}
 
         {loading ? (
-          <p style={{ margin: 0, color: '#8a8177', padding: isMobile ? '0 12px' : 0 }}>Loading gallery...</p>
+          <>
+            <style>{shimmerKeyframes}</style>
+            {isMobile ? (
+              <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 2 }}>
+                {Array.from({ length: 8 }, (_, i) => <SkeletonCard key={i} isMobile={true} />)}
+              </section>
+            ) : (
+              <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16 }}>
+                {Array.from({ length: 12 }, (_, i) => <SkeletonCard key={i} isMobile={false} />)}
+              </section>
+            )}
+          </>
         ) : items.length === 0 ? (
           <div style={{ border: '1px solid #e7e1d8', borderRadius: 12, background: '#fffdf8', padding: 24, margin: isMobile ? '0 12px' : 0 }}>
             No shared designs yet.
           </div>
         ) : isMobile ? (
-          <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 2 }}>
+          <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 2 }}>
             {items.map((item) => (
               <article key={item.id} style={{ display: 'grid', gridTemplateRows: 'auto auto', background: '#fff' }}>
                 <button
@@ -467,7 +525,13 @@ function GalleryPage() {
                   </span>
                 </button>
                 <div style={{ padding: '6px 8px 8px' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#3f382f' }}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedPreview(item)}
+                    onKeyDown={(e) => e.key === 'Enter' && setSelectedPreview(item)}
+                    style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#3f382f', cursor: 'pointer' }}
+                  >
                     {item.title}
                   </div>
                   <div style={{ fontSize: 11, color: '#8a8177', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -550,7 +614,13 @@ function GalleryPage() {
                 </div>
                 <div style={{ padding: 14, display: 'grid', gridTemplateRows: '1fr auto', gap: 10 }}>
                   <div style={{ display: 'grid', gap: 4, alignContent: 'start' }}>
-                    <strong style={{ fontSize: 16 }}>{item.title}</strong>
+                    <strong
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedPreview(item)}
+                      onKeyDown={(e) => e.key === 'Enter' && setSelectedPreview(item)}
+                      style={{ fontSize: 16, cursor: 'pointer' }}
+                    >{item.title}</strong>
                     <span style={{ fontSize: 12, color: '#6f675f' }}>
                       By{' '}
                       {slugMap.get(item.user_id) ? (
@@ -580,7 +650,7 @@ function GalleryPage() {
                           key={tag}
                           type="button"
                           onClick={() => setSearch(tag)}
-                          style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '2px 7px', fontSize: 10, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                          style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
                         >
                           #{tag}
                         </button>
@@ -855,7 +925,7 @@ function GalleryPage() {
                             key={tag}
                             type="button"
                             onClick={() => { setSearch(tag); setSelectedPreview(null) }}
-                            style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '2px 7px', fontSize: 10, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                            style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
                           >
                             #{tag}
                           </button>
@@ -933,6 +1003,13 @@ function GalleryPage() {
                                 ? `Order print — ${printPrice}`
                                 : 'Print unavailable'}
                           </button>
+                          {canvas && printPrice && (
+                            <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
+                              <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
+                              <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
+                              <div>Printing &amp; fulfillment — {formatCents(2000)}</div>
+                            </div>
+                          )}
                           {checkoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{checkoutError}</p>}
                         </>
                       )
@@ -1037,6 +1114,18 @@ function GalleryPage() {
                     )
                   })()}
                 </div>
+                {(() => {
+                  const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                    ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
+                    : null
+                  const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
+                  return canvas && printPrice ? (
+                    <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
+                      <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
+                      {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(2000)})
+                    </div>
+                  ) : null
+                })()}
                 {checkoutError && (
                   <p style={{ margin: '0 16px 10px', fontSize: 12, color: '#f08080' }}>{checkoutError}</p>
                 )}
@@ -1057,7 +1146,7 @@ function GalleryPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
-              <button type="button" onClick={() => { setShowLogoutConfirm(false); void signOut(); setShowAuthPrompt(true) }} style={btnPrimary}>Log out</button>
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); localStorage.removeItem('mns_active_design'); void signOut(); setShowAuthPrompt(true) }} style={btnPrimary}>Log out</button>
             </div>
           </div>
         </div>

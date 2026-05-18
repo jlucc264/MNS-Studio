@@ -257,6 +257,7 @@ export default function DraftsPage() {
     setProjects([])
     setError('')
     setLoading(false)
+    localStorage.removeItem('mns_active_design')
     await signOut()
   }
 
@@ -335,13 +336,14 @@ export default function DraftsPage() {
                 }
               }}
               onLogout={() => setShowLogoutConfirm(true)}
+              onStudio={() => router.push('/studio')}
             />
           )}
         </div>
       </nav>
 
       {hasActiveDesign && (
-        <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center' }}>
+        <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center' }}>
           <span style={{ color: '#5c4a3a', fontSize: 14 }}>You have an active design in progress.</span>
           <Link href="/studio" style={{ color: '#3f382f', fontWeight: 700, fontSize: 14 }}>Continue editing →</Link>
         </div>
