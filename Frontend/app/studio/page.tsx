@@ -486,6 +486,7 @@ function StudioPage() {
   const [showDraftNameModal, setShowDraftNameModal] = useState(false)
   const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [showMobilePanel, setShowMobilePanel] = useState(true)
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
@@ -792,6 +793,10 @@ function StudioPage() {
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
+  useEffect(() => {
+    if (isMobile) setShowMobilePanel(activeWorkflowStep !== 2)
+  }, [isMobile, activeWorkflowStep])
+
   const displayedImage = useMemo(() => {
     if (viewMode === 'stitch' && previewImagePath) {
       return assetUrl(previewImagePath)
@@ -816,6 +821,7 @@ function StudioPage() {
     [draftSettings, hasGeneratedPreview, lastSettings]
   )
   const isBlankCanvas = !activeImagePath && hasGeneratedPreview
+  const isUnauthenticatedWithCanvas = !session && (!!activeImagePath || hasGeneratedPreview)
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
   const currentDesignStitchCount = useMemo(
@@ -3461,119 +3467,162 @@ function StudioPage() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isPreviewExpanded && activeWorkflowStep === 2
-            ? 'minmax(0, 1fr) minmax(240px, 280px)'
-            : isPreviewExpanded
-              ? 'minmax(0, 1fr)'
-              : activeWorkflowStep === 2
-                ? 'minmax(240px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
-                : 'minmax(240px, 340px) minmax(0, 1fr)',
+          gridTemplateColumns: isMobile ? '1fr'
+            : isPreviewExpanded && activeWorkflowStep === 2
+              ? 'minmax(0, 1fr) minmax(240px, 280px)'
+              : isPreviewExpanded
+                ? 'minmax(0, 1fr)'
+                : activeWorkflowStep === 2
+                  ? 'minmax(240px, 340px) minmax(0, 1fr) minmax(240px, 280px)'
+                  : 'minmax(240px, 340px) minmax(0, 1fr)',
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
           zIndex: 1,
         }}
       >
-        {!isPreviewExpanded && (
-          <aside
-          style={{
-            display: 'grid',
-            gridTemplateRows: 'auto minmax(0, 1fr) auto',
-            borderRight: '1px solid #e0d9cf',
-            background: '#fffdf8',
-            minWidth: 0,
-            minHeight: 0,
-            position: 'relative',
-            zIndex: 30,
-            pointerEvents: 'auto',
-          }}
-        >
-          <div data-tutorial="workflow-steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
-            {workflowSteps.map((step) => {
-              const active = activeWorkflowStep === step.id
-              const locked = Boolean(finalPdfPath) && step.id < 3
-              return (
+        {!isPreviewExpanded && (() => {
+          const mobileDrawer = isMobile && activeWorkflowStep === 2
+          const asideContent = (
+            <>
+              <div data-tutorial="workflow-steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', alignItems: 'center', borderBottom: '1px solid #eee8df' }}>
+                {workflowSteps.map((step) => {
+                  const active = activeWorkflowStep === step.id
+                  const locked = Boolean(finalPdfPath) && step.id < 3
+                  return (
+                    <button
+                      key={step.id}
+                      type="button"
+                      onClick={() => { if (!locked) { setActiveWorkflowStep(step.id); if (mobileDrawer && step.id !== 2) setShowMobilePanel(false) } }}
+                      disabled={locked}
+                      style={{
+                        display: 'grid',
+                        gap: isMobile ? 4 : 8,
+                        justifyItems: 'center',
+                        border: 0,
+                        background: 'transparent',
+                        color: active ? '#3f382f' : '#8a8177',
+                        fontWeight: active ? 700 : 600,
+                        fontSize: 12,
+                        cursor: locked ? 'default' : 'pointer',
+                        opacity: locked ? 0.45 : 1,
+                        padding: isMobile ? '8px 4px' : undefined,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: isMobile ? 26 : 34,
+                          height: isMobile ? 26 : 34,
+                          borderRadius: '50%',
+                          display: 'grid',
+                          placeItems: 'center',
+                          background: step.complete ? '#dfe8dd' : active ? '#6e8d67' : '#ede9e2',
+                          color: step.complete ? '#6e8d67' : active ? '#fff' : '#8a8177',
+                          fontWeight: 800,
+                          fontSize: isMobile ? 11 : undefined,
+                        }}
+                      >
+                        {step.complete ? '✓' : step.id}
+                      </span>
+                      <span>{step.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
+                  alignContent: 'start',
+                  padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
+                  minHeight: 0,
+                  overflow: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                }}
+              >
+                {leftPanelContent}
+              </div>
+              <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', borderTop: '1px solid #eee8df' }}>
                 <button
-                  key={step.id}
+                  data-tutorial="save-button"
                   type="button"
-                  onClick={() => { if (!locked) setActiveWorkflowStep(step.id) }}
-                  disabled={locked}
+                  onClick={() => {
+                    if (!session?.access_token) { setAuthPrompt('save'); return }
+                    void handleSaveDraft()
+                  }}
+                  disabled={(!activeImagePath && !isBlankCanvas) || saveStatus === 'saving'}
+                  style={{ ...btnSecondary, width: '100%', opacity: (!activeImagePath && !isBlankCanvas) ? 0.5 : 1 }}
+                >
+                  {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Limit reached' : saveStatus === 'error' ? 'Error saving' : 'Save Draft'}
+                </button>
+              </div>
+            </>
+          )
+
+          if (mobileDrawer) {
+            return (
+              <>
+                {showMobilePanel && (
+                  <div
+                    onClick={() => setShowMobilePanel(false)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 199, background: 'rgba(0,0,0,0.4)' }}
+                  />
+                )}
+                <aside
                   style={{
+                    position: 'fixed',
+                    bottom: 0, left: 0, right: 0,
+                    height: '78vh',
+                    zIndex: 200,
+                    background: '#fffdf8',
+                    borderRadius: '16px 16px 0 0',
+                    borderTop: '2px solid #e0d9cf',
                     display: 'grid',
-                    gap: isMobile ? 4 : 8,
-                    justifyItems: 'center',
-                    border: 0,
-                    background: 'transparent',
-                    color: active ? '#3f382f' : '#8a8177',
-                    fontWeight: active ? 700 : 600,
-                    fontSize: 12,
-                    cursor: locked ? 'default' : 'pointer',
-                    opacity: locked ? 0.45 : 1,
-                    padding: isMobile ? '8px 4px' : undefined,
+                    gridTemplateRows: 'auto auto minmax(0, 1fr) auto',
+                    transform: showMobilePanel ? 'translateY(0)' : 'translateY(100%)',
+                    transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
+                    overflow: 'hidden',
+                    pointerEvents: showMobilePanel ? 'auto' : 'none',
                   }}
                 >
-                  <span
-                    style={{
-                      width: isMobile ? 26 : 34,
-                      height: isMobile ? 26 : 34,
-                      borderRadius: '50%',
-                      display: 'grid',
-                      placeItems: 'center',
-                      background: step.complete ? '#dfe8dd' : active ? '#6e8d67' : '#ede9e2',
-                      color: step.complete ? '#6e8d67' : active ? '#fff' : '#8a8177',
-                      fontWeight: 800,
-                      fontSize: isMobile ? 11 : undefined,
-                    }}
-                  >
-                    {step.complete ? '✓' : step.id}
-                  </span>
-                  <span>{step.label}</span>
-                </button>
-              )
-            })}
-          </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px 4px' }}>
+                    <div style={{ width: 40, height: 4, borderRadius: 999, background: '#d5cec6' }} />
+                    <button
+                      type="button"
+                      onClick={() => setShowMobilePanel(false)}
+                      aria-label="Close panel"
+                      style={{ border: 0, background: 'none', fontSize: 18, color: '#9a9287', cursor: 'pointer', padding: 4, lineHeight: 1 }}
+                    >✕</button>
+                  </div>
+                  {asideContent}
+                </aside>
+              </>
+            )
+          }
 
-          <div
-            style={{
-              display: 'grid',
-              gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
-              alignContent: 'start',
-              padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
-              minHeight: 0,
-              overflow: 'auto',
-              WebkitOverflowScrolling: 'touch',
-            }}
-          >
-            {leftPanelContent}
-          </div>
-          <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', borderTop: '1px solid #eee8df' }}>
-            <button
-              data-tutorial="save-button"
-              type="button"
-              onClick={() => {
-                if (!session?.access_token) {
-                  setAuthPrompt('save')
-                  return
-                }
-                void handleSaveDraft()
-              }}
-              disabled={(!activeImagePath && !isBlankCanvas) || saveStatus === 'saving'}
+          return (
+            <aside
               style={{
-                ...btnSecondary,
-                width: '100%',
-                opacity: (!activeImagePath && !isBlankCanvas) ? 0.5 : 1,
+                display: 'grid',
+                gridTemplateRows: 'auto minmax(0, 1fr) auto',
+                borderRight: isMobile ? 'none' : '1px solid #e0d9cf',
+                background: '#fffdf8',
+                minWidth: 0,
+                minHeight: 0,
+                position: 'relative',
+                zIndex: 30,
+                pointerEvents: 'auto',
               }}
             >
-              {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Limit reached' : saveStatus === 'error' ? 'Error saving' : 'Save Draft'}
-            </button>
-          </div>
-        </aside>
-        )}
+              {asideContent}
+            </aside>
+          )
+        })()}
 
         <section
           data-tutorial="canvas-section"
           style={{
-            display: 'grid',
+            display: isMobile && activeWorkflowStep !== 2 ? 'none' : 'grid',
             gridTemplateRows: 'auto minmax(0, 1fr) auto',
             minHeight: 0,
             minWidth: 0,
@@ -3750,22 +3799,35 @@ function StudioPage() {
           </div>
 
           {!isFinalizeReview && (
-            <div
-              style={{
-                display: 'flex',
-                gap: 8,
-                flexWrap: 'wrap',
-                justifyContent: 'center',
-                padding: '10px 14px',
-                borderTop: '1px solid #ded8cf',
-                background: '#fffdf8',
-                position: 'relative',
-                zIndex: 35,
-                pointerEvents: 'auto',
-              }}
-            >
-              {shouldShowStitchGrid && activeImagePath && (
-                <>
+            isMobile ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: '1px solid #ded8cf', background: '#fffdf8', zIndex: 35, pointerEvents: 'auto' }}>
+                {activePaintColor && activePaintColor !== BLANK_CELL && (
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: activePaintColor, border: '2px solid rgba(0,0,0,0.18)', flexShrink: 0 }} />
+                )}
+                {activePaintColor === BLANK_CELL && (
+                  <span style={{ fontSize: 11, color: '#8a8177', flexShrink: 0 }}>Eraser</span>
+                )}
+                <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Undo</button>
+                <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Redo</button>
+                <div style={{ flex: 1 }} />
+                <button type="button" onClick={() => setShowMobilePanel(true)} style={{ ...btnSecondary, fontSize: 12, padding: '5px 12px', fontWeight: 700 }}>⚙ Tools</button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  padding: '10px 14px',
+                  borderTop: '1px solid #ded8cf',
+                  background: '#fffdf8',
+                  position: 'relative',
+                  zIndex: 35,
+                  pointerEvents: 'auto',
+                }}
+              >
+                {shouldShowStitchGrid && activeImagePath && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8a8177', userSelect: 'none' }}>
                     Trace
                     <input
@@ -3778,18 +3840,12 @@ function StudioPage() {
                       style={{ width: 80, accentColor: '#6e8d67', cursor: 'pointer' }}
                     />
                   </label>
-                </>
-              )}
-              <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>
-                Undo
-              </button>
-              <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>
-                Redo
-              </button>
-              <button type="button" onClick={handleResetColorChanges} disabled={!originalCells.length} style={btnSecondary}>
-                Reset
-              </button>
-            </div>
+                )}
+                <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>Undo</button>
+                <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>Redo</button>
+                <button type="button" onClick={handleResetColorChanges} disabled={!originalCells.length} style={btnSecondary}>Reset</button>
+              </div>
+            )
           )}
         </section>
 
@@ -4527,6 +4583,28 @@ function StudioPage() {
       )}
 
       {tutorial.show && <StudioTutorial onClose={tutorial.close} />}
+
+      {isUnauthenticatedWithCanvas && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', zIndex: 9000, padding: 18 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ display: 'grid', gap: 12, width: 'min(460px, 100%)' }}>
+            <AuthPanel
+              title="Log in to use the canvas"
+              onSuccess={() => {}}
+            />
+            <button
+              type="button"
+              onClick={() => { clearActiveCanvas(); router.push('/gallery') }}
+              style={{ justifySelf: 'center', border: 0, background: 'transparent', color: '#fff', font: 'inherit', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
+            >
+              Go to gallery instead
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
