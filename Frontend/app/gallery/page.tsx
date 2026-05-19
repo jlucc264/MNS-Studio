@@ -378,6 +378,9 @@ function GalleryPage() {
                   Mission
                 </button>
               )}
+              <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                Contact Us
+              </Link>
               <NavAccountControls
                 user={user}
                 onProfile={() => {
@@ -389,9 +392,14 @@ function GalleryPage() {
               />
             </>
           ) : (
-            <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
-              Log in
-            </button>
+            <>
+              <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                Contact Us
+              </Link>
+              <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
+                Log in
+              </button>
+            </>
           )}
         </div>
       </nav>
@@ -525,21 +533,37 @@ function GalleryPage() {
                   </span>
                 </button>
                 <div style={{ padding: '6px 8px 8px' }}>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedPreview(item)}
-                    onKeyDown={(e) => e.key === 'Enter' && setSelectedPreview(item)}
-                    style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#3f382f', cursor: 'pointer' }}
-                  >
-                    {item.title}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#8a8177', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {slugMap.get(item.user_id) ? (
-                      <Link href={`/gallery/${slugMap.get(item.user_id)}`} style={{ color: 'inherit', textDecoration: 'none' }} onClick={(e) => e.stopPropagation()}>
-                        {submitterLabel(item, user)}
-                      </Link>
-                    ) : submitterLabel(item, user)}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedPreview(item)}
+                        onKeyDown={(e) => e.key === 'Enter' && setSelectedPreview(item)}
+                        style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#3f382f', cursor: 'pointer' }}
+                      >
+                        {item.title}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#8a8177', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {slugMap.get(item.user_id) ? (
+                          <Link href={`/gallery/${slugMap.get(item.user_id)}`} style={{ color: 'inherit', textDecoration: 'none' }} onClick={(e) => e.stopPropagation()}>
+                            {submitterLabel(item, user)}
+                          </Link>
+                        ) : submitterLabel(item, user)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void handleShare(item) }}
+                      title="Share"
+                      style={{ border: 0, background: 'transparent', padding: '2px 0 0', cursor: 'pointer', color: '#8a8177', flexShrink: 0, lineHeight: 1 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                        <polyline points="16 6 12 2 8 6"/>
+                        <line x1="12" y1="2" x2="12" y2="15"/>
+                      </svg>
+                    </button>
                   </div>
                   {item.parent_gallery_item_id && (
                     <span style={{ fontSize: 9, color: '#8a8177', background: '#f0ece5', borderRadius: 999, padding: '1px 6px', marginTop: 2, display: 'inline-block' }}>↩ remix</span>
@@ -1060,27 +1084,53 @@ function GalleryPage() {
                       </div>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleLike(selectedPreview)}
-                    style={{
-                      ...btnSecondary,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      flexShrink: 0,
-                      borderColor: selectedPreview.liked_by_me ? '#6e8d67' : 'rgba(255,255,255,0.3)',
-                      background: selectedPreview.liked_by_me ? '#dfe8dd' : 'rgba(255,255,255,0.1)',
-                      color: selectedPreview.liked_by_me ? '#3f6b38' : '#fff',
-                    }}
-                  >
-                    ♥ {selectedPreview.liked_by_me ? 'Liked' : 'Like'}
-                    {selectedPreview.like_count > 0 && (
-                      <span style={{ background: 'rgba(0,0,0,0.10)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
-                        {selectedPreview.like_count}
-                      </span>
-                    )}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => void handleLike(selectedPreview)}
+                      style={{
+                        ...btnSecondary,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        borderColor: selectedPreview.liked_by_me ? '#6e8d67' : 'rgba(255,255,255,0.3)',
+                        background: selectedPreview.liked_by_me ? '#dfe8dd' : 'rgba(255,255,255,0.1)',
+                        color: selectedPreview.liked_by_me ? '#3f6b38' : '#fff',
+                      }}
+                    >
+                      ♥ {selectedPreview.liked_by_me ? 'Liked' : 'Like'}
+                      {selectedPreview.like_count > 0 && (
+                        <span style={{ background: 'rgba(0,0,0,0.10)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                          {selectedPreview.like_count}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleShare(selectedPreview)}
+                      title="Share"
+                      style={{
+                        ...btnSecondary,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        borderColor: 'rgba(255,255,255,0.3)',
+                        background: 'rgba(255,255,255,0.1)',
+                        color: '#fff',
+                        padding: '8px 11px',
+                      }}
+                    >
+                      {shareToast
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                      }
+                      {selectedPreview.share_count > 0 && (
+                        <span style={{ background: 'rgba(0,0,0,0.10)', borderRadius: 999, padding: '1px 6px', fontSize: 11 }}>
+                          {selectedPreview.share_count}
+                        </span>
+                      )}
+                    </button>
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, padding: '0 16px 14px', flexWrap: 'wrap' }}>
                   <button

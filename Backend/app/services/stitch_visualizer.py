@@ -2,7 +2,7 @@ from pathlib import Path
 import colorsys
 from io import BytesIO
 from urllib.request import Request, urlopen
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from .storage import preview_output_path, ASSETS_DIR
 from app.data.dmc_colors import DMC_COLORS
 
@@ -151,10 +151,10 @@ def open_source_image(src_path: Path | str) -> Image.Image:
         with urlopen(request, timeout=30) as response:
             image_bytes = BytesIO(response.read())
         with Image.open(image_bytes) as img:
-            return flatten_transparency_to_white(img)
+            return flatten_transparency_to_white(ImageOps.exif_transpose(img))
 
     with Image.open(src_path) as img:
-        return flatten_transparency_to_white(img)
+        return flatten_transparency_to_white(ImageOps.exif_transpose(img))
 
 
 def source_transparency_mask(src_path: Path | str, size: tuple[int, int]) -> set[tuple[int, int]]:

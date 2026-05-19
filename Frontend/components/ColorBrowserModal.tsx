@@ -49,7 +49,7 @@ export function ColorBrowserModal({ mode, allColors, paletteHexes, swapFromColor
       <div style={{ padding: '10px 10px 6px', borderBottom: '1px solid #e7e1d8', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#3f382f', lineHeight: 1.3 }}>
-            {mode === 'add' ? 'Add color' : 'Replace color'}
+            {mode === 'add' ? 'Add Color to Palette' : 'Replace color'}
           </div>
           <button
             onClick={onClose}

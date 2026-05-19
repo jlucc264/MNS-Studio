@@ -53,6 +53,8 @@ type ColorEditSnapshot = {
   removalMode: 'fill' | 'blank'
   manualCellOverrides: Record<string, string>
   finishOutlineBackups: Record<string, string>
+  paletteReductionTarget: number
+  manuallyDisabledHexes: string[]
 }
 
 type CommandResult = {
@@ -380,7 +382,7 @@ const DEFAULT_SETTINGS: PreviewSettings = {
   mesh_count: 13,
   color_count: 128,
   show_grid: true,
-  clean_background: true,
+  clean_background: false,
   simplify_colors: false,
   strengthen_dark_detail: false,
   preserve_accents: false,
@@ -473,6 +475,7 @@ function StudioPage() {
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
   const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
+  const [manuallyDisabledHexes, setManuallyDisabledHexes] = useState<string[]>([])
   const [finishShape, setFinishShape] = useState<'circle' | 'square'>('circle')
   const [finishSizeInches, setFinishSizeInches] = useState(4)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
@@ -1067,6 +1070,8 @@ function StudioPage() {
         removalMode,
         manualCellOverrides: { ...manualCellOverrides },
         finishOutlineBackups: { ...finishOutlineBackups },
+        paletteReductionTarget,
+        manuallyDisabledHexes: [...manuallyDisabledHexes],
       },
     ])
     setRedoStack([])
@@ -1265,8 +1270,8 @@ function StudioPage() {
     })
   }
 
-  function applyEnabledPalette(nextEnabledColorHexes: string[], nextRemovalMode = removalMode) {
-    const { sourceCells, sourcePalette } = buildEffectiveSourceState()
+  function applyEnabledPalette(nextEnabledColorHexes: string[], nextRemovalMode = removalMode, overrideState = manualCellOverrides) {
+    const { sourceCells, sourcePalette } = buildEffectiveSourceState(overrideState)
     const fullPaletteHexes = sourcePalette.map((color) => color.hex)
     const hasFullPaletteEnabled =
       nextEnabledColorHexes.length === fullPaletteHexes.length &&
@@ -1325,7 +1330,42 @@ function StudioPage() {
     }
 
     pushUndoSnapshot()
-    applyEnabledPalette(enabledColorHexes.filter((item) => item !== hex))
+    setManuallyDisabledHexes((current) => [...current.filter((h) => h !== hex), hex])
+
+    const { sourceCells, sourcePalette } = buildEffectiveSourceState()
+    const nextEnabledHexes = enabledColorHexes.filter((item) => item !== hex)
+    const addedOverrides: Record<string, string> = {}
+
+    if (removalMode === 'blank') {
+      sourceCells.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (cell === hex) addedOverrides[makeCellKey(rowIndex, colIndex)] = BLANK_CELL
+        })
+      })
+    } else {
+      const enabledSet = new Set(nextEnabledHexes)
+      const enabledHexList = sourcePalette.filter((c) => enabledSet.has(c.hex)).map((c) => c.hex)
+      if (enabledHexList.length > 0) {
+        sourceCells.forEach((row, rowIndex) => {
+          row.forEach((cell, colIndex) => {
+            if (cell !== hex) return
+            const remapped = enabledHexList.reduce((closest, candidate) =>
+              colorDistance(cell, candidate) < colorDistance(cell, closest) ? candidate : closest
+            )
+            addedOverrides[makeCellKey(rowIndex, colIndex)] = remapped
+          })
+        })
+      }
+    }
+
+    if (Object.keys(addedOverrides).length > 0) {
+      const nextOverrides = { ...manualCellOverrides, ...addedOverrides }
+      setManualCellOverrides(nextOverrides)
+      applyEnabledPalette(nextEnabledHexes, removalMode, nextOverrides)
+      return
+    }
+
+    applyEnabledPalette(nextEnabledHexes)
   }
 
   function enableColorHex(hex: string) {
@@ -1336,7 +1376,17 @@ function StudioPage() {
     }
 
     pushUndoSnapshot()
-    applyEnabledPalette(Array.from(new Set([...enabledColorHexes, hex])))
+    setManuallyDisabledHexes((current) => current.filter((h) => h !== hex))
+
+    const nextOverrides = Object.fromEntries(
+      Object.entries(manualCellOverrides).filter(([key, value]) => {
+        if (value === BLANK_CELL && removalMode !== 'blank') return true
+        const [rowText, colText] = key.split(':')
+        return originalCells[Number(rowText)]?.[Number(colText)] !== hex
+      })
+    )
+    setManualCellOverrides(nextOverrides)
+    applyEnabledPalette(Array.from(new Set([...enabledColorHexes, hex])), removalMode, nextOverrides)
   }
 
   function handleEnableAllColors() {
@@ -1355,19 +1405,26 @@ function StudioPage() {
   }
 
   function handleAutoReduceColors(targetCount: number) {
-    const sourceState = buildEffectiveSourceState()
-    const lockedBlankHexes = new Set(
-      Object.entries(manualCellOverrides)
-        .filter(([, value]) => value === BLANK_CELL)
-        .map(([key]) => {
-          const [rowText, colText] = key.split(':')
-          const row = Number(rowText)
-          const col = Number(colText)
-          return originalCells[row]?.[col]
-        })
-        .filter((hex): hex is string => Boolean(hex) && hex !== BLANK_CELL && hex !== FINISH_OUTLINE_CELL)
-    )
-    const sourcePalette = sourceState.sourcePalette.filter((color) => !lockedBlankHexes.has(color.hex))
+    // Sync any blank cells visible in `cells` that aren't yet in manualCellOverrides.
+    // These arise when applyEnabledPalette runs in blank mode (e.g. via handleRemovalModeChange)
+    // and writes blanks to `cells` without recording them in manualCellOverrides.
+    const syncedOverrides = { ...manualCellOverrides }
+    let didSync = false
+    cells.forEach((row, rowIndex) => {
+      row.forEach((cell, colIndex) => {
+        if (cell !== BLANK_CELL) return
+        if (originalCells[rowIndex]?.[colIndex] === BLANK_CELL) return
+        const key = makeCellKey(rowIndex, colIndex)
+        if (syncedOverrides[key] === BLANK_CELL) return
+        syncedOverrides[key] = BLANK_CELL
+        didSync = true
+      })
+    })
+    if (didSync) setManualCellOverrides(syncedOverrides)
+
+    const sourceState = buildEffectiveSourceState(syncedOverrides)
+    const disabledSet = new Set(manuallyDisabledHexes)
+    const sourcePalette = sourceState.sourcePalette.filter((color) => !disabledSet.has(color.hex))
     const sourceCounts = countCellsByHex(sourceState.sourceCells)
     const clampedTarget = Math.max(2, Math.min(sourcePalette.length, targetCount))
     setPaletteReductionTarget(clampedTarget)
@@ -1386,7 +1443,26 @@ function StudioPage() {
     }
 
     pushUndoSnapshot()
-    applyEnabledPalette(nextEnabledColorHexes)
+
+    if (removalMode === 'blank') {
+      const nextEnabledSet = new Set(nextEnabledColorHexes)
+      const addedOverrides: Record<string, string> = {}
+      sourceState.sourceCells.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (cell === BLANK_CELL || cell === FINISH_OUTLINE_CELL) return
+          if (nextEnabledSet.has(cell)) return
+          addedOverrides[makeCellKey(rowIndex, colIndex)] = BLANK_CELL
+        })
+      })
+      if (Object.keys(addedOverrides).length > 0) {
+        const nextOverrides = { ...syncedOverrides, ...addedOverrides }
+        setManualCellOverrides(nextOverrides)
+        applyEnabledPalette(nextEnabledColorHexes, removalMode, nextOverrides)
+        return
+      }
+    }
+
+    applyEnabledPalette(nextEnabledColorHexes, removalMode, syncedOverrides)
   }
 
   function handleApplyShapeCells(shapeCells: Array<{row: number, col: number, color: string}>) {
@@ -1694,6 +1770,8 @@ function StudioPage() {
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
           finishOutlineBackups: { ...finishOutlineBackups },
+          paletteReductionTarget,
+          manuallyDisabledHexes: [...manuallyDisabledHexes],
         },
       ])
       setCells(previous.cells)
@@ -1703,6 +1781,8 @@ function StudioPage() {
       setRemovalMode(previous.removalMode)
       setManualCellOverrides(previous.manualCellOverrides)
       setFinishOutlineBackups(previous.finishOutlineBackups)
+      setPaletteReductionTarget(previous.paletteReductionTarget)
+      setManuallyDisabledHexes(previous.manuallyDisabledHexes)
       setFinalPdfPath(null)
       setFinalPreviewImagePath(null)
 
@@ -1725,6 +1805,8 @@ function StudioPage() {
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
           finishOutlineBackups: { ...finishOutlineBackups },
+          paletteReductionTarget,
+          manuallyDisabledHexes: [...manuallyDisabledHexes],
         },
       ])
       setCells(next.cells)
@@ -1734,6 +1816,8 @@ function StudioPage() {
       setRemovalMode(next.removalMode)
       setManualCellOverrides(next.manualCellOverrides)
       setFinishOutlineBackups(next.finishOutlineBackups)
+      setPaletteReductionTarget(next.paletteReductionTarget)
+      setManuallyDisabledHexes(next.manuallyDisabledHexes)
       setFinalPdfPath(null)
       setFinalPreviewImagePath(null)
 
@@ -1752,7 +1836,16 @@ function StudioPage() {
             target.isContentEditable)
       )
 
+      if (event.key === 'Escape') {
+        if (selectedRegions.length > 0) {
+          event.preventDefault()
+          setSelectedRegions([])
+        }
+        return
+      }
+
       if (isTypingTarget) return
+
       if (!event.ctrlKey && !event.metaKey) return
       if (event.key.toLowerCase() !== 'z') return
 
@@ -1772,7 +1865,7 @@ function StudioPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [redoStack.length, undoStack.length])
+  }, [redoStack.length, undoStack.length, selectedRegions.length])
 
   function handleRemovalModeChange(nextRemovalMode: 'fill' | 'blank') {
     if (nextRemovalMode === removalMode) return
@@ -1806,6 +1899,8 @@ function StudioPage() {
     setFinalPreviewImagePath(null)
     setViewMode('stitch')
     setSelectedRegions([])
+    setPaletteReductionTarget(allPalette.length)
+    setManuallyDisabledHexes([])
   }
 
   function mergeColorsIntoTarget(sourceHexes: string[], targetHex: string) {
@@ -3095,13 +3190,13 @@ function StudioPage() {
           )}
           {statusBlock}
           {isMobile && hasGeneratedPreview && currentDesignPalette.length > 0 && (
-            <div style={{ display: 'grid', gap: 8 }}>
+            <div style={{ display: 'grid', gap: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
                 Paint color
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                 {currentDesignPalette.map((color) => {
-                  const isActive = activePaintColor === color.hex && toolMode === 'paint'
+                  const isActive = activePaintColor === color.hex
                   return (
                     <button
                       key={color.hex}
@@ -3128,16 +3223,18 @@ function StudioPage() {
                 })}
                 <button
                   type="button"
+                  title="Eraser"
                   onClick={() => { setToolMode('paint'); setActivePaintColor(BLANK_CELL); setSelectedRegions([]) }}
                   style={{
-                    ...btnSecondary,
-                    fontSize: 11,
-                    padding: '4px 10px',
-                    background: activePaintColor === BLANK_CELL ? '#ede9e2' : undefined,
-                    fontWeight: activePaintColor === BLANK_CELL ? 700 : undefined,
+                    width: 32, height: 32, borderRadius: '50%',
+                    background: '#ebe6dd',
+                    border: activePaintColor === BLANK_CELL ? '3px solid #3f382f' : '2px dashed #b5afa8',
+                    boxShadow: activePaintColor === BLANK_CELL ? '0 0 0 2px #fff, 0 0 0 4px #3f382f' : undefined,
+                    cursor: 'pointer', flexShrink: 0, padding: 0,
+                    display: 'grid', placeItems: 'center',
                   }}
                 >
-                  Eraser
+                  <span style={{ fontSize: 11, color: '#8a8177', lineHeight: 1 }}>✕</span>
                 </button>
               </div>
             </div>
@@ -3542,7 +3639,7 @@ function StudioPage() {
               >
                 {leftPanelContent}
               </div>
-              <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', borderTop: '1px solid #eee8df' }}>
+              <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', paddingBottom: isMobile ? 'max(10px, env(safe-area-inset-bottom, 10px))' : '12px', borderTop: '1px solid #eee8df' }}>
                 <button
                   data-tutorial="save-button"
                   type="button"
@@ -3788,7 +3885,9 @@ function StudioPage() {
                   } else if (colorBrowserTarget === 'border') {
                     setShapeBorderColor(color.hex)
                     setShowColorBrowser(false)
-                  } else if (colorBrowserTarget !== 'add') {
+                  } else if (colorBrowserTarget === 'add') {
+                    setShowColorBrowser(true)
+                  } else {
                     setShowColorBrowser(false)
                   }
                 }
@@ -3800,12 +3899,16 @@ function StudioPage() {
 
           {!isFinalizeReview && (
             isMobile ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: '1px solid #ded8cf', background: '#fffdf8', zIndex: 35, pointerEvents: 'auto' }}>
-                {activePaintColor && activePaintColor !== BLANK_CELL && (
-                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: activePaintColor, border: '2px solid rgba(0,0,0,0.18)', flexShrink: 0 }} />
-                )}
-                {activePaintColor === BLANK_CELL && (
-                  <span style={{ fontSize: 11, color: '#8a8177', flexShrink: 0 }}>Eraser</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))', borderTop: '1px solid #ded8cf', background: '#fffdf8', zIndex: 35, pointerEvents: 'auto' }}>
+                {activePaintColor && (
+                  <div style={{
+                    width: 24, height: 24, borderRadius: '50%',
+                    background: activePaintColor === BLANK_CELL ? '#ebe6dd' : activePaintColor,
+                    border: activePaintColor === BLANK_CELL ? '2px dashed #b5afa8' : '2px solid rgba(0,0,0,0.18)',
+                    flexShrink: 0, display: 'grid', placeItems: 'center',
+                  }}>
+                    {activePaintColor === BLANK_CELL && <span style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>✕</span>}
+                  </div>
                 )}
                 <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Undo</button>
                 <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Redo</button>
@@ -4566,19 +4669,20 @@ function StudioPage() {
       )}
       {showPortraitWarning && (
         <div style={{
-          position: 'fixed', inset: 0, zIndex: 99999,
+          position: 'fixed', bottom: 'env(safe-area-inset-bottom, 0px)', left: 0, right: 0, zIndex: 99999,
           background: '#3f382f', color: '#f5f1ea',
-          display: 'grid', placeItems: 'center',
-          textAlign: 'center', padding: 32,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          padding: '10px 14px',
           fontFamily: 'Georgia, "Times New Roman", serif',
+          fontSize: 13,
         }}>
-          <div style={{ display: 'grid', gap: 16 }}>
-            <div style={{ fontSize: 52, lineHeight: 1 }}>↻</div>
-            <strong style={{ fontSize: 20 }}>Rotate your device</strong>
-            <p style={{ margin: 0, fontSize: 15, color: '#c9bfb4', maxWidth: 260 }}>
-              MNS Studio works best in landscape mode.
-            </p>
-          </div>
+          <span>↻ Landscape works better for editing</span>
+          <button
+            type="button"
+            onClick={() => setShowPortraitWarning(false)}
+            style={{ border: 0, background: 'none', color: '#f5f1ea', fontSize: 20, cursor: 'pointer', padding: '0 0 0 8px', lineHeight: 1, flexShrink: 0 }}
+            aria-label="Dismiss"
+          >✕</button>
         </div>
       )}
 

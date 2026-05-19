@@ -265,8 +265,8 @@ export default function PalettePanel({
                 gap: 6,
                 padding: '8px 10px',
                 borderRadius: 10,
-                border: '1px solid #e4ddd5',
-                background: '#faf7f3',
+                border: !activeColor ? '1px solid #c94f42' : '1px solid #e4ddd5',
+                background: !activeColor ? '#fff7f5' : '#faf7f3',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -282,11 +282,11 @@ export default function PalettePanel({
                 />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: '#8a8177' }}>Active brush color</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#3f382f' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: !activeColor ? '#b23428' : '#3f382f' }}>
                     {activeColorInfo
                       ? `${activeColorInfo.dmc_code} – ${activeColorInfo.dmc_name}`
                       : activeColor === BLANK_CELL
-                        ? 'Blank canvas'
+                        ? 'Eraser'
                       : activeColor === '#FFFFFF'
                         ? 'BLANC – White'
                         : activeColor
