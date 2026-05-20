@@ -333,20 +333,6 @@ function findOutsideBorderCoords(source: string[][], inset = 2) {
   return coords
 }
 
-function normalizeCommandText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function extractCommandNumber(text: string, patterns: RegExp[]) {
-  for (const pattern of patterns) {
-    const match = text.match(pattern)
-    if (match) {
-      return Number(match[1])
-    }
-  }
-
-  return null
-}
 
 function getSettingsKey(settings: PreviewSettings | null) {
   if (!settings) return null
@@ -2106,43 +2092,6 @@ function StudioPage() {
 
   async function handleChatMessage(message: string): Promise<CommandResult> {
     const trimmed = message.trim()
-    const lowered = normalizeCommandText(trimmed)
-
-    // Fast-path for instant local operations
-    if (lowered === 'undo' || lowered === 'undo last change') {
-      if (!undoStack.length) return { reply: 'Nothing to undo yet.' }
-      handleUndoColorChange()
-      return { reply: 'Undid the last preview edit.' }
-    }
-    if (lowered === 'redo' || lowered === 'redo last change') {
-      if (!redoStack.length) return { reply: 'Nothing to redo yet.' }
-      handleRedoColorChange()
-      return { reply: 'Redid the last preview edit.' }
-    }
-    if (lowered.includes('expand preview')) {
-      setIsPreviewExpanded(true)
-      return { reply: 'Expanded the preview area.' }
-    }
-    if (lowered.includes('show chat') || lowered.includes('collapse preview')) {
-      setIsPreviewExpanded(false)
-      return { reply: 'Brought panels back.' }
-    }
-
-    // URL import — handle locally to avoid the LLM touching the raw URL
-    const urlMatch = trimmed.match(/https?:\/\/\S+/i)
-    if (urlMatch && (lowered.startsWith('import ') || lowered.includes('use url') || lowered.includes('image url'))) {
-      setLoading(true)
-      try {
-        const result = await importImageFromUrl(urlMatch[0])
-        applyImportedImage(result.active_image_url)
-        return { reply: 'Imported that image URL. You can generate a stitch preview when ready.' }
-      } catch (error) {
-        setLoading(false)
-        throw error
-      }
-    }
-
-    // Everything else → LLM with canvas context + agentic tool use
     const context = buildCanvasContext()
     const response = await chatAssistant(trimmed, context)
 
