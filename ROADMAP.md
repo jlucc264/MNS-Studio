@@ -57,7 +57,7 @@ The base product should be complete enough that a user can finish a project with
 
 ### 3. Editing Reliability
 - Keep paint, highlight, subsection replace, and merge flows fast
-- Make undo/redo dependable in every major edit path
+- **Undo/redo refactor** — current implementation snapshots the entire cells grid on every change (expensive for large canvases); refactor to delta-based snapshots (store only changed cells + previous values) using a `useRef` stack instead of React state, making operations instant and memory-efficient
 - Keep palette behavior aligned with what is actually on the canvas
 
 ### 4. Output Reliability
@@ -103,7 +103,14 @@ The base product should be complete enough that a user can finish a project with
 - Preserve more edit history across non-destructive regenerations
 - Make long sessions safer and easier to resume
 
-### 5. Production Polish
+### 5. Preview Quality & Speed
+- **Stitch render improvement** — replace solid-color squares in the grid preview with a per-cell basketweave or diagonal texture that looks like actual needlepoint; purely a GridEditor rendering change, no backend needed
+- **Bold/tapestry source mode** — new deterministic pipeline: bilateral filter (flatten areas, preserve edges) + edge boosting + aggressive quantization to 6–10 colors; maps to a new `tapestry` source type alongside the existing Photo/Graphic/Stitched options
+- Show previous preview immediately while a new one generates — never flash a blank/loading state
+- Debounce settings changes so rapid adjustments don't fire redundant backend requests
+- Client-side input hashing to skip requests when nothing meaningful changed
+
+### 6. Production Polish
 - Stronger error handling
 - Better loading and empty states
 - Clearer export feedback
@@ -127,6 +134,10 @@ The base product should be complete enough that a user can finish a project with
   - colors used
   - stitch count per color
   - a cleaner summary of the finished piece
+- **Skein estimator** — stitch counts per color already exist; add the formula to convert to DMC skeins needed (capability already in place, just needs the calculation and PDF display)
+- **Symbol legend** — assign a unique printable symbol per color for black-and-white legibility and accessibility; add to the PDF palette table
+- **Center mark + inch tick marks** — add a center crosshair and inch-interval tick marks to the true-size canvas page; more intuitive for needlepointers who work outward from center than alphanumeric grid coordinates
+- **Center crosshair alignment** — the current crosshair in the stitch preview (and future PDF center mark) uses `cols / 2` which lands on a mesh hole for even stitch counts and a mesh intersection for odd counts; fix is `Math.floor(cols / 2) + 0.5` to always snap to a cell center (mesh intersection); also consider guiding users toward odd stitch counts for symmetric designs, and carry the same logic into the PDF center mark when built
 
 ### 9. UI Refresh
 - Make the site feel less like a raw tool and more like a destination/product
@@ -136,6 +147,9 @@ The base product should be complete enough that a user can finish a project with
 - Decide what “mobile friendly” means:
   - full editing on tablet/desktop
   - lighter review/edit flow on phone if needed
+- **Source type as prominent first choice** — surface source type (Photo / Graphic / Tapestry) as a large labeled selection immediately after import, before the user hits generate; this is the highest-impact setting and should feel like choosing a preset, not adjusting a control
+- **Color substitution UI** — `nearest_dmc()` already runs in the backend; expose it in PalettePanel as a visual picker: click any color → see a grid of nearest DMC neighbor swatches sorted by similarity → tap to swap. No backend work needed, purely a UI surface.
+- **Progressive disclosure** — show source type, size, and color count up front; move contrast fine-tuning and advanced toggles (simplify colors, strengthen dark detail, preserve accents) into a collapsible “Fine tune” section to reduce first-load overwhelm without hiding anything
 
 ### 10. Website Shell
 - Add a real home/about page outside the editor experience
@@ -175,6 +189,29 @@ This phase should happen only after the base workflow feels trustworthy.
 - Dedicated AI endpoints
 - Clear rate limits
 - Audit/logging around expensive or destructive operations
+
+## Creator Marketplace & Revenue Sharing
+
+The template marketplace is a structural advantage over competitors like Stitchly, which are tools with no marketplace layer. The core flywheel:
+
+- Designers publish finished patterns as purchasable templates
+- Buyers get a ready-to-stitch canvas — not just a PDF they still have to act on
+- Creators earn a revenue share on every sale, which incentivizes more publishing
+- Each published template becomes a storefront that drives new buyer acquisition
+- Buyers who connect with a designer's style return for future templates
+
+This is durable because the template is tied to a physical canvas. A buyer isn't comparing it to a free PDF — they're comparing it to sourcing canvas, painting a grid, and doing the color matching themselves. That moat is hard for Etsy sellers or Stitchly users to replicate.
+
+### Creator Experience (Future)
+- **Creator profile full nav** — `/gallery/[slug]` currently has a minimal nav (← Gallery + Open Studio only); bring it in line with the full site nav (logo, Gallery | Your Studio | Active Canvas links, account controls)
+- Earnings dashboard — transparent view of sales, revenue, and payout history
+- Featured creator spots — surface top designers to drive discovery
+- Tiered commission rates — reward high-volume or high-quality creators
+- Template analytics — help creators understand which designs perform and why
+- Creator profiles — public-facing pages that build designer identity within the platform
+
+### Pricing Context
+At $15/design, MNS is roughly the cost of 3 Stitchly uses — but includes a physical canvas delivered ready to stitch. For repeat buyers who find designers they trust, the template marketplace turns one-time transactions into recurring business for both the creator and the platform.
 
 ## Phase 4: First Pro Features
 

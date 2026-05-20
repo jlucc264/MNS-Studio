@@ -7,4 +7,4 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ALLOWED_ORIGINS
-        value: https://yourdomain.com,https://www.yourdomain.com
+        value: https://mns.studio,https://www.mns.studio,https://app.mns.studio
