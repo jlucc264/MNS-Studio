@@ -169,6 +169,7 @@ class CanvasContext(BaseModel):
     color_count: int = 128
     has_preview: bool = False
     has_source_image: bool = False
+    source_image_url: Optional[str] = None
     palette: list[dict] = []
     clean_background: bool = False
     simplify_colors: bool = False

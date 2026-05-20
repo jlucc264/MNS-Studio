@@ -57,6 +57,7 @@ export type CanvasContext = {
   color_count: number
   has_preview: boolean
   has_source_image: boolean
+  source_image_url?: string
   palette: Array<{ dmc_code: string; name: string; hex: string }>
   clean_background: boolean
   simplify_colors: boolean

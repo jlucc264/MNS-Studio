@@ -1,8 +1,13 @@
+import io
 import json
 import logging
 import os
+from pathlib import Path
+from urllib.request import Request, urlopen
 
-from app.services.storage import save_remote_image
+from PIL import Image
+
+from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +208,25 @@ TOOLS = [
             "required": ["prompt"],
         },
     },
+    {
+        "name": "edit_source_image",
+        "description": (
+            "Edit or transform the current source image using AI (gpt-image-1). "
+            "Use this for perspective correction, style changes, background removal, "
+            "color adjustments, or any other modification to the existing source image. "
+            "Only works when a source image is already loaded."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Description of the edit to apply, e.g. 'make the perspective more front-facing' or 'remove the background'.",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
 ]
 
 
@@ -248,7 +272,29 @@ Needlepoint design tips to share when relevant:
 - Simplify colors helps when the image has too much noise; strengthen_dark_detail preserves outlines"""
 
 
-def _process_tool_call(tool_name: str, tool_input: dict) -> tuple[str, dict | None]:
+def _load_source_image_bytes(source_image_url: str) -> bytes:
+    """Return PNG bytes for the source image, reading from disk or fetching by URL."""
+    # Local asset paths like /assets/uploads/foo.png
+    for prefix, base_dir in [("/assets/uploads/", UPLOADS_DIR), ("/assets/previews/", PREVIEWS_DIR)]:
+        if source_image_url.startswith(prefix):
+            local = base_dir / source_image_url[len(prefix):]
+            if local.exists():
+                img = Image.open(local).convert("RGBA")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
+
+    # Full URL — fetch it
+    req = Request(source_image_url, headers={"User-Agent": "MNS/1.0"})
+    with urlopen(req, timeout=15) as resp:
+        raw = resp.read()
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple[str, dict | None]:
     """Execute a single tool call. Returns (result_text, action_dict | None)."""
 
     if tool_name == "set_source_mode":
@@ -342,6 +388,39 @@ def _process_tool_call(tool_name: str, tool_input: dict) -> tuple[str, dict | No
             logger.exception("DALL-E generation failed: %s", exc)
             return f"Image generation failed: {exc}", None
 
+    if tool_name == "edit_source_image":
+        prompt = tool_input["prompt"]
+        source_url = context.get("source_image_url")
+        if not source_url:
+            return "No source image is loaded to edit.", None
+        client = _get_openai()
+        if client is None:
+            return "Image editing is not configured (OPENAI_API_KEY missing).", None
+        try:
+            png_bytes = _load_source_image_bytes(source_url)
+            response = client.images.edit(
+                model="gpt-image-1",
+                image=("source.png", io.BytesIO(png_bytes), "image/png"),
+                prompt=prompt,
+                size="1024x1024",
+            )
+            img_bytes = response.data[0].b64_json
+            if img_bytes:
+                from uuid import uuid4
+                out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
+                out_path.write_bytes(__import__("base64").b64decode(img_bytes))
+                local_url = f"/assets/uploads/{out_path.name}"
+            else:
+                temp_url = response.data[0].url
+                local_url = save_remote_image(temp_url)
+            return (
+                f"Edited image applied.",
+                {"type": "set_source_image", "url": local_url},
+            )
+        except Exception as exc:
+            logger.exception("Image edit failed: %s", exc)
+            return f"Image edit failed: {exc}", None
+
     return f"Unknown tool: {tool_name}", None
 
 
@@ -378,7 +457,7 @@ def chat_with_claude(message: str, context: dict) -> dict:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result_text, action = _process_tool_call(block.name, block.input)
+                    result_text, action = _process_tool_call(block.name, block.input, context)
                     if action:
                         if action.get("type") == "set_source_image":
                             image_url = action.get("url")

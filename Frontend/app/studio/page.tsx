@@ -2017,6 +2017,7 @@ function StudioPage() {
       color_count: paletteReductionTarget,
       has_preview: hasGeneratedPreview,
       has_source_image: !!activeImagePath,
+      source_image_url: activeImagePath ?? undefined,
       palette: displayPalette.slice(0, 30).map((c) => ({
         dmc_code: c.dmc_code,
         name: c.dmc_name,
