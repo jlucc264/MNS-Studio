@@ -2396,11 +2396,6 @@ function StudioPage() {
     <ChatPanel
       onSubmitMessage={handleChatMessage}
       onUploadFile={handleChatUpload}
-      onGeneratePreview={() => void handleApply(draftSettings)}
-      onGetSuggestions={handleGetSuggestions}
-      canGeneratePreview={Boolean(activeImagePath)}
-      hasPreview={Boolean(previewImagePath && cells.length)}
-      sourceType={draftSettings.source_type}
     />
   )
 
