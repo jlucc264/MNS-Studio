@@ -49,12 +49,39 @@ export type DmcColor = {
   rgb: [number, number, number]
 }
 
+export type CanvasContext = {
+  source_mode: string
+  width_inches: number
+  height_inches: number
+  mesh_count: number
+  color_count: number
+  has_preview: boolean
+  has_source_image: boolean
+  palette: Array<{ dmc_code: string; name: string; hex: string }>
+  clean_background: boolean
+  simplify_colors: boolean
+  strengthen_dark_detail: boolean
+  preserve_accents: boolean
+  contrast_level: string
+  show_grid: boolean
+}
+
+export type ChatActionItem = {
+  type: string
+  value?: unknown
+  from_codes?: string[]
+  to_code?: string
+  setting?: string
+  url?: string
+  width_inches?: number
+  height_inches?: number
+  mesh_count?: number
+}
+
 export type ChatResponse = {
-  action: string
-  message: string
-  active_image_url?: string | null
-  stitch_preview_url?: string | null
-  metadata?: Record<string, unknown>
+  reply: string
+  actions: ChatActionItem[]
+  image_url?: string | null
 }
 
 export type ContentBounds = {
@@ -146,11 +173,11 @@ export async function fetchDmcColors(): Promise<PaletteColor[]> {
   }))
 }
 
-export async function chatAssistant(message: string): Promise<ChatResponse> {
+export async function chatAssistant(message: string, context?: CanvasContext): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, context }),
   })
 
   if (!res.ok) {
@@ -163,6 +190,19 @@ export async function chatAssistant(message: string): Promise<ChatResponse> {
   }
 
   return res.json()
+}
+
+export async function getChatSuggestions(context?: CanvasContext): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/chat/suggestions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context }),
+  })
+
+  if (!res.ok) return []
+
+  const data = await res.json()
+  return data.suggestions ?? []
 }
 
 export function assetUrl(path: string | null) {

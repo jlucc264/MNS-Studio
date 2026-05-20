@@ -58,6 +58,17 @@ def _request(method: str, path: str, body: dict | None = None, params: str = "")
 
 # ── public API ────────────────────────────────────────────────────────────────
 
+def log_chat(user_message: str, assistant_reply: str, actions: list, context: dict) -> None:
+    try:
+        _request("POST", "/chat_logs", body={
+            "user_message": user_message,
+            "assistant_reply": assistant_reply,
+            "actions": actions,
+            "context": context,
+        })
+    except Exception as exc:
+        logger.warning("Chat log write failed: %s", exc)
+
 def list_projects(user_id: str) -> list[dict]:
     encoded_user_id = quote(user_id, safe="")
     result = _request(

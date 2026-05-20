@@ -3,8 +3,6 @@
 import Link from 'next/link'
 import { type FormEvent, useState } from 'react'
 
-const CONTACT_EMAIL = 'john@mns.studio'
-
 const CATEGORIES = [
   'Bug report',
   'Feature request',
@@ -43,33 +41,38 @@ const inputStyle = {
   fontSize: 14,
   color: '#3f382f',
   background: '#fff',
-  boxSizing: 'border-box',
+  boxSizing: 'border-box' as const,
   outline: 'none',
-} as const
+}
 
 export default function ContactPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [category, setCategory] = useState(CATEGORIES[0])
   const [message, setMessage] = useState('')
-  const [sent, setSent] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    const subject = encodeURIComponent(`[MNS Studio] ${category}${name ? ` — ${name}` : ''}`)
-    const body = encodeURIComponent(
-      [
-        name ? `From: ${name}` : '',
-        email ? `Reply-to: ${email}` : '',
-        `Category: ${category}`,
-        '',
-        message,
-      ]
-        .filter((line) => line !== undefined)
-        .join('\n')
-    )
-    window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`
-    setSent(true)
+    setStatus('sending')
+    setErrorMsg('')
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, '') ?? 'http://localhost:8000'
+      const res = await fetch(`${apiBase}/contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name || null, email: email || null, category, message }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error((data as { detail?: string }).detail ?? 'Something went wrong.')
+      }
+      setStatus('sent')
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Something went wrong.')
+      setStatus('error')
+    }
   }
 
   return (
@@ -100,11 +103,11 @@ export default function ContactPage() {
         <div style={{ marginBottom: 32 }}>
           <h1 style={{ margin: '0 0 8px', fontSize: 28, color: '#3f382f' }}>Contact Us</h1>
           <p style={{ margin: 0, fontSize: 14, color: '#7f776d', lineHeight: 1.6 }}>
-            Found a bug, have a request, or just want to say hi? Fill out the form below and it will open in your email client, pre-addressed to us.
+            Found a bug, have a request, or just want to say hi? We&apos;ll get back to you as soon as we can.
           </p>
         </div>
 
-        {sent ? (
+        {status === 'sent' ? (
           <div
             style={{
               background: '#edf3ec',
@@ -115,17 +118,13 @@ export default function ContactPage() {
               gap: 12,
             }}
           >
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#3f6b38' }}>Your email client should have opened.</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#3f6b38' }}>Message sent!</div>
             <p style={{ margin: 0, fontSize: 14, color: '#5f574e', lineHeight: 1.6 }}>
-              If it didn&apos;t, you can email us directly at{' '}
-              <a href={`mailto:${CONTACT_EMAIL}`} style={{ color: '#4a7244', fontWeight: 600 }}>
-                {CONTACT_EMAIL}
-              </a>
-              .
+              Thanks for reaching out. We&apos;ll get back to you soon.
             </p>
             <button
               type="button"
-              onClick={() => setSent(false)}
+              onClick={() => { setStatus('idle'); setMessage('') }}
               style={{ justifySelf: 'start', border: 0, background: 'transparent', font: 'inherit', fontSize: 13, color: '#7f776d', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
             >
               Send another message
@@ -133,7 +132,7 @@ export default function ContactPage() {
           </div>
         ) : (
           <form
-            onSubmit={handleSubmit}
+            onSubmit={(e) => { void handleSubmit(e) }}
             style={{
               background: '#fffdf8',
               border: '1px solid #e4ddd5',
@@ -199,14 +198,19 @@ export default function ContactPage() {
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <button type="submit" style={btnPrimary}>
-                Open email client →
-              </button>
-              <span style={{ fontSize: 12, color: '#8a8177', lineHeight: 1.5 }}>
-                This will open your mail app pre-addressed to {CONTACT_EMAIL}
-              </span>
-            </div>
+            {status === 'error' && (
+              <div style={{ fontSize: 13, color: '#b04040', background: '#fdf0ef', border: '1px solid #e8b4b0', borderRadius: 8, padding: '10px 14px' }}>
+                {errorMsg}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={status === 'sending'}
+              style={{ ...btnPrimary, opacity: status === 'sending' ? 0.6 : 1, cursor: status === 'sending' ? 'default' : 'pointer' }}
+            >
+              {status === 'sending' ? 'Sending…' : 'Send message'}
+            </button>
           </form>
         )}
       </main>

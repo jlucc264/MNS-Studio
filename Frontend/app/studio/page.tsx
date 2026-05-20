@@ -26,7 +26,10 @@ import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import {
   assetUrl,
+  CanvasContext,
+  ChatActionItem,
   chatAssistant,
+  getChatSuggestions,
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
@@ -481,7 +484,7 @@ function StudioPage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(1280)
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
-  const [showChatDrawer, _setShowChatDrawer] = useState(false)
+  const [showChatPanel, setShowChatPanel] = useState(false)
   const [stagedUploadDragActive, setStagedUploadDragActive] = useState(false)
   const [uploadTipsOpen, setUploadTipsOpen] = useState(false)
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null)
@@ -2005,55 +2008,126 @@ function StudioPage() {
     return changed
   }
 
+  function buildCanvasContext(): CanvasContext {
+    return {
+      source_mode: draftSettings.source_type,
+      width_inches: draftSettings.width_inches,
+      height_inches: draftSettings.height_inches,
+      mesh_count: draftSettings.mesh_count,
+      color_count: paletteReductionTarget,
+      has_preview: hasGeneratedPreview,
+      has_source_image: !!activeImagePath,
+      palette: displayPalette.slice(0, 30).map((c) => ({
+        dmc_code: c.dmc_code,
+        name: c.dmc_name,
+        hex: c.hex,
+      })),
+      clean_background: draftSettings.clean_background,
+      simplify_colors: draftSettings.simplify_colors,
+      strengthen_dark_detail: draftSettings.strengthen_dark_detail,
+      preserve_accents: draftSettings.preserve_accents,
+      contrast_level: draftSettings.contrast_level,
+      show_grid: draftSettings.show_grid,
+    }
+  }
+
+  async function dispatchChatAction(action: ChatActionItem): Promise<void> {
+    switch (action.type) {
+      case 'set_source_mode':
+        setDraftSettings((current) =>
+          applySourceTypeDefaults(current, action.value as 'photo' | 'stitched_photo' | 'graphic_art')
+        )
+        break
+      case 'set_dimensions':
+        updateSettings({
+          ...(action.width_inches !== undefined && { width_inches: action.width_inches }),
+          ...(action.height_inches !== undefined && { height_inches: action.height_inches }),
+          ...(action.mesh_count !== undefined && { mesh_count: action.mesh_count as 13 | 18 }),
+        })
+        break
+      case 'set_color_count':
+        if (displayPalette.length) handleAutoReduceColors(action.value as number)
+        break
+      case 'toggle_setting':
+        updateSettings({ [action.setting as string]: action.value })
+        break
+      case 'set_contrast':
+        updateSettings({ contrast_level: action.value as string as 'low' | 'normal' | 'high' | 'super_high' | 'super_super_high' })
+        break
+      case 'generate_preview':
+        if (activeImagePath) await handleApply(draftSettings)
+        break
+      case 'undo':
+        if (undoStack.length) handleUndoColorChange()
+        break
+      case 'redo':
+        if (redoStack.length) handleRedoColorChange()
+        break
+      case 'reset_preview':
+        handleResetColorChanges()
+        break
+      case 'remove_color': {
+        const col = findPaletteColor(action.value as string)
+        if (col) disableColorHex(col.hex)
+        break
+      }
+      case 'restore_color': {
+        const col = findPaletteColor(action.value as string)
+        if (col) enableColorHex(col.hex)
+        break
+      }
+      case 'merge_colors': {
+        const target = findPaletteColor(action.to_code ?? '')
+        if (target) {
+          const fromHexes = (action.from_codes ?? [])
+            .map((code) => findPaletteColor(code)?.hex)
+            .filter((h): h is string => !!h)
+          if (fromHexes.length) mergeColorsIntoTarget(fromHexes, target.hex)
+        }
+        break
+      }
+      case 'set_paint_color': {
+        const col = findPaletteColor(action.value as string)
+        if (col) setActivePaintColor(col.hex)
+        break
+      }
+      case 'set_removal_mode':
+        handleRemovalModeChange(action.value as 'fill' | 'blank')
+        break
+      case 'set_source_image':
+        if (action.url) applyImportedImage(action.url)
+        break
+      case 'expand_preview':
+        setIsPreviewExpanded(action.value as boolean)
+        break
+    }
+  }
+
   async function handleChatMessage(message: string): Promise<CommandResult> {
     const trimmed = message.trim()
     const lowered = normalizeCommandText(trimmed)
 
-    if (
-      lowered === 'help' ||
-      lowered === 'commands' ||
-      lowered === 'what can you do' ||
-      lowered === 'what can i do here'
-    ) {
-      const response = await chatAssistant(trimmed)
-      return { reply: response.message }
+    // Fast-path for instant local operations
+    if (lowered === 'undo' || lowered === 'undo last change') {
+      if (!undoStack.length) return { reply: 'Nothing to undo yet.' }
+      handleUndoColorChange()
+      return { reply: 'Undid the last preview edit.' }
+    }
+    if (lowered === 'redo' || lowered === 'redo last change') {
+      if (!redoStack.length) return { reply: 'Nothing to redo yet.' }
+      handleRedoColorChange()
+      return { reply: 'Redid the last preview edit.' }
+    }
+    if (lowered.includes('expand preview')) {
+      setIsPreviewExpanded(true)
+      return { reply: 'Expanded the preview area.' }
+    }
+    if (lowered.includes('show chat') || lowered.includes('collapse preview')) {
+      setIsPreviewExpanded(false)
+      return { reply: 'Brought panels back.' }
     }
 
-    const helpMatch = lowered.match(/^(?:help|guide|how do i use)\s+(.+)$/)
-    if (helpMatch) {
-      const response = await chatAssistant(trimmed)
-      return { reply: response.message }
-    }
-
-    if (
-      lowered === 'use stitched photo' ||
-      lowered === 'switch to stitched photo' ||
-      lowered === 'set source to stitched photo'
-    ) {
-      setDraftSettings((current) => applySourceTypeDefaults(current, 'stitched_photo'))
-      return { reply: 'Switched the source mode to stitched photo.' }
-    }
-
-    if (
-      lowered === 'use graphic art' ||
-      lowered === 'use screenshot art' ||
-      lowered === 'switch to graphic art' ||
-      lowered === 'switch to screenshot art' ||
-      lowered === 'set source to graphic art'
-    ) {
-      setDraftSettings((current) => applySourceTypeDefaults(current, 'graphic_art'))
-      return { reply: 'Switched the source mode to graphic / screenshot art.' }
-    }
-
-    if (
-      lowered === 'use photo' ||
-      lowered === 'switch to photo' ||
-      lowered === 'set source to photo'
-    ) {
-      setDraftSettings((current) => applySourceTypeDefaults(current, 'photo'))
-      return { reply: 'Switched the source mode to photo.' }
-    }
-
+    // URL import — handle locally to avoid the LLM touching the raw URL
     const urlMatch = trimmed.match(/https?:\/\/\S+/i)
     if (urlMatch && (lowered.startsWith('import ') || lowered.includes('use url') || lowered.includes('image url'))) {
       setLoading(true)
@@ -2067,395 +2141,19 @@ function StudioPage() {
       }
     }
 
-    if (lowered.includes('upload')) {
-      return { reply: 'Use the Upload file button in chat and I’ll import it into the project.' }
+    // Everything else → LLM with canvas context + agentic tool use
+    const context = buildCanvasContext()
+    const response = await chatAssistant(trimmed, context)
+
+    for (const action of response.actions ?? []) {
+      await dispatchChatAction(action)
     }
 
-    if (
-      lowered.includes('search') ||
-      lowered.includes('find a photo') ||
-      lowered.includes('find an image') ||
-      lowered.includes('search the web') ||
-      lowered.includes('look for')
-    ) {
-      return {
-        reply:
-          'MNS Studio does not search for images. Find the image you want online, then upload it here or paste the direct image URL with `import https://...`.',
-      }
-    }
+    return { reply: response.reply }
+  }
 
-    if (lowered.includes('generate from scratch') || lowered.includes('create an image')) {
-      const response = await chatAssistant(trimmed)
-      return { reply: response.message }
-    }
-
-    const widthValue = extractCommandNumber(lowered, [
-      /(?:set|make|change|use|update)?\s*width(?: inches| inch| in)?(?: to| =)?\s*(\d+(?:\.\d+)?)/,
-      /(\d+(?:\.\d+)?)\s*(?:inch|in)\s*wide/,
-    ])
-    if (widthValue !== null) {
-      updateSettings({ width_inches: widthValue })
-      return { reply: `Updated width to ${widthValue} inches.` }
-    }
-
-    const heightValue = extractCommandNumber(lowered, [
-      /(?:set|make|change|use|update)?\s*height(?: inches| inch| in)?(?: to| =)?\s*(\d+(?:\.\d+)?)/,
-      /(\d+(?:\.\d+)?)\s*(?:inch|in)\s*tall/,
-    ])
-    if (heightValue !== null) {
-      updateSettings({ height_inches: heightValue })
-      return { reply: `Updated height to ${heightValue} inches.` }
-    }
-
-    const meshValue = extractCommandNumber(lowered, [
-      /(?:set|use|switch to|change to)?\s*(13|18)\s*mesh/,
-      /mesh(?: count| size)?(?: to| =)?\s*(13|18)/,
-    ])
-    if (meshValue === 13 || meshValue === 18) {
-      updateSettings({ mesh_count: meshValue })
-      return { reply: `Set mesh count to ${meshValue}.` }
-    }
-
-    const colorCountValue = extractCommandNumber(lowered, [
-      /(?:set|use|change|limit)?\s*(?:color count|colors?)(?: to| =)?\s*(\d{1,2})/,
-      /(\d{1,2})\s*colors?/,
-    ])
-    if (colorCountValue !== null) {
-      if (displayPalette.length) {
-        handleAutoReduceColors(colorCountValue)
-        return { reply: `Reduced the current palette toward ${colorCountValue} colors.` }
-      }
-      return { reply: 'New previews generate at 128 colors. Generate a preview first, then reduce the current palette.' }
-    }
-
-    if (
-      lowered.includes('grid off') ||
-      lowered.includes('hide grid') ||
-      lowered.includes('turn grid off') ||
-      lowered.includes('disable grid')
-    ) {
-      updateSettings({ show_grid: false })
-      return { reply: 'Turned grid off.' }
-    }
-
-    if (
-      lowered.includes('grid on') ||
-      lowered.includes('show grid') ||
-      lowered.includes('turn grid on') ||
-      lowered.includes('enable grid')
-    ) {
-      updateSettings({ show_grid: true })
-      return { reply: 'Turned grid on.' }
-    }
-
-    if (
-      lowered.includes('clean background on') ||
-      lowered.includes('enable clean background') ||
-      lowered.includes('turn clean background on')
-    ) {
-      updateSettings({ clean_background: true })
-      return { reply: 'Turned Exclude blank canvas on.' }
-    }
-
-    if (
-      lowered.includes('clean background off') ||
-      lowered.includes('disable clean background') ||
-      lowered.includes('turn clean background off')
-    ) {
-      updateSettings({ clean_background: false })
-      return { reply: 'Turned Exclude blank canvas off.' }
-    }
-
-    if (
-      lowered.includes('simplify colors on') ||
-      lowered.includes('enable simplify colors') ||
-      lowered.includes('turn simplify colors on')
-    ) {
-      updateSettings({ simplify_colors: true })
-      return { reply: 'Turned Simplify colors on.' }
-    }
-
-    if (
-      lowered.includes('simplify colors off') ||
-      lowered.includes('disable simplify colors') ||
-      lowered.includes('turn simplify colors off')
-    ) {
-      updateSettings({ simplify_colors: false })
-      return { reply: 'Turned Simplify colors off.' }
-    }
-
-    if (
-      lowered.includes('strengthen dark detail on') ||
-      lowered.includes('enable strengthen dark detail') ||
-      lowered.includes('turn strengthen dark detail on')
-    ) {
-      updateSettings({ strengthen_dark_detail: true })
-      return { reply: 'Turned Strengthen dark detail on.' }
-    }
-
-    if (
-      lowered.includes('strengthen dark detail off') ||
-      lowered.includes('disable strengthen dark detail') ||
-      lowered.includes('turn strengthen dark detail off')
-    ) {
-      updateSettings({ strengthen_dark_detail: false })
-      return { reply: 'Turned Strengthen dark detail off.' }
-    }
-
-    if (
-      lowered.includes('preserve accents on') ||
-      lowered.includes('enable preserve accents') ||
-      lowered.includes('turn preserve accents on')
-    ) {
-      updateSettings({ preserve_accents: true })
-      return { reply: 'Turned Preserve accents on.' }
-    }
-
-    if (
-      lowered.includes('preserve accents off') ||
-      lowered.includes('disable preserve accents') ||
-      lowered.includes('turn preserve accents off')
-    ) {
-      updateSettings({ preserve_accents: false })
-      return { reply: 'Turned Preserve accents off.' }
-    }
-
-    if (lowered.includes('super super high contrast') || lowered.includes('contrast super super high')) {
-      updateSettings({ contrast_level: 'super_super_high' })
-      return { reply: 'Set contrast to super super high.' }
-    }
-    if (lowered.includes('super high contrast') || lowered.includes('contrast super high')) {
-      updateSettings({ contrast_level: 'super_high' })
-      return { reply: 'Set contrast to super high.' }
-    }
-    if (lowered.includes('contrast high') || lowered.includes('high contrast')) {
-      updateSettings({ contrast_level: 'high' })
-      return { reply: 'Set contrast to high.' }
-    }
-    if (lowered.includes('contrast low') || lowered.includes('low contrast')) {
-      updateSettings({ contrast_level: 'low' })
-      return { reply: 'Set contrast to low.' }
-    }
-    if (lowered.includes('contrast normal') || lowered.includes('normal contrast')) {
-      updateSettings({ contrast_level: 'normal' })
-      return { reply: 'Set contrast to normal.' }
-    }
-
-    if (lowered.includes('lock aspect')) {
-      setLockAspectRatio(true)
-      return { reply: 'Aspect ratio is locked.' }
-    }
-    if (lowered.includes('unlock aspect')) {
-      setLockAspectRatio(false)
-      return { reply: 'Aspect ratio is unlocked.' }
-    }
-
-    if (
-      lowered.includes('analyze palette') ||
-      lowered.includes('palette analysis') ||
-      lowered.includes('show palette counts')
-    ) {
-      return { reply: analyzePaletteSummary() }
-    }
-
-    if (
-      lowered === 'turn all colors on' ||
-      lowered === 'enable all colors' ||
-      lowered === 'show all colors'
-    ) {
-      handleEnableAllColors()
-      return { reply: 'Turned all current palette colors back on.' }
-    }
-
-    if (
-      lowered === 'reset colors' ||
-      lowered === 'reset preview edits' ||
-      lowered === 'reset preview'
-    ) {
-      handleResetColorChanges()
-      return { reply: 'Reset the current preview edits back to the generated base preview.' }
-    }
-
-    if (
-      lowered === 'what are my settings' ||
-      lowered === 'show settings' ||
-      lowered === 'current settings'
-    ) {
-      return {
-        reply: [
-          `Source: ${
-            draftSettings.source_type === 'stitched_photo'
-              ? 'Stitched photo'
-              : draftSettings.source_type === 'graphic_art'
-                ? 'Graphic / screenshot art'
-                : 'Photo'
-          }`,
-          `Size: ${draftSettings.width_inches}" x ${draftSettings.height_inches}"`,
-          `Mesh: ${draftSettings.mesh_count}`,
-          `New preview color budget: 128`,
-          `Contrast: ${draftSettings.contrast_level.replaceAll('_', ' ')}`,
-          `Exclude blank canvas: ${draftSettings.clean_background ? 'on' : 'off'}`,
-          `Simplify colors: ${draftSettings.simplify_colors ? 'on' : 'off'}`,
-          `Strengthen dark detail: ${draftSettings.strengthen_dark_detail ? 'on' : 'off'}`,
-          `Preserve accents: ${draftSettings.preserve_accents ? 'on' : 'off'}`,
-          `Grid: ${draftSettings.show_grid ? 'on' : 'off'}`,
-        ].join('\n'),
-      }
-    }
-
-    const borderMatch = trimmed.match(
-      /^(?:make|change|set)\s+(?:the\s+)?(?:outside|outer)\s+border(?:\s+fully)?\s+(?:to\s+)?(.+)$/i
-    )
-    if (borderMatch) {
-      if (!cells.length) {
-        return { reply: 'Generate a stitch preview first, then I can recolor the outside border.' }
-      }
-
-      const targetQuery = borderMatch[1].trim().replace(/[.!?]+$/, '')
-      const targetColor = findPaletteColor(targetQuery)
-
-      if (!targetColor) {
-        return { reply: `I couldn't match "${targetQuery}" to a palette color yet.` }
-      }
-
-      const changed = recolorOutsideBorder(targetColor.hex)
-      if (!changed) {
-        return { reply: `The outside border is already fully ${targetColor.dmc_code}.` }
-      }
-
-      return {
-        reply: `Changed the outside border to ${targetColor.dmc_code} - ${targetColor.dmc_name} across ${changed} stitches.`,
-      }
-    }
-
-    if (
-      (lowered.includes('generate') || lowered.includes('create') || lowered.includes('make')) &&
-      lowered.includes('preview')
-    ) {
-      if (!activeImagePath) {
-        return { reply: 'Import or upload an image first, then I can generate the stitch preview.' }
-      }
-      await handleApply(draftSettings)
-      return { reply: 'Generated a new stitch preview.' }
-    }
-
-    if (lowered === 'undo' || lowered === 'undo last change') {
-      if (!undoStack.length) {
-        return { reply: 'There is nothing to undo yet.' }
-      }
-      handleUndoColorChange()
-      return { reply: 'Undid the last preview edit.' }
-    }
-
-    if (lowered === 'redo' || lowered === 'redo last change') {
-      if (!redoStack.length) {
-        return { reply: 'There is nothing to redo yet.' }
-      }
-      handleRedoColorChange()
-      return { reply: 'Redid the last preview edit.' }
-    }
-
-    if (lowered.includes('expand preview')) {
-      setIsPreviewExpanded(true)
-      return { reply: 'Expanded the preview area.' }
-    }
-
-    if (lowered.includes('show chat') || lowered.includes('collapse preview')) {
-      setIsPreviewExpanded(false)
-      return { reply: 'Brought the chat and sizing panel back.' }
-    }
-
-    if (lowered.includes('fill with nearby')) {
-      handleRemovalModeChange('fill')
-      return { reply: 'Color removals will now fill with nearby colors.' }
-    }
-
-    if (lowered.includes('blank white') || lowered.includes('remove fully')) {
-      handleRemovalModeChange('blank')
-      return { reply: 'Color removals will now leave blank canvas cells.' }
-    }
-
-    const paintMatch = lowered.match(/(?:paint|use|select)(?: with)? (.+)/)
-    if (paintMatch) {
-      const query = paintMatch[1].trim()
-      if (query === 'blank' || query === 'white') {
-        setActivePaintColor(query === 'blank' ? BLANK_CELL : '#FFFFFF')
-        return { reply: `Selected ${query === 'blank' ? 'blank canvas' : 'white stitch'} as the paint color.` }
-      }
-
-      const color = findPaletteColor(query)
-      if (color) {
-        setActivePaintColor(color.hex)
-        return { reply: `Selected ${color.dmc_code} - ${color.dmc_name} for painting.` }
-      }
-    }
-
-    const disableMatch = lowered.match(/(?:turn off|disable|remove) (.+)/)
-    if (disableMatch) {
-      const color = findPaletteColor(disableMatch[1])
-      if (color) {
-        disableColorHex(color.hex)
-        return { reply: `Turned off ${color.dmc_code} - ${color.dmc_name}.` }
-      }
-      return { reply: `I couldn't match "${disableMatch[1].trim()}" to a preview color.` }
-    }
-
-    const enableMatch = lowered.match(/(?:turn on|enable|restore|add back) (.+)/)
-    if (enableMatch) {
-      const color = findPaletteColor(enableMatch[1])
-      if (color) {
-        enableColorHex(color.hex)
-        return { reply: `Turned on ${color.dmc_code} - ${color.dmc_name}.` }
-      }
-      return { reply: `I couldn't match "${enableMatch[1].trim()}" to a preview color.` }
-    }
-
-    const mergeMatch = trimmed.match(/merge\s+(.+?)\s+into\s+(.+)/i)
-    if (mergeMatch) {
-      const sourceQueries = mergeMatch[1]
-        .split(/,| and /i)
-        .map((item) => item.trim())
-        .filter(Boolean)
-      const targetQuery = mergeMatch[2].trim()
-      const targetColor = findPaletteColor(targetQuery)
-
-      if (!targetColor) {
-        return { reply: `I couldn't match merge target "${targetQuery}" to a palette color.` }
-      }
-
-      const sourceColors = sourceQueries
-        .map((query) => findPaletteColor(query))
-        .filter((color): color is PaletteColor => Boolean(color))
-
-      if (!sourceColors.length) {
-        return { reply: 'I could not match any source colors to merge.' }
-      }
-
-      const changed = mergeColorsIntoTarget(
-        sourceColors.map((color) => color.hex),
-        targetColor.hex
-      )
-
-      if (!changed) {
-        return { reply: `Nothing needed to merge into ${targetColor.dmc_code}.` }
-      }
-
-      return {
-        reply: `Merged ${sourceColors
-          .map((color) => color.dmc_code)
-          .join(', ')} into ${targetColor.dmc_code} across ${changed} stitches.`,
-      }
-    }
-
-    try {
-      const response = await chatAssistant(trimmed)
-      return { reply: response.message }
-    } catch {
-      return {
-        reply:
-          'Try commands like "import https://...", "set width to 7", "use 18 mesh", "use graphic art", "clean background on", "simplify colors on", "strengthen dark detail on", "preserve accents on", "turn grid off", "generate preview", "paint 310", "turn off 310", "merge 907 and 3052 into 907", "make the outside border fully light blue", "analyze palette", "undo", or "redo".',
-      }
-    }
+  async function handleGetSuggestions(): Promise<string[]> {
+    return getChatSuggestions(buildCanvasContext())
   }
 
   async function handleChatUpload(file: File) {
@@ -2699,6 +2397,7 @@ function StudioPage() {
       onSubmitMessage={handleChatMessage}
       onUploadFile={handleChatUpload}
       onGeneratePreview={() => void handleApply(draftSettings)}
+      onGetSuggestions={handleGetSuggestions}
       canGeneratePreview={Boolean(activeImagePath)}
       hasPreview={Boolean(previewImagePath && cells.length)}
       sourceType={draftSettings.source_type}
@@ -3626,20 +3325,43 @@ function StudioPage() {
                   )
                 })}
               </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
-                  alignContent: 'start',
-                  padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
-                  minHeight: 0,
-                  overflow: 'auto',
-                  WebkitOverflowScrolling: 'touch',
-                }}
-              >
-                {leftPanelContent}
+              <div style={{ position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
+                    alignContent: 'start',
+                    padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
+                    height: '100%',
+                    overflow: 'auto',
+                    WebkitOverflowScrolling: 'touch',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  {leftPanelContent}
+                </div>
+                {showChatPanel && !isMobile && (
+                  <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', flexDirection: 'column', padding: 10, boxSizing: 'border-box', background: '#fffdf8' }}>
+                    {chatPanel}
+                  </div>
+                )}
               </div>
-              <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', paddingBottom: isMobile ? 'max(10px, env(safe-area-inset-bottom, 10px))' : '12px', borderTop: '1px solid #eee8df' }}>
+              <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', paddingBottom: isMobile ? 'max(10px, env(safe-area-inset-bottom, 10px))' : '12px', borderTop: '1px solid #eee8df', display: 'grid', gap: 8 }}>
+                {!isMobile && (
+                  <button
+                    type="button"
+                    onClick={() => setShowChatPanel((v) => !v)}
+                    style={{
+                      ...btnSecondary,
+                      width: '100%',
+                      background: showChatPanel ? '#e5eee2' : undefined,
+                      borderColor: showChatPanel ? '#8aad83' : undefined,
+                      color: showChatPanel ? '#3e6438' : undefined,
+                    }}
+                  >
+                    {showChatPanel ? 'Close MNS Pro' : 'Open MNS Pro'}
+                  </button>
+                )}
                 <button
                   data-tutorial="save-button"
                   type="button"
@@ -3895,6 +3617,7 @@ function StudioPage() {
               onClose={() => setShowColorBrowser(false)}
             />
           )}
+
           </div>
 
           {!isFinalizeReview && (
@@ -4062,51 +3785,6 @@ function StudioPage() {
         )}
       </div>
 
-      {!isMobile && <section
-        style={{
-          borderTop: '1px solid #e0d9cf',
-          background: '#fffdf8',
-          height: isPreviewExpanded ? 0 : showChatDrawer ? 440 : 64,
-          display: 'grid',
-          gridTemplateRows: '64px minmax(0, 1fr)',
-          minHeight: 0,
-          overflow: 'hidden',
-          transition: 'height 160ms ease',
-          position: 'relative',
-          zIndex: 40,
-          pointerEvents: 'auto',
-        }}
-      >
-        <button
-          type="button"
-          disabled
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '10px 24px',
-            border: 0,
-            background: 'transparent',
-            textAlign: 'left',
-            cursor: 'default',
-            opacity: 0.5,
-          }}
-        >
-          <span style={{ width: 36, height: 36, borderRadius: '50%', background: '#e5eee2', display: 'grid', placeItems: 'center', color: '#6e8d67', fontWeight: 800, fontSize: 22, lineHeight: 1 }}>
-            ^
-          </span>
-          <span style={{ display: 'grid', gap: 2 }}>
-            <strong style={{ letterSpacing: 1, color: '#8a8177', fontSize: 12 }}>HELP</strong>
-            <span style={{ fontSize: 17 }}>Click to Expand Chat <span style={{ fontSize: 13, fontWeight: 400 }}>(Coming Soon)</span></span>
-          </span>
-        </button>
-
-        {showChatDrawer && (
-          <div style={{ minHeight: 0, overflow: 'hidden', padding: isMobile ? '0 12px 12px' : '0 20px 14px' }}>
-            {chatPanel}
-          </div>
-        )}
-      </section>}
 
       {authPrompt && (
         <div

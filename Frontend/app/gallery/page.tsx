@@ -182,13 +182,17 @@ function GalleryPage() {
 
 
   useEffect(() => {
+    if (!session) {
+      setHasActiveDesign(false)
+      return
+    }
     try {
       const saved = localStorage.getItem('mns_active_design')
       if (!saved) return
       const d = JSON.parse(saved)
       setHasActiveDesign(!!(d.previewImagePath || d.cells?.length > 0))
     } catch {}
-  }, [])
+  }, [session])
 
   useEffect(() => {
     const update = () => setViewportWidth(window.innerWidth)
@@ -393,6 +397,11 @@ function GalleryPage() {
             </>
           ) : (
             <>
+              {!isMobile && (
+                <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                  Mission
+                </button>
+              )}
               <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                 Contact Us
               </Link>
@@ -1190,13 +1199,22 @@ function GalleryPage() {
           <div onClick={(event) => event.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
-              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You will need to log back in to like designs or post to the gallery.
-              </p>
+              {hasActiveDesign ? (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You have an active design in progress. Logging out will discard it — go to the studio to save it as a draft first.
+                </p>
+              ) : (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You will need to log back in to like designs or post to the gallery.
+                </p>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
-              <button type="button" onClick={() => { setShowLogoutConfirm(false); localStorage.removeItem('mns_active_design'); void signOut(); setShowAuthPrompt(true) }} style={btnPrimary}>Log out</button>
+              {hasActiveDesign && (
+                <button type="button" onClick={() => { setShowLogoutConfirm(false); router.push('/studio') }} style={btnSecondary}>Go to studio</button>
+              )}
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); localStorage.removeItem('mns_active_design'); void signOut(); setShowAuthPrompt(true) }} style={btnPrimary}>Log out anyway</button>
             </div>
           </div>
         </div>

@@ -2,7 +2,6 @@ import json
 import logging
 import mimetypes
 import os
-import re
 from pathlib import Path
 from urllib.request import Request, urlopen
 from dotenv import load_dotenv
@@ -13,8 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.models import (
-    ChatRequest,
+    ContactRequest,
     ImportUrlRequest,
+    LlmChatRequest,
+    LlmChatResponse,
+    SuggestionsRequest,
+    SuggestionsResponse,
     VisualizeRequest,
     AppResponse,
     FinalizeRequest,
@@ -28,11 +31,11 @@ from app.models import (
     PrintOwnCheckoutRequest,
     CheckoutResponse,
 )
-from app.services.intent import classify_intent
+from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf
 from app.services.storage import delete_finalized_output
-from app.services.email_delivery import send_finalized_report, send_order_notification
+from app.services.email_delivery import send_contact_email, send_finalized_report, send_order_notification
 from app.services.stripe_service import (
     create_print_own_checkout,
     create_template_checkout,
@@ -57,6 +60,7 @@ from app.services.supabase_db import (
     get_creator_profile,
     get_my_creator_profile,
     increment_gallery_share,
+    log_chat,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds
 from app.data.dmc_colors import DMC_COLORS
@@ -109,6 +113,18 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/contact")
+def contact(req: ContactRequest):
+    try:
+        sent = send_contact_email(req.name, req.email, req.category, req.message)
+    except Exception as exc:
+        logger.exception("Failed to send contact email: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to send email. Please try again later.")
+    if not sent:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured on this server.")
+    return {"ok": True}
+
+
 def local_asset_path(asset_url: str | None) -> Path | None:
     if not asset_url or not asset_url.startswith("/assets/"):
         return None
@@ -156,139 +172,35 @@ def fetch_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def normalize_text_for_match(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+@app.post("/chat", response_model=LlmChatResponse)
+def chat(request: LlmChatRequest):
+    result = chat_with_claude(request.message.strip(), request.context.model_dump())
 
-def build_chat_help_message(topic: str | None = None) -> str:
-    normalized = normalize_text_for_match(topic)
+    # Make any generated source image URL durable (upload to Supabase)
+    for action in result.get("actions", []):
+        if action.get("type") == "set_source_image" and action.get("url"):
+            action["url"] = durable_image_url(action["url"], prefix="source-images")
 
-    if any(word in normalized for word in ["import", "upload", "url"]):
-        return "\n".join(
-            [
-                "You can bring images into the project with commands like:",
-                '- `import https://...`',
-                "- or upload an image directly in chat.",
-                "- If you need source artwork, find it online first and then bring it into MNS Studio.",
-            ]
-        )
+    if result.get("image_url"):
+        result["image_url"] = durable_image_url(result["image_url"], prefix="source-images")
 
-    if any(word in normalized for word in ["edit", "paint", "merge", "palette", "border"]):
-        return "\n".join(
-            [
-                "You can use deterministic editing commands like:",
-                '- `paint 310`',
-                '- `turn off 310`',
-                '- `turn on 310`',
-                '- `merge 907 and 3052 into 907`',
-                '- `make the outside border fully light blue`',
-                '- `analyze palette`',
-                '- `undo` / `redo`',
-            ]
-        )
+    reply = result["reply"]
+    actions = result.get("actions", [])
 
-    if any(word in normalized for word in ["source", "photo", "stitched", "mode"]):
-        return "\n".join(
-            [
-                "Source mode guide:",
-                "- `Photo` is better for normal photographs and product shots.",
-                "- `Stitched photo` is better for photos of existing stitched work where fabric or canvas colors are interfering.",
-                "- `Graphic / screenshot art` is better for screenshots, sign art, stitched reference graphics, and other crisp non-photo sources.",
-                "- If text or logos are still breaking badly, try `Graphic / screenshot art` before pushing contrast higher.",
-            ]
-        )
-
-    if any(word in normalized for word in ["setting", "size", "mesh", "contrast", "color"]):
-        return "\n".join(
-            [
-                "You can update preview settings with commands like:",
-                '- `set width to 7`',
-                '- `set height to 5.5`',
-                '- `use 18 mesh`',
-                '- `set colors to 12`',
-                '- `normal contrast` / `high contrast` / `super high contrast`',
-                '- `use stitched photo` / `use photo` / `use graphic art`',
-                '- `simplify colors on` / `off`',
-                '- `strengthen dark detail on` / `off`',
-                '- `preserve accents on` / `off`',
-            ]
-        )
-
-    return "\n".join(
-        [
-            "I can help with import, settings, cleanup, and guidance.",
-            "Try commands like:",
-            '- upload an image',
-            '- `import https://...`',
-            '- `use stitched photo`',
-            '- `use graphic art`',
-            '- `simplify colors on`',
-            '- `preserve accents on`',
-            '- `set width to 7`',
-            '- `generate preview`',
-            '- `merge 907 and 3052 into 907`',
-            '- `analyze palette`',
-            '- `help source modes` or `help editing`',
-        ]
+    log_chat(
+        user_message=request.message.strip(),
+        assistant_reply=reply,
+        actions=actions,
+        context=request.context.model_dump(),
     )
 
+    return LlmChatResponse(reply=reply, actions=actions, image_url=result.get("image_url"))
 
-@app.post("/chat", response_model=AppResponse)
-def chat(request: ChatRequest):
-    message = request.message.strip()
-    intent = classify_intent(message)
 
-    if intent == "help":
-        topic = None
-        lowered = message.lower().strip()
-        if lowered.startswith("help "):
-            topic = message[5:].strip()
-        elif lowered.startswith("guide "):
-            topic = message[6:].strip()
-        elif lowered.startswith("how do i use "):
-            topic = message[13:].strip()
-
-        return AppResponse(
-            action="help",
-            message=build_chat_help_message(topic),
-            metadata={"topic": topic or "general"},
-        )
-
-    if intent == "import":
-        return AppResponse(
-            action="import",
-            message="Upload an image in chat or paste an image URL with `import https://...`.",
-        )
-
-    if intent == "settings":
-        return AppResponse(
-            action="settings",
-            message=build_chat_help_message("settings"),
-        )
-
-    if intent == "edit":
-        return AppResponse(
-            action="edit",
-            message=build_chat_help_message("editing"),
-        )
-
-    if intent == "visualize":
-        return AppResponse(
-            action="visualize",
-            message="Use `generate preview` after importing an image, or adjust width, height, mesh, colors, and source mode first.",
-        )
-
-    if intent == "finalize":
-        return AppResponse(
-            action="finalize",
-            message="When the preview looks right, use Finalize to create the printable PDF export.",
-        )
-
-    return AppResponse(
-        action="generate",
-        message="Brand-new image generation is intentionally not included in the base product. I can help you import an image, adjust settings, and clean up the preview instead.",
-    )
+@app.post("/chat/suggestions", response_model=SuggestionsResponse)
+def chat_suggestions(request: SuggestionsRequest):
+    suggestions = get_suggestions(request.context.model_dump())
+    return SuggestionsResponse(suggestions=suggestions)
 
 
 @app.post("/upload")

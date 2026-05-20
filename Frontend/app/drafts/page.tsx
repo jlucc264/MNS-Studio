@@ -66,6 +66,10 @@ export default function DraftsPage() {
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | null>(null)
 
   useEffect(() => {
+    if (!session) {
+      setHasActiveDesign(false)
+      return
+    }
     try {
       const saved = localStorage.getItem('mns_active_design')
       if (saved) {
@@ -74,7 +78,7 @@ export default function DraftsPage() {
         setHasActiveDesign(!!(d.previewImagePath || d.cells?.length > 0))
       }
     } catch {}
-  }, [])
+  }, [session])
 
   useEffect(() => {
     if (authLoading) return
@@ -402,13 +406,22 @@ export default function DraftsPage() {
           <div onClick={(event) => event.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
-              <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You will need to log back in to access saved projects.
-              </p>
+              {hasActiveDesign ? (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You have an active design in progress. Logging out will discard it — go to the studio to save it as a draft first.
+                </p>
+              ) : (
+                <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
+                  You will need to log back in to access saved projects.
+                </p>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>Cancel</button>
-              <button type="button" onClick={() => void handleSignOut()} style={btnPrimary}>Log out</button>
+              {hasActiveDesign && (
+                <button type="button" onClick={() => { setShowLogoutConfirm(false); router.push('/studio') }} style={btnSecondary}>Go to studio</button>
+              )}
+              <button type="button" onClick={() => void handleSignOut()} style={btnPrimary}>{hasActiveDesign ? 'Log out anyway' : 'Log out'}</button>
             </div>
           </div>
         </div>

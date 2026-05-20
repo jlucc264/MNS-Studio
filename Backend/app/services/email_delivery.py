@@ -1,22 +1,55 @@
+import base64
 import logging
 import os
-import smtplib
-from email.message import EmailMessage
 from pathlib import Path
+
+import resend
 
 logger = logging.getLogger(__name__)
 
-FINALIZED_REPORT_RECIPIENT = os.getenv("FINALIZED_REPORT_RECIPIENT", "john@mns.studio")
-SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME or FINALIZED_REPORT_RECIPIENT).strip()
+resend.api_key = os.getenv("RESEND_API_KEY", "")
+
+RECIPIENT = os.getenv("FINALIZED_REPORT_RECIPIENT", "john@mns.studio")
+FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "MNS Studio <noreply@mns.studio>")
+
+
+def _ready() -> bool:
+    if not resend.api_key:
+        logger.warning("Email skipped — RESEND_API_KEY not configured.")
+        return False
+    return True
+
+
+def send_contact_email(name: str | None, reply_email: str | None, category: str, message: str) -> bool:
+    if not _ready():
+        return False
+
+    subject = f"[MNS Contact] {category}"
+    if name:
+        subject += f" — {name}"
+
+    lines = [f"Category: {category}"]
+    if name:
+        lines.append(f"Name: {name}")
+    if reply_email:
+        lines.append(f"Reply-to: {reply_email}")
+    lines += ["", message]
+
+    params: resend.Emails.SendParams = {
+        "from": FROM_EMAIL,
+        "to": [RECIPIENT],
+        "subject": subject,
+        "text": "\n".join(lines),
+    }
+    if reply_email:
+        params["reply_to"] = [reply_email]
+
+    resend.Emails.send(params)
+    return True
 
 
 def send_order_notification(order_type: str, metadata: dict, customer_email: str | None, shipping: dict | None) -> bool:
-    if not SMTP_HOST or not SMTP_FROM_EMAIL:
-        logger.warning("Order notification email skipped — SMTP not configured.")
+    if not _ready():
         return False
 
     type_labels = {
@@ -48,47 +81,28 @@ def send_order_notification(order_type: str, metadata: dict, customer_email: str
             lines.append(f"  {addr['line2']}")
         lines.append(f"  {addr.get('city', '')}, {addr.get('state', '')} {addr.get('postal_code', '')}")
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = SMTP_FROM_EMAIL
-    message["To"] = FINALIZED_REPORT_RECIPIENT
-    message.set_content("\n".join(lines))
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-        smtp.starttls()
-        if SMTP_USERNAME and SMTP_PASSWORD:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-        smtp.send_message(message)
-
+    resend.Emails.send({
+        "from": FROM_EMAIL,
+        "to": [RECIPIENT],
+        "subject": subject,
+        "text": "\n".join(lines),
+    })
     return True
 
 
 def send_finalized_report(report_path: Path) -> bool:
-    if not SMTP_HOST or not SMTP_FROM_EMAIL:
-        logger.warning(
-            "Finalized report email was not sent because SMTP_HOST/SMTP_FROM_EMAIL are not configured."
-        )
+    if not _ready():
         return False
 
-    message = EmailMessage()
-    message["Subject"] = "[Final] MNS Studio finalized PDF report"
-    message["From"] = SMTP_FROM_EMAIL
-    message["To"] = FINALIZED_REPORT_RECIPIENT
-    message.set_content(
-        "A finalized MNS Studio PDF report is attached. This internal report includes all pages."
-    )
-
-    message.add_attachment(
-        report_path.read_bytes(),
-        maintype="application",
-        subtype="pdf",
-        filename=f"[Final] {report_path.name}",
-    )
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-        smtp.starttls()
-        if SMTP_USERNAME and SMTP_PASSWORD:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-        smtp.send_message(message)
-
+    pdf_bytes = report_path.read_bytes()
+    resend.Emails.send({
+        "from": FROM_EMAIL,
+        "to": [RECIPIENT],
+        "subject": "[Final] MNS Studio finalized PDF report",
+        "text": "A finalized MNS Studio PDF report is attached.",
+        "attachments": [{
+            "filename": f"[Final] {report_path.name}",
+            "content": list(pdf_bytes),
+        }],
+    })
     return True

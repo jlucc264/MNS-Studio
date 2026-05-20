@@ -1,5 +1,12 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
+
+
+class ContactRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    category: str
+    message: str
 
 
 class ChatRequest(BaseModel):
@@ -152,6 +159,54 @@ class GalleryCreateRequest(BaseModel):
     has_outline: Optional[bool] = None
     project_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
+
+
+class CanvasContext(BaseModel):
+    source_mode: str = "photo"
+    width_inches: float = 5.0
+    height_inches: float = 5.0
+    mesh_count: int = 18
+    color_count: int = 128
+    has_preview: bool = False
+    has_source_image: bool = False
+    palette: list[dict] = []
+    clean_background: bool = False
+    simplify_colors: bool = False
+    strengthen_dark_detail: bool = False
+    preserve_accents: bool = False
+    contrast_level: str = "normal"
+    show_grid: bool = True
+
+
+class LlmChatRequest(BaseModel):
+    message: str
+    context: CanvasContext = CanvasContext()
+
+
+class ChatActionItem(BaseModel):
+    type: str
+    value: Any = None
+    from_codes: list[str] = []
+    to_code: str = ""
+    setting: str = ""
+    url: str = ""
+    width_inches: Optional[float] = None
+    height_inches: Optional[float] = None
+    mesh_count: Optional[int] = None
+
+
+class LlmChatResponse(BaseModel):
+    reply: str
+    actions: list[ChatActionItem] = []
+    image_url: Optional[str] = None
+
+
+class SuggestionsRequest(BaseModel):
+    context: CanvasContext = CanvasContext()
+
+
+class SuggestionsResponse(BaseModel):
+    suggestions: list[str]
 
 
 class GalleryItemResponse(BaseModel):
