@@ -369,23 +369,30 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
         if client is None:
             return "Image generation is not configured (OPENAI_API_KEY missing).", None
         try:
-            dalle_response = client.images.generate(
-                model="dall-e-3",
+            import base64
+            from uuid import uuid4
+            gen_response = client.images.generate(
+                model="gpt-image-1",
                 prompt=(
                     f"Flat illustration style with clear, distinct colors — optimized for needlepoint conversion: {prompt}"
                 ),
                 size="1024x1024",
-                quality="standard",
+                quality="auto",
                 n=1,
             )
-            temp_url = dalle_response.data[0].url
-            local_path = save_remote_image(temp_url)
+            img_b64 = gen_response.data[0].b64_json
+            if img_b64:
+                out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
+                out_path.write_bytes(base64.b64decode(img_b64))
+                local_path = f"/assets/uploads/{out_path.name}"
+            else:
+                local_path = save_remote_image(gen_response.data[0].url)
             return (
-                f"Generated image for '{prompt}'. Local path: {local_path}",
+                f"Generated image for '{prompt}'.",
                 {"type": "set_source_image", "url": local_path},
             )
         except Exception as exc:
-            logger.exception("DALL-E generation failed: %s", exc)
+            logger.exception("Image generation failed: %s", exc)
             return f"Image generation failed: {exc}", None
 
     if tool_name == "edit_source_image":
