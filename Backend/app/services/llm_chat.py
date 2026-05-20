@@ -266,10 +266,23 @@ You help users by:
 
 Keep responses concise and natural. When making multiple changes, chain tool calls together and summarize what you did in one sentence. If a setting change should be followed by regenerating the preview, call generate_stitch_preview after the setting change.
 
+Image generation rule: before calling generate_source_image or edit_source_image, check the canvas state. If width_inches=5.0, height_inches=5.0, and mesh_count=18 (all defaults), ask the user to confirm or set their desired size and mesh count first — the image will be generated at exactly those stitch dimensions. If the user has already customized any of these values, proceed without asking.
+
 Needlepoint design tips to share when relevant:
 - 13 mesh = larger stitches, good for bold designs; 18 mesh = finer detail, more colors visible
 - graphic_art mode works best for logos, text, and anything with crisp edges
 - Simplify colors helps when the image has too much noise; strengthen_dark_detail preserves outlines"""
+
+
+def _resize_to_stitch_dims(img_bytes: bytes, context: dict) -> bytes:
+    """Resize image to exact stitch canvas pixel dimensions using nearest-neighbor."""
+    w = max(1, round(context.get("width_inches", 5.0) * context.get("mesh_count", 18)))
+    h = max(1, round(context.get("height_inches", 5.0) * context.get("mesh_count", 18)))
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    resized = img.resize((w, h), Image.NEAREST)
+    buf = io.BytesIO()
+    resized.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _load_source_image_bytes(source_image_url: str) -> bytes:
@@ -381,12 +394,13 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
                 n=1,
             )
             img_b64 = gen_response.data[0].b64_json
-            if img_b64:
-                out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
-                out_path.write_bytes(base64.b64decode(img_b64))
-                local_path = f"/assets/uploads/{out_path.name}"
-            else:
-                local_path = save_remote_image(gen_response.data[0].url)
+            raw_bytes = base64.b64decode(img_b64) if img_b64 else None
+            if raw_bytes is None:
+                raw_bytes = urlopen(Request(gen_response.data[0].url, headers={"User-Agent": "MNS/1.0"})).read()
+            final_bytes = _resize_to_stitch_dims(raw_bytes, context)
+            out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
+            out_path.write_bytes(final_bytes)
+            local_path = f"/assets/uploads/{out_path.name}"
             return (
                 f"Generated image for '{prompt}'.",
                 {"type": "set_source_image", "url": local_path},
@@ -411,15 +425,15 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
                 prompt=prompt,
                 size="1024x1024",
             )
-            img_bytes = response.data[0].b64_json
-            if img_bytes:
-                from uuid import uuid4
-                out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
-                out_path.write_bytes(__import__("base64").b64decode(img_bytes))
-                local_url = f"/assets/uploads/{out_path.name}"
-            else:
-                temp_url = response.data[0].url
-                local_url = save_remote_image(temp_url)
+            img_b64 = response.data[0].b64_json
+            raw_bytes = __import__("base64").b64decode(img_b64) if img_b64 else None
+            if raw_bytes is None:
+                raw_bytes = urlopen(Request(response.data[0].url, headers={"User-Agent": "MNS/1.0"})).read()
+            final_bytes = _resize_to_stitch_dims(raw_bytes, context)
+            from uuid import uuid4
+            out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
+            out_path.write_bytes(final_bytes)
+            local_url = f"/assets/uploads/{out_path.name}"
             return (
                 f"Edited image applied.",
                 {"type": "set_source_image", "url": local_url},
