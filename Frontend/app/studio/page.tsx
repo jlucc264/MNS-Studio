@@ -1072,7 +1072,7 @@ function StudioPage() {
     latestApplyRequestIdRef.current = requestId
     const previewSettings = {
       ...settings,
-      color_count: 128,
+      color_count: paletteReductionTarget,
     }
 
     const previousEnabledColorHexes = [...enabledColorHexes]
