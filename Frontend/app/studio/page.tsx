@@ -3270,23 +3270,9 @@ function StudioPage() {
                   )
                 })}
               </div>
-              <div style={{ position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
-                    alignContent: 'start',
-                    padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
-                    flex: 1,
-                    overflow: 'auto',
-                    WebkitOverflowScrolling: 'touch',
-                    boxSizing: 'border-box',
-                  }}
-                >
-                  {leftPanelContent}
-                </div>
-                {showChatPanel && !isMobile && (
-                  <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', flexDirection: 'column', boxSizing: 'border-box', background: '#fffdf8' }}>
+              <div style={{ minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                {showChatPanel && !isMobile ? (
+                  <>
                     {paletteReductionPanel && (
                       <div style={{ padding: '10px 10px 0', flexShrink: 0 }}>
                         {paletteReductionPanel}
@@ -3295,6 +3281,21 @@ function StudioPage() {
                     <div style={{ flex: 1, minHeight: 0, padding: 10, paddingTop: paletteReductionPanel ? 6 : 10, display: 'flex', flexDirection: 'column' }}>
                       {chatPanel}
                     </div>
+                  </>
+                ) : (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
+                      alignContent: 'start',
+                      padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
+                      flex: 1,
+                      overflow: 'auto',
+                      WebkitOverflowScrolling: 'touch',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {leftPanelContent}
                   </div>
                 )}
               </div>

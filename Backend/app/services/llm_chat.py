@@ -5,9 +5,7 @@ import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from PIL import Image
-
-from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR
+from app.services.storage import save_remote_image, UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -274,16 +272,6 @@ Needlepoint design tips to share when relevant:
 - Simplify colors helps when the image has too much noise; strengthen_dark_detail preserves outlines"""
 
 
-def _resize_to_stitch_dims(img_bytes: bytes, context: dict) -> bytes:
-    """Resize image to exact stitch canvas pixel dimensions using nearest-neighbor."""
-    w = max(1, round(context.get("width_inches", 5.0) * context.get("mesh_count", 18)))
-    h = max(1, round(context.get("height_inches", 5.0) * context.get("mesh_count", 18)))
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    resized = img.resize((w, h), Image.NEAREST)
-    buf = io.BytesIO()
-    resized.save(buf, format="PNG")
-    return buf.getvalue()
-
 
 def _load_source_image_bytes(source_image_url: str) -> bytes:
     """Return PNG bytes for the source image, reading from disk or fetching by URL."""
@@ -397,9 +385,8 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
             raw_bytes = base64.b64decode(img_b64) if img_b64 else None
             if raw_bytes is None:
                 raw_bytes = urlopen(Request(gen_response.data[0].url, headers={"User-Agent": "MNS/1.0"})).read()
-            final_bytes = _resize_to_stitch_dims(raw_bytes, context)
             out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
-            out_path.write_bytes(final_bytes)
+            out_path.write_bytes(raw_bytes)
             local_path = f"/assets/uploads/{out_path.name}"
             return (
                 f"Generated image for '{prompt}'.",
@@ -429,10 +416,9 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
             raw_bytes = __import__("base64").b64decode(img_b64) if img_b64 else None
             if raw_bytes is None:
                 raw_bytes = urlopen(Request(response.data[0].url, headers={"User-Agent": "MNS/1.0"})).read()
-            final_bytes = _resize_to_stitch_dims(raw_bytes, context)
             from uuid import uuid4
             out_path = UPLOADS_DIR / f"{uuid4().hex}.png"
-            out_path.write_bytes(final_bytes)
+            out_path.write_bytes(raw_bytes)
             local_url = f"/assets/uploads/{out_path.name}"
             return (
                 f"Edited image applied.",
