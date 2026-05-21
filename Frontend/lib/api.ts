@@ -185,7 +185,10 @@ export async function chatAssistant(message: string, context?: CanvasContext): P
     let errorMessage = 'Assistant request failed'
     try {
       const data = await res.json()
-      errorMessage = data.detail ?? errorMessage
+      const detail = data.detail
+      errorMessage = Array.isArray(detail)
+        ? detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
+        : (typeof detail === 'string' ? detail : errorMessage)
     } catch {}
     throw new Error(errorMessage)
   }

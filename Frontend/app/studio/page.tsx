@@ -2820,7 +2820,7 @@ function StudioPage() {
               Set Size, Mesh, Source Type, and Create!
             </p>
           </div>
-          {paletteReductionPanel}
+          {!showChatPanel && paletteReductionPanel}
           {settingsPanel}
           {activeImagePath && (
             <button
@@ -3270,14 +3270,14 @@ function StudioPage() {
                   )
                 })}
               </div>
-              <div style={{ position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+              <div style={{ position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <div
                   style={{
                     display: 'grid',
                     gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
                     alignContent: 'start',
                     padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
-                    height: '100%',
+                    flex: 1,
                     overflow: 'auto',
                     WebkitOverflowScrolling: 'touch',
                     boxSizing: 'border-box',
@@ -3286,8 +3286,15 @@ function StudioPage() {
                   {leftPanelContent}
                 </div>
                 {showChatPanel && !isMobile && (
-                  <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', flexDirection: 'column', padding: 10, boxSizing: 'border-box', background: '#fffdf8' }}>
-                    {chatPanel}
+                  <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', flexDirection: 'column', boxSizing: 'border-box', background: '#fffdf8' }}>
+                    {paletteReductionPanel && (
+                      <div style={{ padding: '10px 10px 0', flexShrink: 0 }}>
+                        {paletteReductionPanel}
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minHeight: 0, padding: 10, paddingTop: paletteReductionPanel ? 6 : 10, display: 'flex', flexDirection: 'column' }}>
+                      {chatPanel}
+                    </div>
                   </div>
                 )}
               </div>
