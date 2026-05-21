@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from app.services.storage import save_remote_image, UPLOADS_DIR
+from PIL import Image
+
+from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -275,20 +277,24 @@ Needlepoint design tips to share when relevant:
 
 def _load_source_image_bytes(source_image_url: str) -> bytes:
     """Return PNG bytes for the source image, reading from disk or fetching by URL."""
-    # Local asset paths like /assets/uploads/foo.png
-    for prefix, base_dir in [("/assets/uploads/", UPLOADS_DIR), ("/assets/previews/", PREVIEWS_DIR)]:
-        if source_image_url.startswith(prefix):
-            local = base_dir / source_image_url[len(prefix):]
-            if local.exists():
-                img = Image.open(local).convert("RGBA")
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                return buf.getvalue()
+    raw: bytes | None = None
 
-    # Full URL — fetch it
-    req = Request(source_image_url, headers={"User-Agent": "MNS/1.0"})
-    with urlopen(req, timeout=15) as resp:
-        raw = resp.read()
+    # Local asset path e.g. /assets/uploads/foo.png
+    if source_image_url.startswith("/assets/uploads/"):
+        local = UPLOADS_DIR / source_image_url[len("/assets/uploads/"):]
+        if local.exists():
+            raw = local.read_bytes()
+
+    # Full HTTP(S) URL — Supabase or any external source
+    if raw is None and source_image_url.startswith("http"):
+        req = Request(source_image_url, headers={"User-Agent": "MNS/1.0"})
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+
+    if raw is None:
+        raise ValueError(f"Could not load source image from: {source_image_url}")
+
+    # Normalise to RGBA PNG so OpenAI accepts it
     img = Image.open(io.BytesIO(raw)).convert("RGBA")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
