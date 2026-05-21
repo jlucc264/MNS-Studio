@@ -139,6 +139,17 @@ export async function importImageFromUrl(imageUrl: string) {
   return res.json()
 }
 
+async function throwVisualizeError(res: Response, label: string): Promise<never> {
+  let detail = ''
+  try {
+    const data = await res.json()
+    detail = Array.isArray(data.detail)
+      ? data.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
+      : (data.detail ?? data.message ?? '')
+  } catch {}
+  throw new Error(`${label}${detail ? `: ${detail}` : ''}`)
+}
+
 export async function createPreview(payload: VisualizePayload): Promise<VisualizeResponse> {
   const res = await fetch(`${API_BASE}/visualize`, {
     method: 'POST',
@@ -146,7 +157,7 @@ export async function createPreview(payload: VisualizePayload): Promise<Visualiz
     body: JSON.stringify(payload),
   })
 
-  if (!res.ok) throw new Error('Preview generation failed')
+  if (!res.ok) await throwVisualizeError(res, 'Preview generation failed')
   return res.json()
 }
 
@@ -157,7 +168,7 @@ export async function createPreviewV2(payload: VisualizePayload): Promise<Visual
     body: JSON.stringify(payload),
   })
 
-  if (!res.ok) throw new Error('Preview generation failed (v2)')
+  if (!res.ok) await throwVisualizeError(res, 'Preview generation failed')
   return res.json()
 }
 
