@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { type FontSize, type FontFamily } from '../lib/bitmapFonts'
 
 type PaletteColor = {
   hex: string
@@ -13,8 +14,18 @@ type Props = {
   activeDesignColors: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
-  toolMode: 'paint' | 'select' | 'shape' | 'merge'
-  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge') => void
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text'
+  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text') => void
+  textFontSize: FontSize
+  onTextFontSizeChange: (size: FontSize) => void
+  textFontFamily: FontFamily
+  onTextFontFamilyChange: (family: FontFamily) => void
+  textBold: boolean
+  onTextBoldChange: (v: boolean) => void
+  textItalic: boolean
+  onTextItalicChange: (v: boolean) => void
+  textOutline: boolean
+  onTextOutlineChange: (v: boolean) => void
   brushDensity: number
   onBrushDensityChange: (value: number) => void
   hasSelectedRegion: boolean
@@ -70,6 +81,16 @@ export default function PalettePanel({
   colorCountsByHex = {},
   toolMode,
   onToolModeChange,
+  textFontSize,
+  onTextFontSizeChange,
+  textFontFamily,
+  onTextFontFamilyChange,
+  textBold,
+  onTextBoldChange,
+  textItalic,
+  onTextItalicChange,
+  textOutline,
+  onTextOutlineChange,
   brushDensity,
   onBrushDensityChange,
   hasSelectedRegion,
@@ -156,6 +177,7 @@ export default function PalettePanel({
   const isCreateTab = !isSelectTab
   const isShapeTab = toolMode === 'shape'
   const isMergeTab = toolMode === 'merge'
+  const isTextTab = toolMode === 'text'
 
   return (
     <div
@@ -182,7 +204,7 @@ export default function PalettePanel({
       >
         <button
           type="button"
-          onClick={() => onToolModeChange(isShapeTab ? 'shape' : isMergeTab ? 'merge' : 'paint')}
+          onClick={() => onToolModeChange(isShapeTab ? 'shape' : isMergeTab ? 'merge' : isTextTab ? 'text' : 'paint')}
           style={{
             ...pill,
             background: isCreateTab ? '#3f382f' : 'transparent',
@@ -207,11 +229,11 @@ export default function PalettePanel({
       {/* Create tab content */}
       {isCreateTab && (
         <>
-          {/* Paint | Merge | Shape sub-toggle */}
+          {/* Paint | Shape | Text sub-toggle */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
+              gridTemplateColumns: '1fr 1fr 1fr',
               gap: 3,
               padding: 3,
               border: '1px solid #d7d0c8',
@@ -226,24 +248,11 @@ export default function PalettePanel({
                 ...pill,
                 background: toolMode === 'paint' ? '#6e8d67' : 'transparent',
                 color: toolMode === 'paint' ? '#fff' : '#8a8177',
+                fontSize: 11,
               }}
             >
               ✏ Paint
             </button>
-            {/* Merge button hidden — code preserved */}
-            {false && (
-            <button
-              type="button"
-              onClick={() => onToolModeChange('merge')}
-              style={{
-                ...pill,
-                background: isMergeTab ? '#6e8d67' : 'transparent',
-                color: isMergeTab ? '#fff' : '#8a8177',
-              }}
-            >
-              ⊕ Merge
-            </button>
-            )}
             <button
               type="button"
               onClick={() => onToolModeChange('shape')}
@@ -251,11 +260,157 @@ export default function PalettePanel({
                 ...pill,
                 background: isShapeTab ? '#6e8d67' : 'transparent',
                 color: isShapeTab ? '#fff' : '#8a8177',
+                fontSize: 11,
               }}
             >
               ◻ Shape
             </button>
+            <button
+              type="button"
+              onClick={() => onToolModeChange('text')}
+              style={{
+                ...pill,
+                background: isTextTab ? '#6e8d67' : 'transparent',
+                color: isTextTab ? '#fff' : '#8a8177',
+                fontSize: 11,
+              }}
+            >
+              Aa Text
+            </button>
           </div>
+
+          {/* Text mode */}
+          {isTextTab && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Font size selector */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr',
+                  gap: 3,
+                  padding: 3,
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 999,
+                  background: '#f0ece5',
+                }}
+              >
+                {(['small', 'medium', 'large'] as const).map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => onTextFontSizeChange(size)}
+                    style={{
+                      ...pill,
+                      background: textFontSize === size ? '#3f382f' : 'transparent',
+                      color: textFontSize === size ? '#fff' : '#8a8177',
+                      fontSize: 11,
+                    }}
+                  >
+                    {size === 'small' ? '3×5' : size === 'medium' ? '5×7' : '8×13'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Font family toggle */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 3,
+                  padding: 3,
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 999,
+                  background: '#f0ece5',
+                }}
+              >
+                {(['sans', 'serif'] as const).map((family) => (
+                  <button
+                    key={family}
+                    type="button"
+                    onClick={() => onTextFontFamilyChange(family)}
+                    style={{
+                      ...pill,
+                      background: textFontFamily === family ? '#3f382f' : 'transparent',
+                      color: textFontFamily === family ? '#fff' : '#8a8177',
+                      fontSize: 11,
+                    }}
+                  >
+                    {family === 'sans' ? 'Sans' : 'Serif'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Style toggles: Bold, Italic, Outline */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4 }}>
+                {([
+                  { label: 'B', title: 'Bold', active: textBold, onClick: () => onTextBoldChange(!textBold), style: { fontWeight: 700 } },
+                  { label: 'I', title: 'Italic', active: textItalic, onClick: () => onTextItalicChange(!textItalic), style: { fontStyle: 'italic' } },
+                  { label: '⬜', title: 'Outline', active: textOutline, onClick: () => onTextOutlineChange(!textOutline), style: {} },
+                ] as const).map(({ label, title, active, onClick, style }) => (
+                  <button
+                    key={title}
+                    type="button"
+                    title={title}
+                    onClick={onClick}
+                    style={{
+                      ...pill,
+                      padding: '6px 4px',
+                      border: active ? '2px solid #3f382f' : '1px solid #d7d0c8',
+                      background: active ? '#3f382f' : '#f0ece5',
+                      color: active ? '#fff' : '#8a8177',
+                      fontSize: 12,
+                      ...style,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Active color indicator */}
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  border: !activeColor ? '1px solid #c94f42' : '1px solid #e4ddd5',
+                  background: !activeColor ? '#fff7f5' : '#faf7f3',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div
+                    style={{
+                      width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+                      background: activeColor === BLANK_CELL ? '#fffdf8' : activeColor ?? '#ddd',
+                      border: activeColor === '#FFFFFF' ? '1px solid #ccc' : '1px solid rgba(0,0,0,0.18)',
+                    }}
+                  />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: '#8a8177' }}>Text color</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: !activeColor ? '#b23428' : '#3f382f' }}>
+                      {activeColor && activeColor !== BLANK_CELL
+                        ? (colors.find((c) => c.hex === activeColor)
+                            ? `${colors.find((c) => c.hex === activeColor)!.dmc_code} – ${colors.find((c) => c.hex === activeColor)!.dmc_name}`
+                            : activeColor)
+                        : 'None selected'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div
+                style={{
+                  fontSize: 12, color: '#8a8177', padding: '6px 10px',
+                  borderRadius: 8, border: '1px solid #e4ddd5', background: '#faf7f3',
+                  lineHeight: 1.5,
+                }}
+              >
+                Click canvas to anchor, type your text, then press <strong>Enter</strong> to stamp. <strong>Esc</strong> to cancel.
+              </div>
+            </div>
+          )}
 
           {/* Paint mode: active color + brush size */}
           {toolMode === 'paint' && (

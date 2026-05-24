@@ -348,7 +348,7 @@ export default function DraftsPage() {
 
       {hasActiveDesign && (
         <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center' }}>
-          <span style={{ color: '#5c4a3a', fontSize: 14 }}>You have an active design in progress.</span>
+          <span style={{ color: '#5c4a3a', fontSize: 14 }}>Active design: <strong>{activeDraftName}</strong></span>
           <Link href="/studio" style={{ color: '#3f382f', fontWeight: 700, fontSize: 14 }}>Continue editing →</Link>
         </div>
       )}
@@ -408,7 +408,7 @@ export default function DraftsPage() {
               <h2 style={{ margin: 0 }}>Log out?</h2>
               {hasActiveDesign ? (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                  You have an active design in progress. Logging out will discard it — go to the studio to save it as a draft first.
+                  <strong>{activeDraftName}</strong> is still open. Logging out will discard it — go to the studio to save it as a draft first.
                 </p>
               ) : (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
@@ -432,7 +432,7 @@ export default function DraftsPage() {
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Start a new design?</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You have an active design in progress. Would you like to save it before starting fresh?
+                <strong>{activeDraftName}</strong> is still open. Would you like to save it before starting fresh?
               </p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -456,7 +456,7 @@ export default function DraftsPage() {
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Open this design?</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You have an active design in progress. Save it before switching?
+                <strong>{activeDraftName}</strong> is still open. Save it before switching?
               </p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -480,7 +480,7 @@ export default function DraftsPage() {
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Rework this design?</h2>
               <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                You have an active design in progress. Save it before starting a rework?
+                <strong>{activeDraftName}</strong> is still open. Save it before starting a rework?
               </p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

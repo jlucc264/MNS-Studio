@@ -1,13 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type FontSize, type FontFamily, type TextStyle, getFontMeta, getCharAdvance, getTextCells } from '../lib/bitmapFonts'
 
 type ShapeCell = { row: number; col: number; color: string }
 
 type Props = {
   cells: string[][]
   activeColor: string | null
-  toolMode: 'paint' | 'select' | 'shape' | 'merge'
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text'
   meshCount: 13 | 18
   brushDensity: number
   centerKey?: number
@@ -24,6 +25,11 @@ type Props = {
   onApplyShapeCells?: (cells: ShapeCell[]) => void
   traceImageUrl?: string | null
   traceOpacity?: number
+  textFontSize?: FontSize
+  textFontFamily?: FontFamily
+  textBold?: boolean
+  textItalic?: boolean
+  textOutline?: boolean
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
@@ -488,6 +494,11 @@ export default function GridEditor({
   onApplyShapeCells,
   traceImageUrl,
   traceOpacity = 0,
+  textFontSize = 'medium',
+  textFontFamily = 'sans',
+  textBold = false,
+  textItalic = false,
+  textOutline = false,
 }: Props) {
   if (!cells.length) return null
 
@@ -525,6 +536,18 @@ export default function GridEditor({
   const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
   const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
+  const [textAnchorCell, setTextAnchorCell] = useState<{ row: number; col: number } | null>(null)
+  const [textBoxEnd, setTextBoxEnd] = useState<{ row: number; col: number } | null>(null)
+  const textBoxStartRef = useRef<{ row: number; col: number } | null>(null)
+  const [textInput, setTextInput] = useState('')
+  const textInputRef = useRef<HTMLInputElement | null>(null)
+  const [textCursorVisible, setTextCursorVisible] = useState(true)
+  const textIsMovingRef = useRef(false)
+  const textMoveStartRef = useRef<{
+    initAnchorRow: number; initAnchorCol: number
+    initBoxEndRow: number; initBoxEndCol: number
+    pointerRow: number; pointerCol: number
+  } | null>(null)
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
@@ -627,6 +650,13 @@ export default function GridEditor({
   }, [])
 
   useEffect(() => {
+    if (toolMode !== 'text' || !textAnchorCell) { setTextCursorVisible(true); return }
+    setTextCursorVisible(true)
+    const id = window.setInterval(() => setTextCursorVisible((v) => !v), 530)
+    return () => window.clearInterval(id)
+  }, [toolMode, textAnchorCell, textInput])
+
+  useEffect(() => {
     if (!highlightSelection) {
       setDragSelectionRect(null)
       setSelectionRects([])
@@ -640,6 +670,19 @@ export default function GridEditor({
       if (event.pointerType === 'touch') {
         touchActivePointersRef.current.delete(event.pointerId)
       }
+      if (toolMode === 'text' && textIsMovingRef.current) {
+        textIsMovingRef.current = false
+        textMoveStartRef.current = null
+        setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
+      } else if (toolMode === 'text' && textBoxStartRef.current && textBoxEnd) {
+        const start = textBoxStartRef.current
+        const anchorRow = Math.min(start.row, textBoxEnd.row)
+        const anchorCol = Math.min(start.col, textBoxEnd.col)
+        textBoxStartRef.current = null
+        setTextAnchorCell({ row: anchorRow, col: anchorCol })
+        setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
+      }
+
       if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
         const start = shapeStartCellRef.current
         if (shapeType && onApplyShapeCells) {
@@ -704,7 +747,7 @@ export default function GridEditor({
     toolMode, shapeEndCell, shapeType, shapeFillColor, shapeBorderColor,
     onApplyShapeCells, cells,
     dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects,
-    onDesignAreaMiss,
+    onDesignAreaMiss, textBoxEnd,
   ])
 
   const borderStitches = Math.floor(1 * meshCount)
@@ -1139,6 +1182,41 @@ export default function GridEditor({
         return
       }
 
+      if (toolMode === 'text') {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        event.preventDefault()
+        // If a box is already defined, check if click is inside it
+        if (textAnchorCell && textBoxEnd) {
+          const r1 = Math.min(textAnchorCell.row, textBoxEnd.row)
+          const r2 = Math.max(textAnchorCell.row, textBoxEnd.row)
+          const c1 = Math.min(textAnchorCell.col, textBoxEnd.col)
+          const c2 = Math.max(textAnchorCell.col, textBoxEnd.col)
+          if (hit.row >= r1 && hit.row <= r2 && hit.col >= c1 && hit.col <= c2) {
+            // Start moving the box
+            textIsMovingRef.current = true
+            textMoveStartRef.current = {
+              initAnchorRow: textAnchorCell.row, initAnchorCol: textAnchorCell.col,
+              initBoxEndRow: textBoxEnd.row, initBoxEndCol: textBoxEnd.col,
+              pointerRow: hit.row, pointerCol: hit.col,
+            }
+            setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
+            return
+          }
+          // Click outside: stamp current text then start new box
+          if (textInput.trim() && activeColor) {
+            const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+            onApplyShapeCells?.(stampCells)
+          }
+          setTextAnchorCell(null)
+          setTextInput('')
+        }
+        // Start drawing a new box
+        textBoxStartRef.current = { row: hit.row, col: hit.col }
+        setTextBoxEnd({ row: hit.row, col: hit.col })
+        return
+      }
+
       if (toolMode !== 'merge' && !activeColorRef.current) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
@@ -1151,7 +1229,9 @@ export default function GridEditor({
       setIsPainting(true)
       paintCell(hit.row, hit.col)
     },
-    [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell]
+    [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
+     textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
+     textFontSize, textFontFamily, textBold, textItalic, textOutline]
   )
 
   const handleCanvasPointerMove = useCallback(
@@ -1179,6 +1259,29 @@ export default function GridEditor({
         const hit = getCellFromClientPoint(event.clientX, event.clientY)
         if (!hit) return
         setShapeEndCell({ row: hit.row, col: hit.col })
+        return
+      }
+
+      if (toolMode === 'text' && textIsMovingRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit || !textMoveStartRef.current) return
+        const dr = hit.row - textMoveStartRef.current.pointerRow
+        const dc = hit.col - textMoveStartRef.current.pointerCol
+        setTextAnchorCell({
+          row: textMoveStartRef.current.initAnchorRow + dr,
+          col: textMoveStartRef.current.initAnchorCol + dc,
+        })
+        setTextBoxEnd({
+          row: textMoveStartRef.current.initBoxEndRow + dr,
+          col: textMoveStartRef.current.initBoxEndCol + dc,
+        })
+        return
+      }
+
+      if (toolMode === 'text' && textBoxStartRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        setTextBoxEnd({ row: hit.row, col: hit.col })
         return
       }
 
@@ -1484,6 +1587,68 @@ export default function GridEditor({
       context.globalAlpha = 1
     }
 
+    // Text tool: dashed box border + text preview
+    if (toolMode === 'text' && textBoxEnd) {
+      const boxStart = textBoxStartRef.current ?? textAnchorCell
+      if (boxStart) {
+        const r1 = Math.min(boxStart.row, textBoxEnd.row)
+        const c1 = Math.min(boxStart.col, textBoxEnd.col)
+        const r2 = Math.max(boxStart.row, textBoxEnd.row)
+        const c2 = Math.max(boxStart.col, textBoxEnd.col)
+        const bx = gridOriginX + (c1 + contentOriginCol + borderStitches) * cellSize
+        const by = gridOriginY + (r1 + contentOriginRow + borderStitches) * cellSize
+        const bw = (c2 - c1 + 1) * cellSize
+        const bh = (r2 - r1 + 1) * cellSize
+        context.strokeStyle = 'rgba(0, 0, 0, 0.85)'
+        context.lineWidth = 1.5
+        context.setLineDash([Math.max(3, cellSize * 0.3), Math.max(2, cellSize * 0.2)])
+        context.strokeRect(bx, by, bw, bh)
+        context.setLineDash([])
+        // Corner handles
+        const h = Math.max(3, Math.min(cellSize * 0.4, 8))
+        context.fillStyle = '#000'
+        for (const [cx, cy] of [[bx, by], [bx + bw, by], [bx, by + bh], [bx + bw, by + bh]]) {
+          context.fillRect(cx - h / 2, cy - h / 2, h, h)
+        }
+      }
+      // Text preview + cursor from anchor
+      if (textAnchorCell && activeColor) {
+        if (textInput) {
+          const previewCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+          context.globalAlpha = 0.85
+          for (const cell of previewCells) {
+            const stageRow = cell.row + contentOriginRow + borderStitches
+            const stageCol = cell.col + contentOriginCol + borderStitches
+            if (stageRow < 0 || stageRow >= stageRows || stageCol < 0 || stageCol >= stageCols) continue
+            const x = gridOriginX + stageCol * cellSize
+            const y = gridOriginY + stageRow * cellSize
+            context.fillStyle = cell.color
+            context.fillRect(x, y, cellSize, cellSize)
+            context.strokeStyle = 'rgba(0,0,0,0.18)'
+            context.lineWidth = 0.5
+            context.strokeRect(x, y, cellSize, cellSize)
+          }
+          context.globalAlpha = 1
+        }
+        // Blinking cursor
+        if (textCursorVisible) {
+          const { height: fh } = getFontMeta(textFontSize, textFontFamily)
+          const advance = getCharAdvance(textFontSize, { italic: textItalic })
+          const cursorCol = textAnchorCell.col + textInput.length * advance
+          const stageRow = textAnchorCell.row + contentOriginRow + borderStitches
+          const stageCol = cursorCol + contentOriginCol + borderStitches
+          if (stageRow >= 0 && stageRow < stageRows && stageCol >= 0 && stageCol < stageCols) {
+            const cx = gridOriginX + stageCol * cellSize
+            const cy = gridOriginY + stageRow * cellSize
+            context.fillStyle = activeColor
+            context.globalAlpha = 0.9
+            context.fillRect(cx, cy, Math.max(1.5, cellSize * 0.18), fh * cellSize)
+            context.globalAlpha = 1
+          }
+        }
+      }
+    }
+
     // Shape drag preview
     if (toolMode === 'shape' && shapeStartCell && shapeEndCell && shapeType) {
       const previewCells = computeShapeCells(
@@ -1563,6 +1728,16 @@ export default function GridEditor({
     isZooming,
     traceOpacity,
     traceImageUrl,
+    textAnchorCell,
+    textBoxEnd,
+    textInput,
+    textFontSize,
+    textFontFamily,
+    textBold,
+    textItalic,
+    textOutline,
+    textCursorVisible,
+    activeColor,
   ])
 
   return (
@@ -1875,8 +2050,8 @@ export default function GridEditor({
                   onPointerMove={handleCanvasPointerMove}
                   style={{
                     display: 'block',
-                    cursor: (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
-                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || highlightSelection) ? 'none' : 'pan-x pan-y',
+                    cursor: toolMode === 'text' ? 'text' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || highlightSelection) ? 'none' : 'pan-x pan-y',
                   }}
                 />
                 <canvas
@@ -1889,6 +2064,37 @@ export default function GridEditor({
                   }}
                 />
               </div>
+              {toolMode === 'text' && textAnchorCell && textBoxEnd && (
+                <input
+                  ref={textInputRef}
+                  key={`${textAnchorCell.row}-${textAnchorCell.col}`}
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      if (textInput.trim() && activeColor) {
+                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+                        onApplyShapeCells?.(stampCells)
+                      }
+                      setTextAnchorCell(null)
+                      setTextBoxEnd(null)
+                      setTextInput('')
+                    } else if (e.key === 'Escape') {
+                      setTextAnchorCell(null)
+                      setTextBoxEnd(null)
+                      setTextInput('')
+                    }
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: 0, top: 0,
+                    width: 1, height: 1,
+                    opacity: 0,
+                    pointerEvents: 'none',
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

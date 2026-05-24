@@ -174,7 +174,8 @@ def fetch_json(url: str) -> dict:
 
 @app.post("/chat", response_model=LlmChatResponse)
 def chat(request: LlmChatRequest):
-    result = chat_with_claude(request.message.strip(), request.context.model_dump())
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    result = chat_with_claude(request.message.strip(), request.context.model_dump(), history)
 
     # Make any generated source image URL durable (upload to Supabase)
     for action in result.get("actions", []):

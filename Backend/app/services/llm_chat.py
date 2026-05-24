@@ -180,6 +180,74 @@ TOOLS = [
         },
     },
     {
+        "name": "swap_color",
+        "description": (
+            "Replace a palette color with any DMC thread color, including colors not currently in the palette. "
+            "Use this when the user wants to change a color to something specific, e.g. 'make the sky more orange' or 'swap the red to a coral'. "
+            "Pick the closest matching DMC code by name or color family."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_code": {"type": "string", "description": "DMC code of the color to replace"},
+                "to_code": {"type": "string", "description": "DMC code of the replacement color (can be any DMC color)"},
+            },
+            "required": ["from_code", "to_code"],
+        },
+    },
+    {
+        "name": "fill_selection",
+        "description": (
+            "Fill the user's currently highlighted/dragged selection region with a DMC color. "
+            "Only call this when has_selection is true. Use for requests like 'make this area red' or 'fill the selected region with black'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "color_code": {"type": "string", "description": "DMC code to fill the selection with"},
+            },
+            "required": ["color_code"],
+        },
+    },
+    {
+        "name": "clear_selection",
+        "description": (
+            "Blank out all cells in the user's currently highlighted selection region. "
+            "Only call this when has_selection is true. Use for requests like 'erase this area' or 'clear the selected section'."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "paint_border",
+        "description": (
+            "Paint the outer edge cells of the stitch grid with a specified DMC color. "
+            "Use this to clean up or add a consistent border around the design, e.g. 'make the edge all black'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "color_code": {"type": "string", "description": "DMC code to paint the border with, e.g. '310' for black"},
+            },
+            "required": ["color_code"],
+        },
+    },
+    {
+        "name": "clear_background",
+        "description": (
+            "Detect and remove the background of the design by flood-filling from the grid edges. "
+            "Finds all cells of the specified color that are connected to the border and blanks or recolors them. "
+            "Use this for requests like 'remove the yellow background' or 'clear the white around the subject'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "color_code": {"type": "string", "description": "DMC code of the background color to remove"},
+                "replacement_code": {"type": "string", "description": "DMC code to fill with instead of blanking (optional)"},
+            },
+            "required": ["color_code"],
+        },
+    },
+    {
         "name": "set_removal_mode",
         "description": "Set what happens when a color is removed: fill with nearby colors, or leave blank canvas cells.",
         "input_schema": {
@@ -256,6 +324,7 @@ Current canvas state:
 - Design size: {context.get('width_inches', 5.0)}" × {context.get('height_inches', 5.0)}" at {context.get('mesh_count', 18)} mesh
 - Has source image loaded: {context.get('has_source_image', False)}
 - Has stitch preview: {context.get('has_preview', False)}
+- Has active selection: {context.get('has_selection', False)}{' (user has highlighted a region — use fill_selection or clear_selection to edit it)' if context.get('has_selection') else ''}
 - Processing: clean_background={context.get('clean_background', False)}, simplify_colors={context.get('simplify_colors', False)}, strengthen_dark_detail={context.get('strengthen_dark_detail', False)}, preserve_accents={context.get('preserve_accents', False)}, contrast={context.get('contrast_level', 'normal')}{palette_lines}
 
 You help users by:
@@ -366,6 +435,39 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
             {"type": "merge_colors", "from_codes": from_codes, "to_code": to_code},
         )
 
+    if tool_name == "swap_color":
+        from_code = tool_input["from_code"]
+        to_code = tool_input["to_code"]
+        return (
+            f"Swapped {from_code} to {to_code}.",
+            {"type": "swap_color", "from_codes": [from_code], "to_code": to_code},
+        )
+
+    if tool_name == "fill_selection":
+        color_code = tool_input["color_code"]
+        return (
+            f"Filling selection with DMC {color_code}.",
+            {"type": "fill_selection", "value": color_code},
+        )
+
+    if tool_name == "clear_selection":
+        return "Clearing selection.", {"type": "clear_selection"}
+
+    if tool_name == "paint_border":
+        color_code = tool_input["color_code"]
+        return (
+            f"Painting border with DMC {color_code}.",
+            {"type": "paint_border", "value": color_code},
+        )
+
+    if tool_name == "clear_background":
+        color_code = tool_input["color_code"]
+        replacement_code = tool_input.get("replacement_code")
+        return (
+            f"Clearing background color DMC {color_code}.",
+            {"type": "clear_background", "value": color_code, "to_code": replacement_code or ""},
+        )
+
     if tool_name == "set_removal_mode":
         mode = tool_input["mode"]
         return f"Removal mode set to {mode}.", {"type": "set_removal_mode", "value": mode}
@@ -437,14 +539,14 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
     return f"Unknown tool: {tool_name}", None
 
 
-def chat_with_claude(message: str, context: dict) -> dict:
+def chat_with_claude(message: str, context: dict, history: list[dict] | None = None) -> dict:
     """Run an agentic Claude conversation with canvas tool use. Returns {reply, actions, image_url}."""
     client = _get_anthropic()
     if client is None:
         return {"reply": "AI assistant is not configured (ANTHROPIC_API_KEY missing).", "actions": [], "image_url": None}
 
     system = _build_system_prompt(context)
-    messages = [{"role": "user", "content": message}]
+    messages = [*(history or []), {"role": "user", "content": message}]
     actions: list[dict] = []
     image_url: str | None = None
     max_iterations = 8

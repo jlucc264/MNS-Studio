@@ -29,7 +29,6 @@ import {
   CanvasContext,
   ChatActionItem,
   chatAssistant,
-  getChatSuggestions,
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
@@ -39,7 +38,6 @@ import {
   getCanvasForDesign,
   getMyCreatorProfile,
   getProject,
-  importImageFromUrl,
   PaletteColor,
   publishGalleryItem,
   saveProject,
@@ -284,54 +282,6 @@ function collapsePaletteShades(
   }
 }
 
-function findOutsideBorderCoords(source: string[][], inset = 2) {
-  const rowCount = source.length
-  const colCount = source[0]?.length ?? 0
-
-  if (!rowCount || !colCount) {
-    return []
-  }
-
-  const visited = Array.from({ length: rowCount }, () => Array(colCount).fill(false))
-  const queue: Array<[number, number]> = []
-  const coords: Array<[number, number]> = []
-  const seen = new Set<string>()
-
-  function enqueue(row: number, col: number) {
-    if (row < 0 || row >= rowCount || col < 0 || col >= colCount) return
-    if (visited[row][col]) return
-
-    visited[row][col] = true
-      if (source[row][col] === BLANK_CELL) return
-
-    queue.push([row, col])
-    const key = `${row}:${col}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      coords.push([row, col])
-    }
-  }
-
-  for (let row = 0; row < rowCount; row += 1) {
-    for (let col = 0; col < colCount; col += 1) {
-      const nearEdge =
-        row <= inset || col <= inset || row >= rowCount - 1 - inset || col >= colCount - 1 - inset
-
-      if (!nearEdge) continue
-      enqueue(row, col)
-    }
-  }
-
-  while (queue.length) {
-    const [row, col] = queue.shift()!
-    enqueue(row - 1, col)
-    enqueue(row + 1, col)
-    enqueue(row, col - 1)
-    enqueue(row, col + 1)
-  }
-
-  return coords
-}
 
 
 function getSettingsKey(settings: PreviewSettings | null) {
@@ -366,8 +316,8 @@ function clampPrintDimensions(w: number, h: number): { width_inches: number; hei
 }
 
 const DEFAULT_SETTINGS: PreviewSettings = {
-  width_inches: 5,
-  height_inches: 5,
+  width_inches: 4,
+  height_inches: 4,
   mesh_count: 13,
   color_count: 128,
   show_grid: true,
@@ -444,7 +394,12 @@ function StudioPage() {
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [gridKey, setGridKey] = useState(0)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text'>('paint')
+  const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
+  const [textFontFamily, setTextFontFamily] = useState<'sans' | 'serif'>('sans')
+  const [textBold, setTextBold] = useState(false)
+  const [textItalic, setTextItalic] = useState(false)
+  const [textOutline, setTextOutline] = useState(false)
   const [shapeType, setShapeType] = useState<'box' | 'semicircle' | 'line'>('box')
   const [arcFlipped, setArcFlipped] = useState(false)
   const [arcFullCircle, setArcFullCircle] = useState(false)
@@ -1072,9 +1027,9 @@ function StudioPage() {
     latestApplyRequestIdRef.current = requestId
     const previewSettings = {
       ...settings,
-      color_count: paletteReductionTarget,
     }
 
+    const capturedReductionTarget = paletteReductionTarget
     const previousEnabledColorHexes = [...enabledColorHexes]
     const previousRemovalMode = removalMode
     const previousActivePaintColor = activePaintColor
@@ -1087,11 +1042,14 @@ function StudioPage() {
       previousRemovalMode !== 'fill' ||
       previousEnabledColorHexes.length !== previousEffectiveSourcePaletteHexes.length ||
       previousEffectiveSourcePaletteHexes.some((hex) => !previousEnabledColorHexes.includes(hex))
+    // Only preserve palette selection for blank mode — fill-mode slider reductions re-derive
+    // from the count each time to prevent cascading shrinkage across settings toggles.
     const canAttemptToPreservePaletteState =
       hasGeneratedPreview &&
       lastSettings !== null &&
       previewSettings.color_count === lastSettings.color_count &&
-      previousHadFilteredPalette
+      previousHadFilteredPalette &&
+      previousRemovalMode !== 'fill'
 
     const stitchWidth = Math.max(1, Math.round(previewSettings.width_inches * previewSettings.mesh_count))
     const stitchHeight = Math.max(1, Math.round(previewSettings.height_inches * previewSettings.mesh_count))
@@ -1122,9 +1080,15 @@ function StudioPage() {
       const nextAllPalette = collapsed.palette
       const nextOriginalCells = collapsed.cells
       const nextFullPaletteHexes = nextAllPalette.map((color) => color.hex)
+      const fillModeReductionTarget =
+        previousRemovalMode === 'fill' && capturedReductionTarget < nextAllPalette.length
+          ? capturedReductionTarget
+          : null
       const nextEnabledColorHexes = canAttemptToPreservePaletteState
         ? nextFullPaletteHexes.filter((hex) => previousEnabledColorHexes.includes(hex))
-        : nextFullPaletteHexes
+        : fillModeReductionTarget !== null
+          ? pickDistinctPaletteHexes(nextAllPalette, countCellsByHex(nextOriginalCells), fillModeReductionTarget, previousActivePaintColor)
+          : nextFullPaletteHexes
       const paletteOverlapRatio =
         previousEnabledColorHexes.length > 0
           ? nextEnabledColorHexes.length / previousEnabledColorHexes.length
@@ -1135,17 +1099,18 @@ function StudioPage() {
         paletteOverlapRatio >= MIN_PALETTE_STATE_OVERLAP_RATIO
       const resolvedEnabledColorHexes = shouldPreservePaletteState
         ? nextEnabledColorHexes
-        : nextFullPaletteHexes
+        : fillModeReductionTarget !== null
+          ? nextEnabledColorHexes
+          : nextFullPaletteHexes
       const shouldReapplyPaletteState =
-        shouldPreservePaletteState &&
-        (previousRemovalMode !== 'fill' ||
-          resolvedEnabledColorHexes.length !== nextFullPaletteHexes.length)
+        fillModeReductionTarget !== null ||
+        shouldPreservePaletteState
       const rebuiltFromPaletteState = shouldReapplyPaletteState
         ? applyPaletteStateToCells(
             nextOriginalCells,
             nextAllPalette,
             resolvedEnabledColorHexes,
-            previousRemovalMode
+            fillModeReductionTarget !== null ? 'fill' : previousRemovalMode
           )
         : null
       const nextCells = rebuiltFromPaletteState ? rebuiltFromPaletteState.nextCells : nextOriginalCells
@@ -1199,7 +1164,7 @@ function StudioPage() {
       setRedoStack([])
       setLastSettings(previewSettings)
       setDraftSettings(previewSettings)
-      setPaletteReductionTarget(nextFullPaletteHexes.length || 128)
+      setPaletteReductionTarget(fillModeReductionTarget !== null ? fillModeReductionTarget : (nextFullPaletteHexes.length || 128))
       setFinalPdfPath(null)
       setFinalPreviewImagePath(null)
       setHasGeneratedPreview(true)
@@ -1378,20 +1343,6 @@ function StudioPage() {
     applyEnabledPalette(Array.from(new Set([...enabledColorHexes, hex])), removalMode, nextOverrides)
   }
 
-  function handleEnableAllColors() {
-    const nextEnabledColorHexes = allPalette.map((color) => color.hex)
-
-    if (!nextEnabledColorHexes.length) return
-    if (
-      nextEnabledColorHexes.length === enabledColorHexes.length &&
-      nextEnabledColorHexes.every((hex) => enabledColorHexes.includes(hex))
-    ) {
-      return
-    }
-
-    pushUndoSnapshot()
-    applyEnabledPalette(nextEnabledColorHexes)
-  }
 
   function handleAutoReduceColors(targetCount: number) {
     // Sync any blank cells visible in `cells` that aren't yet in manualCellOverrides.
@@ -1943,56 +1894,6 @@ function StudioPage() {
     })
   }
 
-  function analyzePaletteSummary() {
-    const ranked = [...displayPalette]
-      .sort((left, right) => (displayColorCounts[right.hex] ?? 0) - (displayColorCounts[left.hex] ?? 0))
-      .slice(0, 10)
-
-    if (!ranked.length) {
-      return 'There is no stitch palette to analyze yet.'
-    }
-
-    const lines = ranked.map(
-      (color) => `${color.dmc_code} (${displayColorCounts[color.hex] ?? 0} stitches)`
-    )
-    return `Top palette colors: ${lines.join(', ')}.`
-  }
-
-
-  function recolorOutsideBorder(targetHex: string) {
-    if (!cells.length) return 0
-
-    const borderCoords = findOutsideBorderCoords(cells)
-    if (!borderCoords.length) return 0
-
-    let changed = 0
-    const nextCells = cloneCells(cells)
-    borderCoords.forEach(([row, col]) => {
-      if (nextCells[row][col] === targetHex) return
-      nextCells[row][col] = targetHex
-      changed += 1
-    })
-
-    if (!changed) return 0
-
-    pushUndoSnapshot()
-    setCells(nextCells)
-    refreshPreviewPalette(nextCells)
-    setManualCellOverrides((current) => {
-      const nextOverrides = { ...current }
-      borderCoords.forEach(([row, col]) => {
-        nextOverrides[makeCellKey(row, col)] = targetHex
-      })
-      return nextOverrides
-    })
-    setEnabledColorHexes((current) => Array.from(new Set([...current, targetHex])))
-    setActivePaintColor((current) => current ?? targetHex)
-    setFinalPdfPath(null)
-    setFinalPreviewImagePath(null)
-    setViewMode('stitch')
-
-    return changed
-  }
 
   function buildCanvasContext(): CanvasContext {
     return {
@@ -2015,6 +1916,7 @@ function StudioPage() {
       preserve_accents: draftSettings.preserve_accents,
       contrast_level: draftSettings.contrast_level,
       show_grid: draftSettings.show_grid,
+      has_selection: selectedRegions.length > 0,
     }
   }
 
@@ -2063,7 +1965,8 @@ function StudioPage() {
         if (col) enableColorHex(col.hex)
         break
       }
-      case 'merge_colors': {
+      case 'merge_colors':
+      case 'swap_color': {
         const target = findPaletteColor(action.to_code ?? '')
         if (target) {
           const fromHexes = (action.from_codes ?? [])
@@ -2081,6 +1984,117 @@ function StudioPage() {
       case 'set_removal_mode':
         handleRemovalModeChange(action.value as 'fill' | 'blank')
         break
+      case 'fill_selection':
+      case 'clear_selection': {
+        if (!cells.length || !selectedRegions.length) break
+        const fillHex = action.type === 'fill_selection'
+          ? (findPaletteColor(action.value as string)?.hex ?? null)
+          : BLANK_CELL
+        if (!fillHex) break
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        let changed = 0
+        for (const rect of selectedRegions) {
+          const r0 = Math.min(rect.startRow, rect.endRow)
+          const r1 = Math.max(rect.startRow, rect.endRow)
+          const c0 = Math.min(rect.startCol, rect.endCol)
+          const c1 = Math.max(rect.startCol, rect.endCol)
+          for (let r = r0; r <= r1; r++) {
+            for (let c = c0; c <= c1; c++) {
+              if (nextCells[r]?.[c] === undefined) continue
+              if (nextCells[r][c] === FINISH_OUTLINE_CELL) continue
+              nextCells[r][c] = fillHex
+              nextOverrides[makeCellKey(r, c)] = fillHex
+              changed++
+            }
+          }
+        }
+        if (changed) {
+          pushUndoSnapshot()
+          setCells(nextCells)
+          setManualCellOverrides(nextOverrides)
+          refreshPreviewPalette(nextCells)
+          setFinalPdfPath(null)
+          setFinalPreviewImagePath(null)
+          setViewMode('stitch')
+        }
+        break
+      }
+      case 'paint_border': {
+        const borderColor = findPaletteColor(action.value as string)
+        if (!borderColor || !cells.length) break
+        const bHex = borderColor.hex
+        const numRows = cells.length
+        const numCols = cells[0].length
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        let changed = 0
+        for (let r = 0; r < numRows; r++) {
+          for (let c = 0; c < numCols; c++) {
+            if (r !== 0 && r !== numRows - 1 && c !== 0 && c !== numCols - 1) continue
+            if (cells[r][c] === BLANK_CELL || cells[r][c] === FINISH_OUTLINE_CELL) continue
+            nextCells[r][c] = bHex
+            nextOverrides[makeCellKey(r, c)] = bHex
+            changed++
+          }
+        }
+        if (changed) {
+          pushUndoSnapshot()
+          setCells(nextCells)
+          setManualCellOverrides(nextOverrides)
+          refreshPreviewPalette(nextCells)
+          setFinalPdfPath(null)
+          setFinalPreviewImagePath(null)
+          setViewMode('stitch')
+        }
+        break
+      }
+      case 'clear_background': {
+        const bgColor = findPaletteColor(action.value as string)
+        if (!bgColor || !cells.length) break
+        const bgHex = bgColor.hex
+        const replHex = action.to_code ? (findPaletteColor(action.to_code)?.hex ?? BLANK_CELL) : BLANK_CELL
+        const numRows = cells.length
+        const numCols = cells[0].length
+        // BFS flood fill from all edge cells matching bgHex
+        const visitedBg = new Set<string>()
+        const queue: [number, number][] = []
+        for (let r = 0; r < numRows; r++) {
+          for (let c = 0; c < numCols; c++) {
+            if (r !== 0 && r !== numRows - 1 && c !== 0 && c !== numCols - 1) continue
+            if (cells[r][c] !== bgHex) continue
+            const k = `${r},${c}`
+            if (!visitedBg.has(k)) { visitedBg.add(k); queue.push([r, c]) }
+          }
+        }
+        let head = 0
+        while (head < queue.length) {
+          const [r, c] = queue[head++]
+          for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]] as const) {
+            const nr = r + dr; const nc = c + dc
+            if (nr < 0 || nr >= numRows || nc < 0 || nc >= numCols) continue
+            const k = `${nr},${nc}`
+            if (visitedBg.has(k) || cells[nr][nc] !== bgHex) continue
+            visitedBg.add(k); queue.push([nr, nc])
+          }
+        }
+        if (!visitedBg.size) break
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        Array.from(visitedBg).forEach((k) => {
+          const [r, c] = k.split(',').map(Number)
+          nextCells[r][c] = replHex
+          nextOverrides[makeCellKey(r, c)] = replHex
+        })
+        pushUndoSnapshot()
+        setCells(nextCells)
+        setManualCellOverrides(nextOverrides)
+        refreshPreviewPalette(nextCells)
+        setFinalPdfPath(null)
+        setFinalPreviewImagePath(null)
+        setViewMode('stitch')
+        break
+      }
       case 'set_source_image':
         if (action.url) applyImportedImage(action.url)
         break
@@ -2090,10 +2104,10 @@ function StudioPage() {
     }
   }
 
-  async function handleChatMessage(message: string): Promise<CommandResult> {
+  async function handleChatMessage(message: string, history: Array<{role: 'user' | 'assistant', content: string}>): Promise<CommandResult> {
     const trimmed = message.trim()
     const context = buildCanvasContext()
-    const response = await chatAssistant(trimmed, context)
+    const response = await chatAssistant(trimmed, context, history)
 
     for (const action of response.actions ?? []) {
       await dispatchChatAction(action)
@@ -2102,9 +2116,6 @@ function StudioPage() {
     return { reply: response.reply }
   }
 
-  async function handleGetSuggestions(): Promise<string[]> {
-    return getChatSuggestions(buildCanvasContext())
-  }
 
   async function handleChatUpload(file: File) {
     setUploadError(null)
@@ -2346,6 +2357,8 @@ function StudioPage() {
     <ChatPanel
       onSubmitMessage={handleChatMessage}
       onUploadFile={handleChatUpload}
+      isLoggedIn={!!user}
+      onSignIn={() => setAuthPrompt('login')}
     />
   )
 
@@ -3468,6 +3481,11 @@ function StudioPage() {
                     }
                   }}
                   onDesignAreaMiss={() => { setActivePaintColor(null); setSelectedRegions([]) }}
+                  textFontSize={textFontSize}
+                  textFontFamily={textFontFamily}
+                  textBold={textBold}
+                  textItalic={textItalic}
+                  textOutline={textOutline}
                   onPaintStart={pushUndoSnapshot}
                   onPaintCells={toolMode === 'merge' ? handleMergeCells : handlePaintCells}
                   onApplyShapeCells={handleApplyShapeCells}
@@ -3653,10 +3671,20 @@ function StudioPage() {
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
-                setToolMode(mode)
+                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text')
                 if (mode !== 'select') setSelectedRegions([])
                 if (mode === 'select') setActivePaintColor(null)
               }}
+              textFontSize={textFontSize}
+              onTextFontSizeChange={setTextFontSize}
+              textFontFamily={textFontFamily}
+              onTextFontFamilyChange={setTextFontFamily}
+              textBold={textBold}
+              onTextBoldChange={setTextBold}
+              textItalic={textItalic}
+              onTextItalicChange={setTextItalic}
+              textOutline={textOutline}
+              onTextOutlineChange={setTextOutline}
               shapeType={shapeType}
               onShapeTypeChange={setShapeType}
               arcFlipped={arcFlipped}

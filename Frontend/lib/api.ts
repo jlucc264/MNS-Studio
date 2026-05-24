@@ -65,6 +65,7 @@ export type CanvasContext = {
   preserve_accents: boolean
   contrast_level: string
   show_grid: boolean
+  has_selection: boolean
 }
 
 export type ChatActionItem = {
@@ -185,11 +186,13 @@ export async function fetchDmcColors(): Promise<PaletteColor[]> {
   }))
 }
 
-export async function chatAssistant(message: string, context?: CanvasContext): Promise<ChatResponse> {
+export type ChatHistoryMessage = { role: 'user' | 'assistant'; content: string }
+
+export async function chatAssistant(message: string, context?: CanvasContext, history?: ChatHistoryMessage[]): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, context }),
+    body: JSON.stringify({ message, context, history: history ?? [] }),
   })
 
   if (!res.ok) {

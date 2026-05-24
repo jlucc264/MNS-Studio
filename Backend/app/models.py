@@ -177,11 +177,18 @@ class CanvasContext(BaseModel):
     preserve_accents: bool = False
     contrast_level: str = "normal"
     show_grid: bool = True
+    has_selection: bool = False
+
+
+class ChatHistoryMessage(BaseModel):
+    role: str
+    content: str
 
 
 class LlmChatRequest(BaseModel):
     message: str
     context: CanvasContext = CanvasContext()
+    history: list[ChatHistoryMessage] = []
 
 
 class ChatActionItem(BaseModel):

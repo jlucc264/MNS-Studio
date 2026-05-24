@@ -176,6 +176,7 @@ function GalleryPage() {
   const [checkoutError, setCheckoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [hasActiveDesign, setHasActiveDesign] = useState(false)
+  const [activeDraftName, setActiveDraftName] = useState('Untitled')
   const [shareToast, setShareToast] = useState(false)
 
   const slugMap = useMemo(() => buildCreatorSlugMap(items), [items])
@@ -191,6 +192,7 @@ function GalleryPage() {
       if (!saved) return
       const d = JSON.parse(saved)
       setHasActiveDesign(!!(d.previewImagePath || d.cells?.length > 0))
+      if (d.draftName) setActiveDraftName(d.draftName)
     } catch {}
   }, [session])
 
@@ -415,7 +417,7 @@ function GalleryPage() {
 
       {hasActiveDesign && (
         <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center' }}>
-          <span style={{ color: '#5c4a3a', fontSize: 14 }}>You have an active design in progress.</span>
+          <span style={{ color: '#5c4a3a', fontSize: 14 }}>Active design: <strong>{activeDraftName}</strong></span>
           <Link href="/studio" style={{ color: '#3f382f', fontWeight: 700, fontSize: 14 }}>Continue editing →</Link>
         </div>
       )}
@@ -1201,7 +1203,7 @@ function GalleryPage() {
               <h2 style={{ margin: 0 }}>Log out?</h2>
               {hasActiveDesign ? (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                  You have an active design in progress. Logging out will discard it — go to the studio to save it as a draft first.
+                  <strong>{activeDraftName}</strong> is still open. Logging out will discard it — go to the studio to save it as a draft first.
                 </p>
               ) : (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>

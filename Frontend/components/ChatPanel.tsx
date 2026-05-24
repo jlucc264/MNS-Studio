@@ -12,9 +12,15 @@ type CommandResult = {
   reply: string
 }
 
+type HistoryMessage = { role: 'user' | 'assistant'; content: string }
+
+const HISTORY_WINDOW = 6
+
 type Props = {
-  onSubmitMessage: (message: string) => Promise<CommandResult>
+  onSubmitMessage: (message: string, history: HistoryMessage[]) => Promise<CommandResult>
   onUploadFile: (file: File) => Promise<string>
+  isLoggedIn: boolean
+  onSignIn: () => void
 }
 
 const WELCOME =
@@ -23,6 +29,8 @@ const WELCOME =
 export default function ChatPanel({
   onSubmitMessage,
   onUploadFile,
+  isLoggedIn,
+  onSignIn,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
@@ -51,20 +59,23 @@ export default function ChatPanel({
     const trimmed = message.trim()
     if (!trimmed || busy) return
 
+    const history: HistoryMessage[] = messages
+      .filter((m) => m.id !== 'welcome' && m.text !== '…')
+      .slice(-HISTORY_WINDOW)
+      .map((m) => ({ role: m.role, content: m.text }))
+
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'user', text: trimmed }])
     setInput('')
     setBusy(true)
 
-    // Thinking placeholder
     const thinkingId = crypto.randomUUID()
     setMessages((prev) => [...prev, { id: thinkingId, role: 'assistant', text: '…' }])
 
     try {
-      const result = await onSubmitMessage(trimmed)
+      const result = await onSubmitMessage(trimmed, history)
       setMessages((prev) =>
         prev.map((m) => (m.id === thinkingId ? { ...m, text: result.reply } : m))
       )
-
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Something went wrong.'
       setMessages((prev) =>
@@ -214,63 +225,86 @@ export default function ChatPanel({
       </div>
 
       {/* Input area */}
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: 'flex',
-          gap: 6,
-          padding: '8px 10px',
-          borderTop: '1px solid #ececec',
-          background: '#fdfcfb',
-          flexShrink: 0,
-          alignItems: 'flex-end',
-        }}
-      >
-        <textarea
-          rows={1}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask me anything or describe what you want…"
-          disabled={busy}
+      {isLoggedIn ? (
+        <form
+          onSubmit={handleSubmit}
           style={{
-            flex: 1,
-            resize: 'none',
-            border: '1px solid #d0cac2',
-            borderRadius: 8,
-            padding: '7px 9px',
-            font: 'inherit',
-            fontSize: 13,
-            lineHeight: 1.4,
-            color: '#2e2820',
-            background: busy ? '#f8f7f5' : '#fff',
-            outline: 'none',
-            minHeight: 34,
-            maxHeight: 100,
-            overflowY: 'auto',
-          }}
-        />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          style={{
-            border: 'none',
-            background: busy || !input.trim() ? '#c8c2ba' : '#6e8d67',
-            color: '#fff',
-            borderRadius: 8,
-            padding: '7px 13px',
-            font: 'inherit',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: busy || !input.trim() ? 'default' : 'pointer',
+            display: 'flex',
+            gap: 6,
+            padding: '8px 10px',
+            borderTop: '1px solid #ececec',
+            background: '#fdfcfb',
             flexShrink: 0,
-            height: 34,
-            alignSelf: 'flex-end',
+            alignItems: 'flex-end',
           }}
         >
-          Send
-        </button>
-      </form>
+          <textarea
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask me anything or describe what you want…"
+            disabled={busy}
+            style={{
+              flex: 1,
+              resize: 'none',
+              border: '1px solid #d0cac2',
+              borderRadius: 8,
+              padding: '7px 9px',
+              font: 'inherit',
+              fontSize: 13,
+              lineHeight: 1.4,
+              color: '#2e2820',
+              background: busy ? '#f8f7f5' : '#fff',
+              outline: 'none',
+              minHeight: 34,
+              maxHeight: 100,
+              overflowY: 'auto',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={busy || !input.trim()}
+            style={{
+              border: 'none',
+              background: busy || !input.trim() ? '#c8c2ba' : '#6e8d67',
+              color: '#fff',
+              borderRadius: 8,
+              padding: '7px 13px',
+              font: 'inherit',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: busy || !input.trim() ? 'default' : 'pointer',
+              flexShrink: 0,
+              height: 34,
+              alignSelf: 'flex-end',
+            }}
+          >
+            Send
+          </button>
+        </form>
+      ) : (
+        <div style={{ padding: '12px 14px', borderTop: '1px solid #ececec', background: '#fdfcfb', flexShrink: 0, textAlign: 'center' }}>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#6b5f54' }}>Sign in to use MNS Pro</p>
+          <button
+            type="button"
+            onClick={onSignIn}
+            style={{
+              border: 'none',
+              background: '#6e8d67',
+              color: '#fff',
+              borderRadius: 8,
+              padding: '7px 18px',
+              font: 'inherit',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Sign in
+          </button>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}
