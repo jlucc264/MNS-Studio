@@ -218,7 +218,7 @@ function getFullCircleCells(
   return result
 }
 
-function computeShapeCells(
+export function computeShapeCells(
   shapeType: 'box' | 'semicircle' | 'line',
   r1: number, c1: number, r2: number, c2: number,
   fillColor: string | null, borderColor: string | null,
@@ -2064,41 +2064,42 @@ export default function GridEditor({
                   }}
                 />
               </div>
-              {toolMode === 'text' && textAnchorCell && textBoxEnd && (
-                <input
-                  ref={textInputRef}
-                  key={`${textAnchorCell.row}-${textAnchorCell.col}`}
-                  value={textInput}
-                  onChange={(e) => setTextInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      if (textInput.trim() && activeColor) {
-                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
-                        onApplyShapeCells?.(stampCells)
-                      }
-                      setTextAnchorCell(null)
-                      setTextBoxEnd(null)
-                      setTextInput('')
-                    } else if (e.key === 'Escape') {
-                      setTextAnchorCell(null)
-                      setTextBoxEnd(null)
-                      setTextInput('')
-                    }
-                  }}
-                  style={{
-                    position: 'absolute',
-                    left: 0, top: 0,
-                    width: 1, height: 1,
-                    opacity: 0,
-                    pointerEvents: 'none',
-                  }}
-                />
-              )}
             </div>
           </div>
         </div>
       </div>
+      {/* Always-mounted keyboard capture — outside viewportRef so it never triggers scroll-into-view on mount or keypress */}
+      <input
+        ref={textInputRef}
+        value={textInput}
+        onChange={(e) => {
+          if (toolMode === 'text' && textAnchorCell && textBoxEnd) setTextInput(e.target.value)
+        }}
+        onKeyDown={(e) => {
+          if (toolMode !== 'text' || !textAnchorCell || !textBoxEnd) return
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            if (textInput.trim() && activeColor) {
+              const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+              onApplyShapeCells?.(stampCells)
+            }
+            setTextAnchorCell(null)
+            setTextBoxEnd(null)
+            setTextInput('')
+          } else if (e.key === 'Escape') {
+            setTextAnchorCell(null)
+            setTextBoxEnd(null)
+            setTextInput('')
+          }
+        }}
+        style={{
+          position: 'fixed',
+          top: 0, left: 0,
+          width: 1, height: 1,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   )
 }

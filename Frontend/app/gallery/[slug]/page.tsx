@@ -1,10 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
-import { assetUrl, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import CheckoutModal from '../../../components/CheckoutModal'
+import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -94,6 +95,7 @@ const inputStyle = {
 export default function CreatorProfilePage() {
   const params = useParams()
   const slug = typeof params.slug === 'string' ? params.slug : ''
+  const router = useRouter()
   const { session, user, updateProfile } = useAuth()
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [items, setItems] = useState<GalleryItem[]>([])
@@ -111,6 +113,10 @@ export default function CreatorProfilePage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
+
+  const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
+  const [checkoutError, setCheckoutError] = useState('')
+  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
 
   const isOwnProfile = !!(profile && user && profile.user_id === user.id)
 
@@ -144,6 +150,65 @@ export default function CreatorProfilePage() {
       setSaved(false)
     }
   }, [editing, user, profile])
+
+  async function handleUseTemplate(item: GalleryItem) {
+    const palette = (item.palette ?? []).map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name }))
+    const settings = {
+      width_inches: item.width_inches ?? 4,
+      height_inches: item.height_inches ?? 4,
+      mesh_count: item.mesh_count ?? 13,
+      color_count: (item.color_count ?? palette.length) || 20,
+      contrast_level: 'normal',
+      source_type: 'photo',
+      show_grid: false,
+      clean_background: false,
+      simplify_colors: false,
+      strengthen_dark_detail: false,
+      preserve_accents: false,
+    }
+    let cells: string[][] | null = null
+    if (item.project_id) {
+      try {
+        const project = await fetchGalleryItemProject(item.id)
+        cells = (project as { cells?: string[][] }).cells ?? null
+      } catch { /* proceed without cells */ }
+    }
+    const meshCount = item.mesh_count ?? 13
+    if (cells?.length && cells[0]?.length) {
+      settings.width_inches = cells[0].length / meshCount
+      settings.height_inches = cells.length / meshCount
+    }
+    localStorage.setItem('mns_active_design', JSON.stringify({
+      previewImagePath: item.preview_image_url,
+      originalPreviewImagePath: item.preview_image_url,
+      lastVisibleImageUrl: item.preview_image_url,
+      allPalette: palette,
+      previewPalette: palette,
+      enabledColorHexes: palette.map((c) => c.hex),
+      cells: cells ?? undefined,
+      originalCells: cells ?? undefined,
+      draftSettings: settings,
+      lastSettings: settings,
+      hasGeneratedPreview: true,
+      viewMode: 'stitch',
+      activeWorkflowStep: 2,
+      parentGalleryItemId: item.id,
+    }))
+    router.push('/studio')
+  }
+
+  async function handlePrintCheckout(item: GalleryItem) {
+    setCheckoutError('')
+    setCheckoutLoading('print')
+    try {
+      const { client_secret } = await createGalleryPrintCheckout(item.id)
+      setCheckoutClientSecret(client_secret)
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
+    } finally {
+      setCheckoutLoading(null)
+    }
+  }
 
   async function handleLike(item: GalleryItem) {
     if (!session?.access_token) return
@@ -399,6 +464,13 @@ export default function CreatorProfilePage() {
         )}
       </main>
 
+      {checkoutClientSecret && (
+        <CheckoutModal
+          clientSecret={checkoutClientSecret}
+          onClose={() => setCheckoutClientSecret(null)}
+        />
+      )}
+
       {selectedPreview && (
         <div
           onClick={() => setSelectedPreview(null)}
@@ -455,6 +527,50 @@ export default function CreatorProfilePage() {
                     </span>
                   )}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleUseTemplate(selectedPreview)}
+                  disabled={checkoutLoading !== null}
+                  style={btnSecondary}
+                >
+                  Use template
+                </button>
+                {(() => {
+                  const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                    ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
+                    : null
+                  const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void handlePrintCheckout(selectedPreview)}
+                        disabled={!printPrice || checkoutLoading !== null}
+                        style={{
+                          ...btnSecondary,
+                          ...(printPrice ? {} : { color: '#8a8177', background: '#f4efe7', cursor: 'not-allowed' }),
+                        }}
+                      >
+                        {checkoutLoading === 'print'
+                          ? 'Redirecting...'
+                          : printPrice
+                            ? `Order print — ${printPrice}`
+                            : 'Print unavailable'}
+                      </button>
+                      {canvas && printPrice && (
+                        <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
+                          <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
+                          <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
+                          <div>Printing &amp; fulfillment — {formatCents(2000)}</div>
+                        </div>
+                      )}
+                      {canvas && printPrice && (
+                        <div style={{ fontSize: 11, color: '#8a8177' }}>Ships within 5–7 business days</div>
+                      )}
+                      {checkoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{checkoutError}</p>}
+                    </>
+                  )
+                })()}
                 <button type="button" onClick={() => setSelectedPreview(null)} style={btnSecondary}>Close</button>
               </div>
             </aside>

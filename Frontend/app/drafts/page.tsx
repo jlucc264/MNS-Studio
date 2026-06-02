@@ -739,7 +739,7 @@ function DraftCard({
               project.mesh_count ? `${project.mesh_count} mesh` : null,
               project.color_count ? `${project.color_count} colors` : null,
               project.width_inches && project.height_inches
-                ? (() => { const c = getCanvasForDesign(project.width_inches, project.height_inches); return c ? `${c.label} canvas` : null })()
+                ? `${getCanvasForDesign(project.width_inches, project.height_inches).label} canvas`
                 : null,
             ]
               .filter(Boolean)

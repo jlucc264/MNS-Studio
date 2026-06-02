@@ -59,10 +59,11 @@ def _render_preview_image_from_cells(
     cells: list[list[str]],
     mesh_count: int,
     show_grid: bool,
+    include_border: bool = True,
 ) -> Image.Image:
     stitch_height = len(cells)
     stitch_width = len(cells[0]) if stitch_height else 0
-    border_stitches = int(BORDER_INCHES * mesh_count)
+    border_stitches = int(BORDER_INCHES * mesh_count) if include_border else 0
 
     total_width = stitch_width + (2 * border_stitches)
     total_height = stitch_height + (2 * border_stitches)
@@ -385,35 +386,24 @@ def _draw_true_size_reference_page(
     width_inches: float,
     height_inches: float,
     mesh_count: int,
-    preview_image: Image.Image,
+    cells: list[list[str]],
 ) -> None:
-    total_width_inches = width_inches + BORDER_INCHES * 2
-    total_height_inches = height_inches + BORDER_INCHES * 2
-    draw_width = total_width_inches * 72
-    draw_height = total_height_inches * 72
+    # Draw the design area only — no border — at exactly 1 inch = 72 PDF points.
+    draw_width = width_inches * 72
+    draw_height = height_inches * 72
 
-    page_width = draw_width + 72
-    page_height = draw_height + 108
-    pdf.setPageSize((page_width, page_height))
+    page_size = landscape(letter) if width_inches > height_inches else letter
+    page_width, page_height = page_size
+    pdf.setPageSize(page_size)
 
-    pdf.setFillColor(colors.HexColor("#173F2A"))
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(36, page_height - 34, "Internal reference")
-    pdf.setFillColor(colors.HexColor("#5B635C"))
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(
-        36,
-        page_height - 50,
-        f"True-size gridded canvas at {mesh_count} mesh ({total_width_inches:.1f}\" x {total_height_inches:.1f}\")",
-    )
-
+    true_size_image = _render_preview_image_from_cells(cells, mesh_count, show_grid=True, include_border=False)
     preview_buffer = BytesIO()
-    preview_image.save(preview_buffer, format="PNG")
+    true_size_image.save(preview_buffer, format="PNG")
     preview_buffer.seek(0)
     img = ImageReader(preview_buffer)
 
     x = (page_width - draw_width) / 2
-    y = 30
+    y = (page_height - draw_height) / 2
     pdf.drawImage(
         img,
         x,
@@ -483,13 +473,12 @@ def generate_preview_pdf(
     internal_pdf = canvas.Canvas(str(internal_path), pagesize=page_size)
     draw_public_pages(internal_pdf)
     internal_pdf.showPage()
-    true_size_grid_image = _render_preview_image_from_cells(cells, mesh_count, True)
     _draw_true_size_reference_page(
         internal_pdf,
         width_inches,
         height_inches,
         mesh_count,
-        true_size_grid_image,
+        cells,
     )
     internal_pdf.save()
 

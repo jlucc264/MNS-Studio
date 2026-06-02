@@ -13,7 +13,8 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import ChatPanel from '../../components/ChatPanel'
-import GridEditor, { type DesignSelectionRect } from '../../components/GridEditor'
+import GridEditor, { computeShapeCells, type DesignSelectionRect } from '../../components/GridEditor'
+import { getTextCells } from '../../lib/bitmapFonts'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
 import { ColorBrowserModal } from '../../components/ColorBrowserModal'
@@ -1917,6 +1918,8 @@ function StudioPage() {
       contrast_level: draftSettings.contrast_level,
       show_grid: draftSettings.show_grid,
       has_selection: selectedRegions.length > 0,
+      grid_rows: cells.length,
+      grid_cols: cells[0]?.length ?? 0,
     }
   }
 
@@ -2087,6 +2090,107 @@ function StudioPage() {
           nextOverrides[makeCellKey(r, c)] = replHex
         })
         pushUndoSnapshot()
+        setCells(nextCells)
+        setManualCellOverrides(nextOverrides)
+        refreshPreviewPalette(nextCells)
+        setFinalPdfPath(null)
+        setFinalPreviewImagePath(null)
+        setViewMode('stitch')
+        break
+      }
+      case 'draw_shape': {
+        if (!cells.length || action.r1 === undefined || action.c1 === undefined || action.r2 === undefined || action.c2 === undefined) break
+        const shapeType = (action.shape === 'arc' ? 'semicircle' : (action.shape ?? 'box')) as 'box' | 'semicircle' | 'line'
+        const fillHex = action.fill_color ? (findPaletteColor(action.fill_color)?.hex ?? null) : null
+        const borderHex = action.border_color ? (findPaletteColor(action.border_color)?.hex ?? null) : null
+        const shapeCells = computeShapeCells(
+          shapeType, action.r1, action.c1, action.r2, action.c2,
+          fillHex, borderHex,
+          cells.length, cells[0]?.length ?? 0,
+          action.border_size ?? 1,
+          false,
+          action.full_circle ?? false,
+        )
+        if (!shapeCells.length) break
+        pushUndoSnapshot()
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        for (const sc of shapeCells) {
+          if (sc.row < 0 || sc.row >= nextCells.length) continue
+          if (sc.col < 0 || sc.col >= (nextCells[0]?.length ?? 0)) continue
+          nextCells[sc.row][sc.col] = sc.color
+          nextOverrides[makeCellKey(sc.row, sc.col)] = sc.color
+        }
+        setCells(nextCells)
+        setManualCellOverrides(nextOverrides)
+        refreshPreviewPalette(nextCells)
+        setFinalPdfPath(null)
+        setFinalPreviewImagePath(null)
+        setViewMode('stitch')
+        break
+      }
+      case 'add_text': {
+        if (!cells.length || action.row === undefined || action.col === undefined || !action.text || !action.color) break
+        const textColor = findPaletteColor(action.color)?.hex ?? action.color
+        const textCells = getTextCells(
+          action.text, action.row, action.col,
+          action.font_size ?? 'medium',
+          action.font_family ?? 'sans',
+          textColor,
+          { bold: action.bold, italic: action.italic, outline: action.outline },
+        )
+        if (!textCells.length) break
+        pushUndoSnapshot()
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        for (const tc of textCells) {
+          if (tc.row < 0 || tc.row >= nextCells.length) continue
+          if (tc.col < 0 || tc.col >= (nextCells[0]?.length ?? 0)) continue
+          nextCells[tc.row][tc.col] = tc.color
+          nextOverrides[makeCellKey(tc.row, tc.col)] = tc.color
+        }
+        setCells(nextCells)
+        setManualCellOverrides(nextOverrides)
+        refreshPreviewPalette(nextCells)
+        setFinalPdfPath(null)
+        setFinalPreviewImagePath(null)
+        setViewMode('stitch')
+        break
+      }
+      case 'flood_fill': {
+        if (!cells.length || action.row === undefined || action.col === undefined || !action.color) break
+        const seedRow = action.row
+        const seedCol = action.col
+        if (seedRow < 0 || seedRow >= cells.length || seedCol < 0 || seedCol >= (cells[0]?.length ?? 0)) break
+        const fillHex = findPaletteColor(action.color)?.hex ?? action.color
+        const targetHex = cells[seedRow][seedCol]
+        if (targetHex === fillHex || targetHex === BLANK_CELL || targetHex === FINISH_OUTLINE_CELL) break
+        const numRows = cells.length
+        const numCols = cells[0].length
+        const visited = new Set<string>()
+        const queue: [number, number][] = [[seedRow, seedCol]]
+        visited.add(`${seedRow},${seedCol}`)
+        let head = 0
+        while (head < queue.length) {
+          const [r, c] = queue[head++]
+          for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]] as const) {
+            const nr = r + dr, nc = c + dc
+            if (nr < 0 || nr >= numRows || nc < 0 || nc >= numCols) continue
+            const k = `${nr},${nc}`
+            if (visited.has(k) || cells[nr][nc] !== targetHex) continue
+            visited.add(k)
+            queue.push([nr, nc])
+          }
+        }
+        if (!visited.size) break
+        pushUndoSnapshot()
+        const nextCells = cloneCells(cells)
+        const nextOverrides = { ...manualCellOverrides }
+        Array.from(visited).forEach((k) => {
+          const [r, c] = k.split(',').map(Number)
+          nextCells[r][c] = fillHex
+          nextOverrides[makeCellKey(r, c)] = fillHex
+        })
         setCells(nextCells)
         setManualCellOverrides(nextOverrides)
         refreshPreviewPalette(nextCells)
@@ -2463,21 +2567,9 @@ function StudioPage() {
   const designMeshCount = lastSettings?.mesh_count ?? draftSettings.mesh_count
   const finishSizeLimit = Math.max(1, Number(Math.min(designWidthInches, designHeightInches).toFixed(2)))
   const resolvedFinishSize = Math.max(1, Math.min(finishSizeLimit, finishSizeInches))
-  const canvasPaddingInches = 2
-  const requiredCanvasWidth =
-    finishShape === 'circle' ? resolvedFinishSize + canvasPaddingInches : Math.min(resolvedFinishSize, designWidthInches) + canvasPaddingInches
-  const requiredCanvasHeight =
-    finishShape === 'circle' ? resolvedFinishSize + canvasPaddingInches : Math.min(resolvedFinishSize, designHeightInches) + canvasPaddingInches
-  const availableCanvasSizes = [
-    { label: '5 x 6', width: 5, height: 6 },
-    { label: '8 x 6', width: 8, height: 6 },
-    { label: '8 x 12', width: 8, height: 12 },
-  ]
-  const canvasFits = (canvas: { width: number; height: number }) =>
-    (requiredCanvasWidth <= canvas.width && requiredCanvasHeight <= canvas.height) ||
-    (requiredCanvasWidth <= canvas.height && requiredCanvasHeight <= canvas.width)
-  const selectedCanvasSize = availableCanvasSizes.find(canvasFits) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
-  const selectedCanvasFits = canvasFits(selectedCanvasSize)
+  const finishW = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designWidthInches)
+  const finishH = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designHeightInches)
+  const selectedCanvasSize = getCanvasForDesign(finishW, finishH)
   const workflowSteps = [
     { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
@@ -2638,14 +2730,7 @@ function StudioPage() {
                   ? (() => {
                       const w = contentBounds?.width_inches ?? previewStatsSettings.width_inches
                       const h = contentBounds?.height_inches ?? previewStatsSettings.height_inches
-                      const rw = w + 2
-                      const rh = h + 2
-                      const fit = availableCanvasSizes.find(
-                        (c) =>
-                          (rw <= c.width && rh <= c.height) ||
-                          (rw <= c.height && rh <= c.width)
-                      ) ?? availableCanvasSizes[availableCanvasSizes.length - 1]
-                      return fit.label + '"'
+                      return getCanvasForDesign(w, h).label
                     })()
                   : 'N/A'}
               </strong>
@@ -3015,9 +3100,7 @@ function StudioPage() {
             <div><strong>Canvas:</strong> {selectedCanvasSize.label}</div>
           </div>
           <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            {selectedCanvasFits
-              ? `Chosen from 5 x 6, 8 x 6, and 8 x 12 with about 1" working canvas on each side.`
-              : `This design needs about ${requiredCanvasWidth.toFixed(1)}" x ${requiredCanvasHeight.toFixed(1)}", which is larger than the available sizes.`}
+            {`${selectedCanvasSize.canvasW}" × ${selectedCanvasSize.canvasH}" canvas with 2" working border on each side.`}
           </div>
         </div>
         <div
@@ -3284,7 +3367,7 @@ function StudioPage() {
                 })}
               </div>
               <div style={{ minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                {showChatPanel && !isMobile ? (
+                {showChatPanel && !isMobile && (
                   <>
                     {paletteReductionPanel && (
                       <div style={{ padding: '10px 10px 0', flexShrink: 0 }}>
@@ -3295,22 +3378,21 @@ function StudioPage() {
                       {chatPanel}
                     </div>
                   </>
-                ) : (
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
-                      alignContent: 'start',
-                      padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
-                      flex: 1,
-                      overflow: 'auto',
-                      WebkitOverflowScrolling: 'touch',
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {leftPanelContent}
-                  </div>
                 )}
+                <div
+                  style={{
+                    display: showChatPanel && !isMobile ? 'none' : 'grid',
+                    gap: activeWorkflowStep === 2 ? (isMobile ? 10 : 14) : isMobile ? 14 : 22,
+                    alignContent: 'start',
+                    padding: activeWorkflowStep === 2 ? (isMobile ? 12 : 18) : isMobile ? 14 : 24,
+                    flex: 1,
+                    overflow: 'auto',
+                    WebkitOverflowScrolling: 'touch',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  {leftPanelContent}
+                </div>
               </div>
               <div style={{ padding: isMobile ? '10px 14px' : '12px 24px', paddingBottom: isMobile ? 'max(10px, env(safe-area-inset-bottom, 10px))' : '12px', borderTop: '1px solid #eee8df', display: 'grid', gap: 8 }}>
                 {!isMobile && (

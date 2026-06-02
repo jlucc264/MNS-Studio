@@ -181,6 +181,22 @@ function GalleryPage() {
 
   const slugMap = useMemo(() => buildCreatorSlugMap(items), [items])
 
+  const popularThreshold = useMemo(() => {
+    const sorted = [...items].map((i) => i.like_count).sort((a, b) => b - a)
+    return Math.max(3, sorted[Math.floor(sorted.length * 0.1)] ?? 0)
+  }, [items])
+
+  const remixCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+    items.forEach((item) => {
+      if (item.parent_gallery_item_id)
+        map.set(item.parent_gallery_item_id, (map.get(item.parent_gallery_item_id) ?? 0) + 1)
+    })
+    return map
+  }, [items])
+
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+
 
   useEffect(() => {
     if (!session) {
@@ -562,19 +578,53 @@ function GalleryPage() {
                           </Link>
                         ) : submitterLabel(item, user)}
                       </div>
+                      {(item.width_inches && item.height_inches) || item.mesh_count ? (
+                        <div style={{ fontSize: 10, color: '#9a9287', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {[
+                            item.width_inches && item.height_inches ? `${item.width_inches.toFixed(1)}" × ${item.height_inches.toFixed(1)}"` : null,
+                            item.mesh_count ? `${item.mesh_count} mesh` : null,
+                          ].filter(Boolean).join(' · ')}
+                        </div>
+                      ) : null}
+                      {item.width_inches && item.height_inches && (
+                        <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
+                          Print from {formatCents(2000 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
+                        </div>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void handleShare(item) }}
-                      title="Share"
-                      style={{ border: 0, background: 'transparent', padding: '2px 0 0', cursor: 'pointer', color: '#8a8177', flexShrink: 0, lineHeight: 1 }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
-                        <polyline points="16 6 12 2 8 6"/>
-                        <line x1="12" y1="2" x2="12" y2="15"/>
-                      </svg>
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleShare(item) }}
+                        title="Share"
+                        style={{ border: 0, background: 'transparent', padding: '2px 0 0', cursor: 'pointer', color: '#8a8177', lineHeight: 1 }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                          <polyline points="16 6 12 2 8 6"/>
+                          <line x1="12" y1="2" x2="12" y2="15"/>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void handleLike(item) }}
+                        style={{
+                          border: 0,
+                          background: 'transparent',
+                          padding: 0,
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: item.liked_by_me ? '#4a7244' : '#8a8177',
+                          lineHeight: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 3,
+                        }}
+                      >
+                        ♥{item.like_count > 0 ? ` ${item.like_count}` : ''}
+                      </button>
+                    </div>
                   </div>
                   {item.parent_gallery_item_id && (
                     <span style={{ fontSize: 9, color: '#8a8177', background: '#f0ece5', borderRadius: 999, padding: '1px 6px', marginTop: 2, display: 'inline-block' }}>↩ remix</span>
@@ -642,6 +692,26 @@ function GalleryPage() {
                           objectPosition: 'center center',
                         }}
                       />
+                      {(() => {
+                        const isNew = Date.now() - new Date(item.created_at).getTime() < sevenDaysMs
+                        const isPopular = item.like_count >= popularThreshold && item.like_count > 0
+                        const remixes = remixCountMap.get(item.id) ?? 0
+                        const badges = [
+                          isNew && { label: 'New', color: '#2a5f83', bg: '#ddeef8' },
+                          isPopular && { label: 'Popular', color: '#6e4a0e', bg: '#fde8b0' },
+                          remixes > 0 && { label: `Remixed ${remixes}×`, color: '#5a3e7a', bg: '#ede0f8' },
+                        ].filter(Boolean) as { label: string; color: string; bg: string }[]
+                        if (!badges.length) return null
+                        return (
+                          <div style={{ position: 'absolute', top: 7, left: 7, display: 'flex', gap: 4, flexWrap: 'wrap', pointerEvents: 'none' }}>
+                            {badges.map((b) => (
+                              <span key={b.label} style={{ fontSize: 9, fontWeight: 700, color: b.color, background: b.bg, borderRadius: 999, padding: '2px 7px', lineHeight: 1.6 }}>
+                                {b.label}
+                              </span>
+                            ))}
+                          </div>
+                        )
+                      })()}
                     </button>
                   ) : (
                     <span style={{ color: '#8a8177' }}>No preview</span>
@@ -677,6 +747,11 @@ function GalleryPage() {
                         ].filter(Boolean).join(' · ')}
                       </span>
                     ) : null}
+                    {item.width_inches && item.height_inches && (
+                      <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
+                        Print from {formatCents(2000 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
+                      </span>
+                    )}
                   </div>
                   {item.tags.length > 0 && (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -967,6 +1042,44 @@ function GalleryPage() {
                         ))}
                       </div>
                     )}
+
+                    {(() => {
+                      const moreItems = items.filter(
+                        (i) => i.user_id === selectedPreview.user_id && i.id !== selectedPreview.id
+                      ).slice(0, 6)
+                      if (!moreItems.length) return null
+                      return (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          <span style={{ fontSize: 12, color: '#8a8177', fontWeight: 700 }}>More from this maker</span>
+                          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                            {moreItems.map((moreItem) => (
+                              <button
+                                key={moreItem.id}
+                                type="button"
+                                onClick={() => setSelectedPreview(moreItem)}
+                                style={{
+                                  flexShrink: 0,
+                                  width: 68,
+                                  height: 68,
+                                  padding: 0,
+                                  border: '1px solid #d8d0c4',
+                                  borderRadius: 6,
+                                  overflow: 'hidden',
+                                  cursor: 'pointer',
+                                  background: '#f0ece5',
+                                }}
+                              >
+                                <GalleryImage
+                                  src={moreItem.image_url}
+                                  alt={moreItem.title}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   <div style={{ display: 'grid', gap: 8 }}>
@@ -1044,6 +1157,9 @@ function GalleryPage() {
                               <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
                               <div>Printing &amp; fulfillment — {formatCents(2000)}</div>
                             </div>
+                          )}
+                          {canvas && printPrice && (
+                            <div style={{ fontSize: 11, color: '#8a8177' }}>Ships within 5–7 business days</div>
                           )}
                           {checkoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{checkoutError}</p>}
                         </>
@@ -1181,10 +1297,13 @@ function GalleryPage() {
                     : null
                   const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
                   return canvas && printPrice ? (
-                    <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
-                      <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
-                      {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(2000)})
-                    </div>
+                    <>
+                      <div style={{ margin: '0 16px 6px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
+                        <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
+                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(2000)})
+                      </div>
+                      <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Ships within 5–7 business days</div>
+                    </>
                   ) : null
                 })()}
                 {checkoutError && (

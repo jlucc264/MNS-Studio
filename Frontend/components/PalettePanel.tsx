@@ -407,7 +407,7 @@ export default function PalettePanel({
                   lineHeight: 1.5,
                 }}
               >
-                Click canvas to anchor, type your text, then press <strong>Enter</strong> to stamp. <strong>Esc</strong> to cancel.
+                <strong>Drag</strong> on canvas to define the box, then type. <strong>Drag the box</strong> to reposition before stamping. Press <strong>Enter</strong> to stamp or <strong>Esc</strong> to cancel.
               </div>
             </div>
           )}

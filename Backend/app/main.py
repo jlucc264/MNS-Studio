@@ -491,8 +491,6 @@ def get_gallery_item_project(item_id: str):
 @app.post("/checkout/print-own", response_model=CheckoutResponse)
 def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(get_current_user_id)):
     canvas = get_canvas_for_design(request.width_inches, request.height_inches)
-    if not canvas:
-        raise HTTPException(status_code=422, detail="Design exceeds the largest available canvas (8×12).")
 
     creator_user_id = None
     if request.parent_gallery_item_id:
@@ -544,8 +542,6 @@ def checkout_print_gallery(item_id: str):
     if not width or not height:
         raise HTTPException(status_code=422, detail="This design does not have dimension data for printing.")
     canvas = get_canvas_for_design(width, height)
-    if not canvas:
-        raise HTTPException(status_code=422, detail="Design exceeds the largest available canvas (8×12).")
     try:
         url = create_gallery_print_checkout(
             gallery_item_id=item_id,

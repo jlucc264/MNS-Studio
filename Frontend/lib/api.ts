@@ -66,6 +66,8 @@ export type CanvasContext = {
   contrast_level: string
   show_grid: boolean
   has_selection: boolean
+  grid_rows: number
+  grid_cols: number
 }
 
 export type ChatActionItem = {
@@ -78,6 +80,27 @@ export type ChatActionItem = {
   width_inches?: number
   height_inches?: number
   mesh_count?: number
+  // draw_shape
+  shape?: 'box' | 'arc' | 'line'
+  r1?: number
+  c1?: number
+  r2?: number
+  c2?: number
+  fill_color?: string
+  border_color?: string
+  border_size?: number
+  full_circle?: boolean
+  // add_text
+  text?: string
+  row?: number
+  col?: number
+  color?: string
+  font_size?: 'small' | 'medium' | 'large'
+  font_family?: 'sans' | 'serif'
+  bold?: boolean
+  italic?: boolean
+  outline?: boolean
+  // flood_fill (row/col/color shared with add_text above)
 }
 
 export type ChatResponse = {
@@ -495,24 +518,42 @@ export async function updateGalleryItem(
 
 // ── Canvas pricing (mirrors backend canvas_pricing.py) ────────────────────────
 
-const CANVAS_SIZES = [
-  { label: '5×6"', canvasW: 5, canvasH: 6, priceCents: 900 },
-  { label: '6×8"', canvasW: 6, canvasH: 8, priceCents: 1200 },
-  { label: '8×12"', canvasW: 8, canvasH: 12, priceCents: 1400 },
-] as const
+const _PRICING_ANCHORS: [number, number][] = [
+  [30, 900],   // 5×6  = $9
+  [48, 1200],  // 6×8  = $12
+  [96, 1400],  // 8×12 = $14
+]
 
-export type CanvasSize = typeof CANVAS_SIZES[number]
+function _interpolatePriceCents(sqIn: number): number {
+  if (sqIn <= _PRICING_ANCHORS[0][0]) {
+    const slope = (_PRICING_ANCHORS[1][1] - _PRICING_ANCHORS[0][1]) / (_PRICING_ANCHORS[1][0] - _PRICING_ANCHORS[0][0])
+    return Math.max(500, Math.round(_PRICING_ANCHORS[0][1] + slope * (sqIn - _PRICING_ANCHORS[0][0])))
+  }
+  for (let i = 0; i < _PRICING_ANCHORS.length - 1; i++) {
+    const [a1sq, a1p] = _PRICING_ANCHORS[i]
+    const [a2sq, a2p] = _PRICING_ANCHORS[i + 1]
+    if (sqIn <= a2sq) {
+      const t = (sqIn - a1sq) / (a2sq - a1sq)
+      return Math.round(a1p + t * (a2p - a1p))
+    }
+  }
+  const [a1sq, a1p] = _PRICING_ANCHORS[_PRICING_ANCHORS.length - 2]
+  const [a2sq, a2p] = _PRICING_ANCHORS[_PRICING_ANCHORS.length - 1]
+  const slope = (a2p - a1p) / (a2sq - a1sq)
+  return Math.round(a2p + slope * (sqIn - a2sq))
+}
 
-export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize | null {
-  const cw = widthInches + 2
-  const ch = heightInches + 2
-  return (
-    CANVAS_SIZES.find(
-      (c) =>
-        (cw <= c.canvasW && ch <= c.canvasH) ||
-        (cw <= c.canvasH && ch <= c.canvasW),
-    ) ?? null
-  )
+export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
+
+export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
+  const canvasW = Math.ceil(widthInches + 4)
+  const canvasH = Math.ceil(heightInches + 4)
+  return {
+    label: `${canvasW}×${canvasH}"`,
+    canvasW,
+    canvasH,
+    priceCents: _interpolatePriceCents(canvasW * canvasH),
+  }
 }
 
 export function formatCents(cents: number): string {

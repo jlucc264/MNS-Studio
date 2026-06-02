@@ -25,8 +25,6 @@ def create_print_own_checkout(
     creator_user_id: str | None = None,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
-    if not canvas:
-        raise ValueError("Design dimensions exceed the largest available canvas (8×12).")
 
     is_remixed = bool(gallery_item_id and creator_user_id)
     total = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
@@ -113,8 +111,6 @@ def create_gallery_print_checkout(
     height_inches: float,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
-    if not canvas:
-        raise ValueError("Design dimensions exceed the largest available canvas (8×12).")
 
     total = print_gallery_total_cents(canvas)
     session = stripe.checkout.Session.create(

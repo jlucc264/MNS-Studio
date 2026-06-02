@@ -163,9 +163,9 @@ class GalleryCreateRequest(BaseModel):
 
 class CanvasContext(BaseModel):
     source_mode: str = "photo"
-    width_inches: float = 5.0
-    height_inches: float = 5.0
-    mesh_count: int = 18
+    width_inches: float = 4.0
+    height_inches: float = 4.0
+    mesh_count: int = 13
     color_count: int = 128
     has_preview: bool = False
     has_source_image: bool = False
@@ -178,6 +178,8 @@ class CanvasContext(BaseModel):
     contrast_level: str = "normal"
     show_grid: bool = True
     has_selection: bool = False
+    grid_rows: int = 0
+    grid_cols: int = 0
 
 
 class ChatHistoryMessage(BaseModel):

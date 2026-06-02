@@ -10,7 +10,7 @@ type AuthContextValue = {
   session: Session | null
   user: User | null
   signIn: (email: string, password: string) => Promise<void>
-  signUp: (email: string, password: string, name?: string) => Promise<void>
+  signUp: (email: string, password: string, name?: string, acceptedAt?: { terms: string; privacy: string }) => Promise<void>
   sendPasswordReset: (email: string) => Promise<void>
   updatePassword: (password: string) => Promise<void>
   updateProfile: (data: { full_name?: string; bio?: string }) => Promise<void>
@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw new Error(error.message)
       },
-      async signUp(email, password, name) {
+      async signUp(email, password, name, acceptedAt) {
         const supabase = getSupabaseClient()
         if (!supabase) throw new Error('Supabase Auth is not configured.')
         const emailRedirectTo = typeof window !== 'undefined' ? `${window.location.origin}/auth-confirmed` : undefined
@@ -69,7 +69,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           password,
           options: {
             emailRedirectTo,
-            data: name ? { full_name: name.trim() } : undefined,
+            data: {
+              ...(name ? { full_name: name.trim() } : {}),
+              ...(acceptedAt ? { terms_accepted_at: acceptedAt.terms, privacy_accepted_at: acceptedAt.privacy } : {}),
+            },
           },
         })
         if (error) throw new Error(error.message)

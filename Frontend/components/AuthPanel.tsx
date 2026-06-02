@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState, type FormEvent } from 'react'
 import { useAuth } from './AuthProvider'
 
@@ -33,6 +34,8 @@ export function AuthPanel({ title = 'Log in to Create/View Templates', onSuccess
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login')
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [privacyAccepted, setPrivacyAccepted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -48,7 +51,8 @@ export function AuthPanel({ title = 'Log in to Create/View Templates', onSuccess
         await signIn(email, password)
         onSuccess?.()
       } else {
-        await signUp(email, password, name)
+        const now = new Date().toISOString()
+        await signUp(email, password, name, { terms: now, privacy: now })
         onSuccess?.()
         setMessage('Account created. Check your email if confirmation is enabled.')
       }
@@ -119,13 +123,43 @@ export function AuthPanel({ title = 'Log in to Create/View Templates', onSuccess
         minLength={6}
         style={{ ...inputStyle, display: mode === 'reset' ? 'none' : 'block' }}
       />
-      <button type="submit" disabled={submitting} style={{ ...buttonStyle, opacity: submitting ? 0.65 : 1 }}>
+      {mode === 'signup' && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', fontSize: 13, color: '#5f574e', lineHeight: 1.5 }}>
+            <input
+              type="checkbox"
+              checked={termsAccepted}
+              onChange={(e) => setTermsAccepted(e.target.checked)}
+              style={{ marginTop: 2, flexShrink: 0, accentColor: '#6e8d67' }}
+            />
+            <span>
+              I agree to the{' '}
+              <Link href="/terms" target="_blank" style={{ color: '#6e8d67', fontWeight: 600 }}>Terms and Conditions</Link>
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', fontSize: 13, color: '#5f574e', lineHeight: 1.5 }}>
+            <input
+              type="checkbox"
+              checked={privacyAccepted}
+              onChange={(e) => setPrivacyAccepted(e.target.checked)}
+              style={{ marginTop: 2, flexShrink: 0, accentColor: '#6e8d67' }}
+            />
+            <span>
+              I agree to the{' '}
+              <Link href="/privacy" target="_blank" style={{ color: '#6e8d67', fontWeight: 600 }}>Privacy Policy</Link>
+            </span>
+          </label>
+        </div>
+      )}
+      <button type="submit" disabled={submitting || (mode === 'signup' && (!termsAccepted || !privacyAccepted))} style={{ ...buttonStyle, opacity: submitting || (mode === 'signup' && (!termsAccepted || !privacyAccepted)) ? 0.65 : 1 }}>
         {submitting ? 'Working...' : mode === 'reset' ? 'Send reset link' : mode === 'login' ? 'Log in' : 'Create account'}
       </button>
       <button
         type="button"
         onClick={() => {
           setMode(mode === 'login' ? 'signup' : 'login')
+          setTermsAccepted(false)
+          setPrivacyAccepted(false)
           setMessage('')
         }}
         style={{

@@ -259,6 +259,94 @@ TOOLS = [
         },
     },
     {
+        "name": "draw_shape",
+        "description": (
+            "Draw a box, arc, or line directly on the stitch grid at specified cell coordinates. "
+            "Coordinates are zero-based row/col indices within the design grid (see grid_rows/grid_cols in context). "
+            "Use this to add frames, borders, dividers, or decorative shapes to the design."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "shape": {
+                    "type": "string",
+                    "enum": ["box", "arc", "line"],
+                    "description": "box: rectangle, arc: ellipse/circle, line: straight line",
+                },
+                "r1": {"type": "integer", "description": "Start row (0-based)"},
+                "c1": {"type": "integer", "description": "Start col (0-based)"},
+                "r2": {"type": "integer", "description": "End row (0-based, inclusive)"},
+                "c2": {"type": "integer", "description": "End col (0-based, inclusive)"},
+                "fill_color": {
+                    "type": "string",
+                    "description": "DMC code for interior fill (omit for no fill)",
+                },
+                "border_color": {
+                    "type": "string",
+                    "description": "DMC code for border/line color (omit for no border)",
+                },
+                "border_size": {
+                    "type": "integer",
+                    "description": "Border or line thickness in cells (1–4, default 1)",
+                },
+                "full_circle": {
+                    "type": "boolean",
+                    "description": "For arc shape: draw a full ellipse/circle (default false = semicircle)",
+                },
+            },
+            "required": ["shape", "r1", "c1", "r2", "c2"],
+        },
+    },
+    {
+        "name": "add_text",
+        "description": (
+            "Place text on the stitch grid using bitmap pixel fonts. "
+            "The text starts at the specified row/col cell position. "
+            "Use this to add labels, monograms, initials, or any lettering to the design. "
+            "Check grid_rows/grid_cols in context to pick a sensible starting position."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The text to place"},
+                "row": {"type": "integer", "description": "Starting row (0-based)"},
+                "col": {"type": "integer", "description": "Starting col (0-based)"},
+                "color": {"type": "string", "description": "DMC code for the text color"},
+                "font_size": {
+                    "type": "string",
+                    "enum": ["small", "medium", "large"],
+                    "description": "small=3×5 cells, medium=5×7 cells, large=8×13 cells (default: medium)",
+                },
+                "font_family": {
+                    "type": "string",
+                    "enum": ["sans", "serif"],
+                    "description": "sans or serif (default: sans)",
+                },
+                "bold": {"type": "boolean"},
+                "italic": {"type": "boolean"},
+                "outline": {"type": "boolean", "description": "Hollow outline-only letters"},
+            },
+            "required": ["text", "row", "col", "color"],
+        },
+    },
+    {
+        "name": "flood_fill",
+        "description": (
+            "Fill all connected cells of the same color at a given position with a new color — like a paint bucket. "
+            "Replaces the color at the specified cell and all adjacent cells of the same original color. "
+            "Useful for recoloring large uniform regions without touching neighboring colors."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "row": {"type": "integer", "description": "Seed row for the fill (0-based)"},
+                "col": {"type": "integer", "description": "Seed col for the fill (0-based)"},
+                "color": {"type": "string", "description": "DMC code of the new fill color"},
+            },
+            "required": ["row", "col", "color"],
+        },
+    },
+    {
         "name": "generate_source_image",
         "description": (
             "Generate a new source image from a text description using AI image generation (DALL-E 3). "
@@ -317,25 +405,42 @@ def _build_system_prompt(context: dict) -> str:
         "graphic_art": "Logo, screenshot, or flat graphic",
     }.get(source_mode, source_mode)
 
+    grid_rows = context.get("grid_rows", 0)
+    grid_cols = context.get("grid_cols", 0)
+    grid_info = f"\n- Grid size: {grid_rows} rows × {grid_cols} cols (cell coordinates for draw_shape/add_text/flood_fill)" if grid_rows and grid_cols else ""
+
+    has_preview = context.get("has_preview", False)
+    editing_bias = (
+        "\n\nEDITING BIAS (important): A stitch preview is already on the canvas. "
+        "For any request that could be interpreted as either a canvas edit OR a regeneration, "
+        "strongly prefer direct canvas edits (draw_shape, add_text, flood_fill, swap_color, remove_color, fill_selection, etc.). "
+        "Only call generate_stitch_preview or edit_source_image if the user is explicitly asking to redo the conversion, "
+        "change source settings (contrast, mesh, size, source mode), or start fresh. "
+        "Never regenerate just to 'improve' or 'adjust' something that can be done by editing cells directly."
+    ) if has_preview else ""
+
     return f"""You are a friendly, expert assistant for MNS Studio, a web app for creating needlepoint and cross-stitch patterns from images.
 
 Current canvas state:
 - Source mode: {source_mode} ({mode_hint})
-- Design size: {context.get('width_inches', 5.0)}" × {context.get('height_inches', 5.0)}" at {context.get('mesh_count', 18)} mesh
+- Design size: {context.get('width_inches', 4.0)}" × {context.get('height_inches', 4.0)}" at {context.get('mesh_count', 13)} mesh{grid_info}
 - Has source image loaded: {context.get('has_source_image', False)}
-- Has stitch preview: {context.get('has_preview', False)}
+- Has stitch preview: {has_preview}
 - Has active selection: {context.get('has_selection', False)}{' (user has highlighted a region — use fill_selection or clear_selection to edit it)' if context.get('has_selection') else ''}
-- Processing: clean_background={context.get('clean_background', False)}, simplify_colors={context.get('simplify_colors', False)}, strengthen_dark_detail={context.get('strengthen_dark_detail', False)}, preserve_accents={context.get('preserve_accents', False)}, contrast={context.get('contrast_level', 'normal')}{palette_lines}
+- Processing: clean_background={context.get('clean_background', False)}, simplify_colors={context.get('simplify_colors', False)}, strengthen_dark_detail={context.get('strengthen_dark_detail', False)}, preserve_accents={context.get('preserve_accents', False)}, contrast={context.get('contrast_level', 'normal')}{palette_lines}{editing_bias}
 
 You help users by:
-1. Adjusting canvas settings and generating stitch previews
-2. Editing the palette (remove, restore, merge colors)
-3. Generating AI source images from text descriptions
-4. Answering questions about needlepoint and cross-stitch design
+1. Editing the stitch canvas directly (draw_shape, add_text, flood_fill, swap_color, remove_color, fill_selection)
+2. Adjusting canvas settings and regenerating previews when explicitly requested
+3. Editing the palette (remove, restore, merge, swap colors)
+4. Generating AI source images from text descriptions
+5. Answering questions about needlepoint and cross-stitch design
 
 Keep responses concise and natural. When making multiple changes, chain tool calls together and summarize what you did in one sentence. If a setting change should be followed by regenerating the preview, call generate_stitch_preview after the setting change.
 
-Image generation rule: before calling generate_source_image or edit_source_image, check the canvas state. If width_inches=5.0, height_inches=5.0, and mesh_count=18 (all defaults), ask the user to confirm or set their desired size and mesh count first — the image will be generated at exactly those stitch dimensions. If the user has already customized any of these values, proceed without asking.
+Coordinate guidance: row 0, col 0 is the top-left cell of the design. Use grid_rows and grid_cols to stay within bounds. For centered text, estimate: col ≈ (grid_cols - text_length * char_advance) / 2, where char_advance is ~4 for small, ~6 for medium, ~9 for large font.
+
+Image generation rule: before calling generate_source_image or edit_source_image, check the canvas state. If width_inches=4.0, height_inches=4.0, and mesh_count=13 (all defaults), ask the user to confirm or set their desired size and mesh count first — the image will be generated at exactly those stitch dimensions. If the user has already customized any of these values, proceed without asking.
 
 Needlepoint design tips to share when relevant:
 - 13 mesh = larger stitches, good for bold designs; 18 mesh = finer detail, more colors visible
@@ -471,6 +576,25 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
     if tool_name == "set_removal_mode":
         mode = tool_input["mode"]
         return f"Removal mode set to {mode}.", {"type": "set_removal_mode", "value": mode}
+
+    if tool_name == "draw_shape":
+        shape = tool_input["shape"]
+        return (
+            f"Drawing {shape} from ({tool_input['r1']},{tool_input['c1']}) to ({tool_input['r2']},{tool_input['c2']}).",
+            {"type": "draw_shape", **tool_input},
+        )
+
+    if tool_name == "add_text":
+        return (
+            f"Adding text '{tool_input['text']}' at ({tool_input['row']},{tool_input['col']}).",
+            {"type": "add_text", **tool_input},
+        )
+
+    if tool_name == "flood_fill":
+        return (
+            f"Flood filling at ({tool_input['row']},{tool_input['col']}) with DMC {tool_input['color']}.",
+            {"type": "flood_fill", **tool_input},
+        )
 
     if tool_name == "generate_source_image":
         prompt = tool_input["prompt"]
