@@ -1070,7 +1070,7 @@ function GalleryPage() {
                                 }}
                               >
                                 <GalleryImage
-                                  src={moreItem.image_url}
+                                  src={moreItem.preview_image_url}
                                   alt={moreItem.title}
                                   style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
                                 />
