@@ -38,6 +38,34 @@ class PaletteColor(BaseModel):
     dmc_name: str
 
 
+class GridRenderRequest(BaseModel):
+    image_url: str
+    stitch_width: int
+    stitch_height: int
+    mesh_count: int
+    show_grid: bool = True
+    palette: list[PaletteColor]
+
+
+class GridRenderResponse(BaseModel):
+    message: str
+    stitch_preview_url: str
+    palette: list[PaletteColor]
+    cells: list[list[str]]
+
+
+class NearestDmcRequest(BaseModel):
+    hex: str
+
+
+class SamplePixelRequest(BaseModel):
+    image_url: str
+    col: int
+    row: int
+    stitch_width: int
+    stitch_height: int
+
+
 class VisualizeResponse(BaseModel):
     message: str
     stitch_preview_url: str
@@ -70,6 +98,7 @@ class FinalizeResponse(BaseModel):
     message: str
     pdf_url: str
     preview_image_url: str
+    internal_pdf_supabase_path: str | None = None
 
 class RecolorRequest(BaseModel):
     image_url: str
@@ -139,6 +168,7 @@ class PrintOwnCheckoutRequest(BaseModel):
     width_inches: float
     height_inches: float
     parent_gallery_item_id: Optional[str] = None
+    internal_pdf_supabase_path: Optional[str] = None
 
 
 class CheckoutResponse(BaseModel):
@@ -180,6 +210,7 @@ class CanvasContext(BaseModel):
     has_selection: bool = False
     grid_rows: int = 0
     grid_cols: int = 0
+    preview_image_url: Optional[str] = None
 
 
 class ChatHistoryMessage(BaseModel):
@@ -239,3 +270,8 @@ class GalleryItemResponse(BaseModel):
     share_count: int = 0
     project_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
+
+
+class RollPrintRequest(BaseModel):
+    project_ids: list[str]
+    copies: int = 1

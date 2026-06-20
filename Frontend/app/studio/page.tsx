@@ -39,6 +39,9 @@ import {
   getCanvasForDesign,
   getMyCreatorProfile,
   getProject,
+  gridRender,
+  isDesignPrintable,
+  samplePixel,
   PaletteColor,
   publishGalleryItem,
   saveProject,
@@ -395,7 +398,7 @@ function StudioPage() {
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [gridKey, setGridKey] = useState(0)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'>('paint')
   const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
   const [textFontFamily, setTextFontFamily] = useState<'sans' | 'serif'>('sans')
   const [textBold, setTextBold] = useState(false)
@@ -413,12 +416,16 @@ function StudioPage() {
   const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
   const [finishApplied, setFinishApplied] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [isGridRendering, setIsGridRendering] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [finalizeError, setFinalizeError] = useState('')
   const [finalPdfPath, setFinalPdfPath] = useState<string | null>(null)
+  const [internalPdfSupabasePath, setInternalPdfSupabasePath] = useState<string | null>(null)
   const [finalPreviewImagePath, setFinalPreviewImagePath] = useState<string | null>(null)
   const [lastSettings, setLastSettings] = useState<PreviewSettings | null>(null)
   const [draftSettings, setDraftSettings] = useState<PreviewSettings>(DEFAULT_SETTINGS)
+  const draftSettingsRef = useRef<PreviewSettings>(DEFAULT_SETTINGS)
+  draftSettingsRef.current = draftSettings
   const [paletteReductionTarget, setPaletteReductionTarget] = useState(128)
   const [manuallyDisabledHexes, setManuallyDisabledHexes] = useState<string[]>([])
   const [finishShape, setFinishShape] = useState<'circle' | 'square'>('circle')
@@ -1573,6 +1580,43 @@ function StudioPage() {
     setSelectedRegions([])
   }
 
+  const handleEyedropperSample = useCallback(async ({ row, col }: { row: number; col: number }) => {
+    if (!activeImagePath || !lastSettings) return
+    const stitchWidth = Math.max(1, Math.round(lastSettings.width_inches * lastSettings.mesh_count))
+    const stitchHeight = Math.max(1, Math.round(lastSettings.height_inches * lastSettings.mesh_count))
+    try {
+      const dmcColor = await samplePixel({ image_url: activeImagePath, col, row, stitch_width: stitchWidth, stitch_height: stitchHeight })
+      setAllPalette((prev) => prev.some((c) => c.hex === dmcColor.hex) ? prev : [...prev, dmcColor])
+      setPreviewPalette((prev) => prev.some((c) => c.hex === dmcColor.hex) ? prev : [...prev, dmcColor])
+    } catch {
+      // silently ignore lookup failures
+    }
+  }, [activeImagePath, lastSettings])
+
+  const handleGridRender = useCallback(async () => {
+    if (!activeImagePath || !lastSettings || !previewPalette.length) return
+    const stitchWidth = Math.max(1, Math.round(lastSettings.width_inches * lastSettings.mesh_count))
+    const stitchHeight = Math.max(1, Math.round(lastSettings.height_inches * lastSettings.mesh_count))
+    setIsGridRendering(true)
+    try {
+      const result = await gridRender({
+        image_url: activeImagePath,
+        stitch_width: stitchWidth,
+        stitch_height: stitchHeight,
+        mesh_count: lastSettings.mesh_count,
+        show_grid: lastSettings.show_grid,
+        palette: previewPalette,
+      })
+      setCells(result.cells)
+      setOriginalCells(result.cells)
+      setPreviewImagePath(result.stitch_preview_url)
+    } catch {
+      // silently ignore failures — existing cells stay intact
+    } finally {
+      setIsGridRendering(false)
+    }
+  }, [activeImagePath, lastSettings, previewPalette])
+
   function isInsideFinishShape(
     rowIndex: number,
     colIndex: number,
@@ -1920,6 +1964,7 @@ function StudioPage() {
       has_selection: selectedRegions.length > 0,
       grid_rows: cells.length,
       grid_cols: cells[0]?.length ?? 0,
+      preview_image_url: hasGeneratedPreview ? (previewImagePath ?? lastVisibleImageUrl ?? undefined) : undefined,
     }
   }
 
@@ -1930,13 +1975,19 @@ function StudioPage() {
           applySourceTypeDefaults(current, action.value as 'photo' | 'stitched_photo' | 'graphic_art')
         )
         break
-      case 'set_dimensions':
-        updateSettings({
-          ...(action.width_inches !== undefined && { width_inches: action.width_inches }),
-          ...(action.height_inches !== undefined && { height_inches: action.height_inches }),
-          ...(action.mesh_count !== undefined && { mesh_count: action.mesh_count as 13 | 18 }),
-        })
+      case 'set_dimensions': {
+        const patch: Partial<PreviewSettings> = {}
+        if (action.width_inches !== undefined) patch.width_inches = action.width_inches as number
+        if (action.height_inches !== undefined) patch.height_inches = action.height_inches as number
+        if (action.mesh_count !== undefined) patch.mesh_count = action.mesh_count as 13 | 18
+        updateSettings(patch)
+        if (activeImagePath) {
+          const merged = { ...draftSettingsRef.current, ...patch }
+          const { width_inches, height_inches } = clampPrintDimensions(merged.width_inches, merged.height_inches)
+          await handleApply({ ...merged, width_inches, height_inches })
+        }
         break
+      }
       case 'set_color_count':
         if (displayPalette.length) handleAutoReduceColors(action.value as number)
         break
@@ -1947,7 +1998,7 @@ function StudioPage() {
         updateSettings({ contrast_level: action.value as string as 'low' | 'normal' | 'high' | 'super_high' | 'super_super_high' })
         break
       case 'generate_preview':
-        if (activeImagePath) await handleApply(draftSettings)
+        if (activeImagePath) await handleApply(draftSettingsRef.current)
         break
       case 'undo':
         if (undoStack.length) handleUndoColorChange()
@@ -2260,12 +2311,10 @@ function StudioPage() {
     setLoading(true)
     setFinalizeError('')
     try {
-      const finalWidth = contentBounds?.width_inches ?? settingsForFinalize.width_inches
-      const finalHeight = contentBounds?.height_inches ?? settingsForFinalize.height_inches
       const result = await finalizePreview({
         preview_url: previewImagePath,
-        width_inches: finalWidth,
-        height_inches: finalHeight,
+        width_inches: settingsForFinalize.width_inches,
+        height_inches: settingsForFinalize.height_inches,
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
@@ -2278,8 +2327,8 @@ function StudioPage() {
       const existingId = activeDraftProjectId
       const finalizedPayload = {
         name: draftName.trim() || 'Untitled',
-        width_inches: finalWidth,
-        height_inches: finalHeight,
+        width_inches: settingsForFinalize.width_inches,
+        height_inches: settingsForFinalize.height_inches,
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
@@ -2319,6 +2368,7 @@ function StudioPage() {
       }
 
       setFinalPdfPath(result.pdf_url)
+      setInternalPdfSupabasePath(result.internal_pdf_supabase_path ?? null)
       setFinalPreviewImagePath(result.preview_image_url)
       setPreviewImagePath(result.preview_image_url)
       setOriginalPreviewImagePath(result.preview_image_url)
@@ -2372,8 +2422,8 @@ function StudioPage() {
           submitter_name: userDisplayName(user),
           preview_image_url: finalPreviewImagePath ?? previewImagePath,
           pdf_url: finalPdfPath,
-          width_inches: contentBounds?.width_inches ?? lastSettings?.width_inches ?? null,
-          height_inches: contentBounds?.height_inches ?? lastSettings?.height_inches ?? null,
+          width_inches: lastSettings?.width_inches ?? null,
+          height_inches: lastSettings?.height_inches ?? null,
           mesh_count: lastSettings?.mesh_count ?? null,
           color_count: currentDesignPalette.length,
           palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
@@ -2405,9 +2455,10 @@ function StudioPage() {
       const { client_secret } = await createPrintOwnCheckout(
         {
           pdf_url: finalPdfPath,
-          width_inches: contentBounds?.width_inches ?? lastSettings.width_inches,
-          height_inches: contentBounds?.height_inches ?? lastSettings.height_inches,
+          width_inches: lastSettings.width_inches,
+          height_inches: lastSettings.height_inches,
           parent_gallery_item_id: parentGalleryItemId ?? null,
+          internal_pdf_supabase_path: internalPdfSupabasePath,
         },
         session.access_token,
       )
@@ -2569,7 +2620,6 @@ function StudioPage() {
   const resolvedFinishSize = Math.max(1, Math.min(finishSizeLimit, finishSizeInches))
   const finishW = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designWidthInches)
   const finishH = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designHeightInches)
-  const selectedCanvasSize = getCanvasForDesign(finishW, finishH)
   const workflowSteps = [
     { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
@@ -3036,15 +3086,18 @@ function StudioPage() {
           </a>
           {parentGalleryItemId && (
             <div style={{ background: '#f0ece5', border: '1px solid #ddd5c8', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#5f574f' }}>
-              Working from a gallery template · print includes $4.50 creator credit
+              Working from a gallery template · print includes 18% creator credit
             </div>
+          )}
+          {!isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches) && (
+            <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds 8×12 canvas limit (max 6″×10″).</p>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
             <button
               type="button"
               onClick={() => void handlePrintOwnCheckout()}
-              disabled={!lastSettings || printCheckoutLoading}
-              style={{ ...btnSecondary, opacity: !lastSettings ? 0.55 : 1, cursor: !lastSettings ? 'not-allowed' : 'pointer' }}
+              disabled={!lastSettings || printCheckoutLoading || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)}
+              style={{ ...btnSecondary, opacity: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 0.55 : 1, cursor: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 'not-allowed' : 'pointer' }}
             >
               {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
             </button>
@@ -3097,10 +3150,10 @@ function StudioPage() {
                   : `${resolvedFinishSize.toFixed(1)}" square`
                 : 'N/A'}
             </div>
-            <div><strong>Canvas:</strong> {selectedCanvasSize.label}</div>
+            <div><strong>Canvas:</strong> {Math.round(finishW + 2)}&quot; × {Math.round(finishH + 2)}&quot;</div>
           </div>
           <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            {`${selectedCanvasSize.canvasW}" × ${selectedCanvasSize.canvasH}" canvas with 2" working border on each side.`}
+            {`${Math.round(finishW + 2)}" × ${Math.round(finishH + 2)}" canvas with 1" working border on each side.`}
           </div>
         </div>
         <div
@@ -3292,6 +3345,7 @@ function StudioPage() {
               user={user}
               onProfile={() => void handleViewProfile()}
               onLogout={() => setShowLogoutConfirm(true)}
+              onAdmin={() => router.push('/admin')}
             />
           ) : (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
@@ -3571,6 +3625,7 @@ function StudioPage() {
                   onPaintStart={pushUndoSnapshot}
                   onPaintCells={toolMode === 'merge' ? handleMergeCells : handlePaintCells}
                   onApplyShapeCells={handleApplyShapeCells}
+                  onEyedropperSample={handleEyedropperSample}
                 />
               </div>
             )}
@@ -3753,7 +3808,7 @@ function StudioPage() {
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
-                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text')
+                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper')
                 if (mode !== 'select') setSelectedRegions([])
                 if (mode === 'select') setActivePaintColor(null)
               }}
@@ -3976,6 +4031,7 @@ function StudioPage() {
       {showPostFinalizeOptions && (() => {
         const designW = contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
+        const printable = isDesignPrintable(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
         const printBase = parentGalleryItemId ? 2000 : 1500
         const printTotal = canvas ? printBase + canvas.priceCents : null
@@ -4001,29 +4057,23 @@ function StudioPage() {
                       We'll print your canvas and ship it to you.
                     </p>
                   </div>
-                  {canvas && printTotal !== null ? (
+                  {!printable ? (
+                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds max 6″×10″ (8×12 canvas).</p>
+                  ) : canvas && printTotal !== null ? (
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
                       <div>{canvas.label} canvas</div>
                       <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
                       {parentGalleryItemId && (
-                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes $4.50 creator credit</div>
+                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 18% creator credit</div>
                       )}
                     </div>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>No printable canvas size available.</p>
-                  )}
-                  <div style={{ fontSize: 11, color: '#a09890', lineHeight: 1.6 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 2 }}>Canvas sizes available</div>
-                    <div>5×6″ — fits designs up to 3″×4″</div>
-                    <div>6×8″ — fits designs up to 4″×6″</div>
-                    <div>8×12″ — fits designs up to 6″×10″</div>
-                  </div>
+                  ) : null}
                   {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
                   <button
                     type="button"
                     onClick={() => void handlePrintOwnCheckout()}
-                    disabled={!canvas || printCheckoutLoading}
-                    style={{ ...btnPrimary, opacity: !canvas ? 0.5 : 1, cursor: !canvas ? 'not-allowed' : 'pointer' }}
+                    disabled={!canvas || !printable || printCheckoutLoading}
+                    style={{ ...btnPrimary, opacity: (!canvas || !printable) ? 0.5 : 1, cursor: (!canvas || !printable) ? 'not-allowed' : 'pointer' }}
                   >
                     {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
                   </button>
@@ -4033,7 +4083,7 @@ function StudioPage() {
                   <div>
                     <strong style={{ fontSize: 15 }}>Share to gallery</strong>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
-                      Let the MNS community see your work. If someone buys your design, earn $4.50 in canvas credit!
+                      Let the MNS community see your work. If someone buys your design, earn 18% of the sale in canvas credit!
                     </p>
                   </div>
                   <div style={{ fontSize: 13, color: '#5f574f' }}>

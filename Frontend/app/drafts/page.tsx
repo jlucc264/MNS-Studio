@@ -134,8 +134,8 @@ export default function DraftsPage() {
     const palette = project.palette ?? []
     const cells = project.cells ?? []
     const meshCount = project.mesh_count ?? 13
-    const effectiveWidth = cells[0]?.length ? cells[0].length / meshCount : (project.width_inches ?? 4)
-    const effectiveHeight = cells.length ? cells.length / meshCount : (project.height_inches ?? 4)
+    const effectiveWidth = project.width_inches ?? (cells[0]?.length ? cells[0].length / meshCount : 4)
+    const effectiveHeight = project.height_inches ?? (cells.length ? cells.length / meshCount : 4)
     const settings = {
       width_inches: effectiveWidth,
       height_inches: effectiveHeight,
@@ -341,6 +341,7 @@ export default function DraftsPage() {
               }}
               onLogout={() => setShowLogoutConfirm(true)}
               onStudio={() => router.push('/studio')}
+              onAdmin={() => router.push('/admin')}
             />
           )}
         </div>

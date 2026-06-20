@@ -12,6 +12,17 @@ PRINT_GALLERY_BASE_CENTS = 2000   # $20
 TEMPLATE_PRICE_CENTS = 500        # $5
 CREATOR_EARNINGS_CENTS = 450      # $4.50 per template or gallery print sale
 
+# Maximum printable design dimensions (short side × long side).
+# Corresponds to an 8×12 canvas with 1" stitching margin each side.
+_MAX_PRINT_SHORT_IN = 6.0
+_MAX_PRINT_LONG_IN = 10.0
+
+
+def is_design_printable(width_inches: float, height_inches: float) -> bool:
+    short = min(width_inches, height_inches)
+    long = max(width_inches, height_inches)
+    return short <= _MAX_PRINT_SHORT_IN and long <= _MAX_PRINT_LONG_IN
+
 
 def _interpolate_price_cents(sq_in: float) -> int:
     if sq_in <= _ANCHORS[0][0]:

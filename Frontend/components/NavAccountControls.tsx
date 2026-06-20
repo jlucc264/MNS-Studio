@@ -4,16 +4,20 @@ import { useEffect, useRef, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { UserAvatar } from './UserAvatar'
 
+const ADMIN_USER_ID = process.env.NEXT_PUBLIC_ADMIN_USER_ID ?? ''
+
 export function NavAccountControls({
   user,
   onProfile,
   onLogout,
   onStudio,
+  onAdmin,
 }: {
   user?: User | null
   onProfile: () => void
   onLogout: () => void
   onStudio?: () => void
+  onAdmin?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -95,6 +99,29 @@ export function NavAccountControls({
           >
             View profile
           </button>
+          {onAdmin && ADMIN_USER_ID && user?.id === ADMIN_USER_ID && (
+            <>
+              <div style={{ height: 1, background: '#f0ece5', margin: '0 12px' }} />
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onAdmin() }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '11px 16px',
+                  border: 0,
+                  background: 'transparent',
+                  font: 'inherit',
+                  fontSize: 14,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  color: '#3f382f',
+                }}
+              >
+                Roll Print
+              </button>
+            </>
+          )}
           <div style={{ height: 1, background: '#f0ece5', margin: '0 12px' }} />
           <button
             type="button"

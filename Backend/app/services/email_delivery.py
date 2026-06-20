@@ -48,7 +48,14 @@ def send_contact_email(name: str | None, reply_email: str | None, category: str,
     return True
 
 
-def send_order_notification(order_type: str, metadata: dict, customer_email: str | None, shipping: dict | None) -> bool:
+def send_order_notification(
+    order_type: str,
+    metadata: dict,
+    customer_email: str | None,
+    shipping: dict | None,
+    pdf_attachment_bytes: bytes | None = None,
+    pdf_attachment_name: str = "production_report.pdf",
+) -> bool:
     if not _ready():
         return False
 
@@ -81,12 +88,19 @@ def send_order_notification(order_type: str, metadata: dict, customer_email: str
             lines.append(f"  {addr['line2']}")
         lines.append(f"  {addr.get('city', '')}, {addr.get('state', '')} {addr.get('postal_code', '')}")
 
-    resend.Emails.send({
+    params: resend.Emails.SendParams = {
         "from": FROM_EMAIL,
         "to": [RECIPIENT],
         "subject": subject,
         "text": "\n".join(lines),
-    })
+    }
+    if pdf_attachment_bytes:
+        params["attachments"] = [{
+            "filename": pdf_attachment_name,
+            "content": list(pdf_attachment_bytes),
+        }]
+
+    resend.Emails.send(params)
     return True
 
 

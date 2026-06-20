@@ -7,7 +7,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { assetUrl, buildCreatorSlugMap, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
 
@@ -411,6 +411,7 @@ function GalleryPage() {
                 }}
                 onLogout={() => setShowLogoutConfirm(true)}
                 onStudio={() => router.push('/studio')}
+                onAdmin={() => router.push('/admin')}
               />
             </>
           ) : (
@@ -586,7 +587,7 @@ function GalleryPage() {
                           ].filter(Boolean).join(' · ')}
                         </div>
                       ) : null}
-                      {item.width_inches && item.height_inches && (
+                      {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
                         <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
                           Print from {formatCents(2000 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
                         </div>
@@ -747,7 +748,7 @@ function GalleryPage() {
                         ].filter(Boolean).join(' · ')}
                       </span>
                     ) : null}
-                    {item.width_inches && item.height_inches && (
+                    {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
                       <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
                         Print from {formatCents(2000 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
                       </span>
@@ -1123,7 +1124,10 @@ function GalleryPage() {
                       </button>
                     </div>
                     {(() => {
-                      const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                      const printable = selectedPreview.width_inches && selectedPreview.height_inches
+                        ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                        : false
+                      const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                         ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                         : null
                       const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
@@ -1268,7 +1272,10 @@ function GalleryPage() {
                     Use template
                   </button>
                   {(() => {
-                    const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                    const printable = selectedPreview.width_inches && selectedPreview.height_inches
+                      ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                      : false
+                    const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                       ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                       : null
                     const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
@@ -1292,7 +1299,10 @@ function GalleryPage() {
                   })()}
                 </div>
                 {(() => {
-                  const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                  const printable = selectedPreview.width_inches && selectedPreview.height_inches
+                    ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                    : false
+                  const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
                   const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null

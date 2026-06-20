@@ -9,11 +9,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.models import (
     ContactRequest,
     ImportUrlRequest,
+    RollPrintRequest,
     LlmChatRequest,
     LlmChatResponse,
     SuggestionsRequest,
@@ -24,6 +26,11 @@ from app.models import (
     FinalizeResponse,
     RecolorRequest,
     RecolorResponse,
+    GridRenderRequest,
+    GridRenderResponse,
+    NearestDmcRequest,
+    SamplePixelRequest,
+    PaletteColor,
     ProjectSaveRequest,
     ProjectResponse,
     GalleryCreateRequest,
@@ -33,17 +40,17 @@ from app.models import (
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
-from app.services.pdf_generator import generate_preview_pdf
+from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf
 from app.services.storage import delete_finalized_output
-from app.services.email_delivery import send_contact_email, send_finalized_report, send_order_notification
+from app.services.email_delivery import send_contact_email, send_order_notification
 from app.services.stripe_service import (
     create_print_own_checkout,
     create_template_checkout,
     create_gallery_print_checkout,
 )
-from app.services.canvas_pricing import get_canvas_for_design
+from app.services.canvas_pricing import get_canvas_for_design, is_design_printable
 from app.services.auth import get_current_user_id, get_optional_user_id
-from app.services.supabase_storage import upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
+from app.services.supabase_storage import download_from_supabase_storage, upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
     list_projects,
     create_project,
@@ -62,12 +69,20 @@ from app.services.supabase_db import (
     increment_gallery_share,
     log_chat,
 )
-from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds
+from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
+from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = BASE_DIR / "assets"
 logger = logging.getLogger(__name__)
+
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "")
+
+
+def _require_admin(user_id: str) -> None:
+    if not ADMIN_USER_ID or user_id != ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Admin only.")
 
 
 def parse_allowed_origins() -> list[str]:
@@ -288,18 +303,18 @@ def finalize(request: FinalizeRequest):
     if supabase_preview_url:
         preview_image_url = supabase_preview_url
 
-    upload_pdf_to_supabase(
+    internal_supabase_path = upload_pdf_to_supabase(
         internal_pdf_path,
         prefix="internal-finalized",
         bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET",
         return_public_url=False,
     )
-    send_finalized_report(internal_pdf_path)
 
     return FinalizeResponse(
         message="Final PDF report created successfully.",
         pdf_url=pdf_url,
         preview_image_url=preview_image_url,
+        internal_pdf_supabase_path=internal_supabase_path,
     )
 
 @app.post("/recolor", response_model=RecolorResponse)
@@ -325,6 +340,58 @@ def recolor(request: RecolorRequest):
         stitch_preview_url=preview_url,
         palette=[p for p in palette],
         cells=cells,
+    )
+
+
+@app.post("/grid-render", response_model=GridRenderResponse)
+def grid_render(request: GridRenderRequest):
+    if request.stitch_width <= 0 or request.stitch_height <= 0:
+        raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
+    if len(request.palette) < 1:
+        raise HTTPException(status_code=400, detail="At least one palette color required.")
+
+    preview_url, cells, used_palette = grid_first_render(
+        image_url=request.image_url,
+        stitch_width=request.stitch_width,
+        stitch_height=request.stitch_height,
+        mesh_count=request.mesh_count,
+        show_grid=request.show_grid,
+        palette=[c.model_dump() for c in request.palette],
+    )
+    preview_url = durable_preview_url(preview_url, prefix="draft-previews")
+
+    return GridRenderResponse(
+        message="Grid render complete.",
+        stitch_preview_url=preview_url,
+        palette=[PaletteColor(**c) for c in used_palette],
+        cells=cells,
+    )
+
+
+@app.post("/nearest-dmc", response_model=PaletteColor)
+def get_nearest_dmc(request: NearestDmcRequest):
+    rgb = hex_to_rgb(request.hex)
+    dmc = nearest_dmc(rgb)
+    return PaletteColor(
+        hex=rgb_to_hex(dmc["rgb"]),
+        dmc_code=dmc["code"],
+        dmc_name=dmc["name"],
+    )
+
+
+@app.post("/sample-pixel", response_model=PaletteColor)
+def sample_pixel(request: SamplePixelRequest):
+    from app.services.stitch_visualizer import open_source_image, _resolve_asset_path
+    src_path = _resolve_asset_path(request.image_url)
+    img = open_source_image(src_path)
+    img_x = min(round(request.col / max(request.stitch_width, 1) * img.width), img.width - 1)
+    img_y = min(round(request.row / max(request.stitch_height, 1) * img.height), img.height - 1)
+    rgb = img.getpixel((img_x, img_y))
+    dmc = nearest_dmc(rgb)
+    return PaletteColor(
+        hex=rgb_to_hex(dmc["rgb"]),
+        dmc_code=dmc["code"],
+        dmc_name=dmc["name"],
     )
 
 
@@ -490,7 +557,8 @@ def get_gallery_item_project(item_id: str):
 
 @app.post("/checkout/print-own", response_model=CheckoutResponse)
 def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(get_current_user_id)):
-    canvas = get_canvas_for_design(request.width_inches, request.height_inches)
+    if not is_design_printable(request.width_inches, request.height_inches):
+        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size (6\" × 10\").")
 
     creator_user_id = None
     if request.parent_gallery_item_id:
@@ -507,6 +575,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
             user_id=user_id,
             gallery_item_id=request.parent_gallery_item_id,
             creator_user_id=creator_user_id,
+            internal_pdf_supabase_path=request.internal_pdf_supabase_path,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -514,7 +583,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
 
 
 @app.post("/checkout/template/{item_id}", response_model=CheckoutResponse)
-def checkout_template(item_id: str):
+def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
     from app.services.supabase_db import get_gallery_item
     item = get_gallery_item(item_id)
     if not item:
@@ -525,6 +594,7 @@ def checkout_template(item_id: str):
             gallery_item_title=item.get("title", "Untitled"),
             creator_user_id=item.get("user_id", ""),
             pdf_url=item.get("pdf_url", ""),
+            buyer_user_id=user_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -532,7 +602,7 @@ def checkout_template(item_id: str):
 
 
 @app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
-def checkout_print_gallery(item_id: str):
+def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
     from app.services.supabase_db import get_gallery_item
     item = get_gallery_item(item_id)
     if not item:
@@ -541,6 +611,8 @@ def checkout_print_gallery(item_id: str):
     height = item.get("height_inches")
     if not width or not height:
         raise HTTPException(status_code=422, detail="This design does not have dimension data for printing.")
+    if not is_design_printable(width, height):
+        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size (6\" × 10\").")
     canvas = get_canvas_for_design(width, height)
     try:
         url = create_gallery_print_checkout(
@@ -550,6 +622,7 @@ def checkout_print_gallery(item_id: str):
             pdf_url=item.get("pdf_url", ""),
             width_inches=width,
             height_inches=height,
+            buyer_user_id=user_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -558,14 +631,14 @@ def checkout_print_gallery(item_id: str):
 
 # ── Stripe webhook ────────────────────────────────────────────────────────────
 
-def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str) -> None:
+def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str, sale_amount_cents: int) -> None:
     from app.services.supabase_db import _request
     _request("POST", "/creator_earnings", body={
         "stripe_session_id": session_id,
         "creator_user_id": creator_user_id,
         "gallery_item_id": gallery_item_id,
         "order_type": order_type,
-        "amount_cents": 450,
+        "amount_cents": round(sale_amount_cents * 0.18),
         "paid_out": False,
     })
 
@@ -577,8 +650,24 @@ def _handle_completed_session(session: dict) -> None:
     customer_email = customer_details.get("email")
     shipping = session.get("shipping_details")
 
+    pdf_bytes: bytes | None = None
+    pdf_name = "production_report.pdf"
+    if order_type in {"print_own", "print_gallery"}:
+        internal_path = metadata.get("internal_pdf_supabase_path")
+        if internal_path:
+            pdf_bytes = download_from_supabase_storage(internal_path, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
+            pdf_name = "internal_production_report.pdf"
+        if not pdf_bytes and metadata.get("pdf_url"):
+            import urllib.request as _ur
+            try:
+                with _ur.urlopen(metadata["pdf_url"], timeout=20) as r:
+                    pdf_bytes = r.read()
+            except Exception:
+                pass
+
     try:
-        send_order_notification(order_type, metadata, customer_email, shipping)
+        send_order_notification(order_type, metadata, customer_email, shipping,
+                                pdf_attachment_bytes=pdf_bytes, pdf_attachment_name=pdf_name)
     except Exception:
         logger.exception("Order notification email failed for session %s", session.get("id"))
 
@@ -587,9 +676,66 @@ def _handle_completed_session(session: dict) -> None:
         gallery_item_id = metadata.get("gallery_item_id", "")
         if creator_user_id and gallery_item_id:
             try:
-                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type)
+                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type, session.get("amount_total", 0))
             except Exception:
                 logger.exception("Failed to record creator earnings for session %s", session.get("id"))
+
+    applied_credit_user_id = metadata.get("applied_credit_user_id")
+    if applied_credit_user_id:
+        try:
+            from app.services.supabase_db import mark_creator_earnings_paid
+            mark_creator_earnings_paid(applied_credit_user_id)
+        except Exception:
+            logger.exception("Failed to mark creator earnings paid for user %s", applied_credit_user_id)
+
+
+@app.get("/admin/blank-roll-pdf")
+def admin_blank_roll_pdf(height: float = 4.0, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    path = generate_blank_roll_pdf(height_inches=height)
+    return FileResponse(str(path), media_type="application/pdf", filename="mns_blank_roll.pdf")
+
+
+@app.get("/admin/registration-test-pdf")
+def admin_registration_test_pdf(user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    path = generate_registration_test_pdf()
+    return FileResponse(str(path), media_type="application/pdf", filename="mns_registration_test.pdf")
+
+
+@app.get("/admin/calibration-pdf")
+def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions: bool = True, cell_size: float = 1.0, rows: int | None = None, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    path = generate_calibration_pdf(include_nozzle_check=nozzle, include_header=header, include_instructions=instructions, cell_inches=cell_size, grid_rows_override=rows)
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename="mns_calibration.pdf",
+    )
+
+
+@app.post("/admin/roll-print")
+def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import get_project as db_get_project
+
+    project_ids = request.project_ids * request.copies
+    designs = []
+    for pid in project_ids:
+        project = db_get_project(pid, user_id)
+        if not project:
+            raise HTTPException(status_code=404, detail=f"Project {pid} not found.")
+        cells = project.get("cells") or []
+        mesh_count = project.get("mesh_count") or 18
+        label = project.get("title") or project.get("name") or ""
+        designs.append({"cells": cells, "mesh_count": mesh_count, "label": label})
+
+    path = generate_roll_print_pdf(designs)
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename="mns_roll_print.pdf",
+    )
 
 
 @app.post("/stripe/webhook")

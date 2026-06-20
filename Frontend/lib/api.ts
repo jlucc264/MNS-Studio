@@ -68,6 +68,7 @@ export type CanvasContext = {
   has_selection: boolean
   grid_rows: number
   grid_cols: number
+  preview_image_url?: string
 }
 
 export type ChatActionItem = {
@@ -269,6 +270,7 @@ export type FinalizeResponse = {
   message: string
   pdf_url: string
   preview_image_url: string
+  internal_pdf_supabase_path?: string | null
 }
 
 export async function finalizePreview(payload: FinalizePayload): Promise<FinalizeResponse> {
@@ -306,6 +308,60 @@ export async function recolorPreview(payload: RecolorPayload): Promise<RecolorRe
   })
 
   if (!res.ok) throw new Error('Recolor failed')
+  return res.json()
+}
+
+export type GridRenderPayload = {
+  image_url: string
+  stitch_width: number
+  stitch_height: number
+  mesh_count: number
+  show_grid: boolean
+  palette: PaletteColor[]
+}
+
+export type GridRenderResponse = {
+  message: string
+  stitch_preview_url: string
+  palette: PaletteColor[]
+  cells: string[][]
+}
+
+export async function gridRender(payload: GridRenderPayload): Promise<GridRenderResponse> {
+  const res = await fetch(`${API_BASE}/grid-render`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Grid render failed')
+  return res.json()
+}
+
+export async function nearestDmc(hex: string): Promise<PaletteColor> {
+  const res = await fetch(`${API_BASE}/nearest-dmc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hex }),
+  })
+  if (!res.ok) throw new Error('Nearest DMC lookup failed')
+  return res.json()
+}
+
+export type SamplePixelPayload = {
+  image_url: string
+  col: number
+  row: number
+  stitch_width: number
+  stitch_height: number
+}
+
+export async function samplePixel(payload: SamplePixelPayload): Promise<PaletteColor> {
+  const res = await fetch(`${API_BASE}/sample-pixel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Pixel sample failed')
   return res.json()
 }
 
@@ -556,6 +612,13 @@ export function getCanvasForDesign(widthInches: number, heightInches: number): C
   }
 }
 
+// Max printable: short side ≤ 6", long side ≤ 10" (fits on 8×12 canvas)
+export function isDesignPrintable(widthInches: number, heightInches: number): boolean {
+  const short = Math.min(widthInches, heightInches)
+  const long = Math.max(widthInches, heightInches)
+  return short <= 6 && long <= 10
+}
+
 export function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}`
 }
@@ -565,7 +628,7 @@ export function formatCents(cents: number): string {
 export type CheckoutResponse = { client_secret: string }
 
 export async function createPrintOwnCheckout(
-  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null },
+  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null; internal_pdf_supabase_path?: string | null },
   accessToken?: string | null,
 ): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/print-own`, {
@@ -685,4 +748,77 @@ export async function createGalleryPrintCheckout(galleryItemId: string): Promise
     throw new Error(data.detail ?? 'Could not create checkout session')
   }
   return res.json()
+}
+
+export async function downloadBlankRollPdf(accessToken: string, height = 4): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/blank-roll-pdf?height=${height}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Failed to generate blank roll PDF')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mns_blank_roll.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadRegistrationTestPdf(accessToken: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/registration-test-pdf`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Failed to generate registration test PDF')
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mns_registration_test.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadCalibrationPdf(accessToken: string, nozzle = true, cellSize = 1, rows?: number, header = true, instructions = true): Promise<void> {
+  const params = new URLSearchParams({ nozzle: String(nozzle), cell_size: String(cellSize), header: String(header), instructions: String(instructions) })
+  if (rows != null) params.set('rows', String(rows))
+  const res = await fetch(`${API_BASE}/admin/calibration-pdf?${params}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Failed to generate calibration PDF')
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mns_calibration.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadRollPrintPdf(
+  projectIds: string[],
+  copies: number,
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/roll-print`, {
+    method: 'POST',
+    headers: { ...jsonHeaders(accessToken) },
+    body: JSON.stringify({ project_ids: projectIds, copies }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Failed to generate roll print PDF')
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mns_roll_print.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
 }

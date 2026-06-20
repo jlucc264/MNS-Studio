@@ -14,8 +14,8 @@ type Props = {
   activeDesignColors: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text'
-  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text') => void
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'
+  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper') => void
   textFontSize: FontSize
   onTextFontSizeChange: (size: FontSize) => void
   textFontFamily: FontFamily
@@ -531,7 +531,7 @@ export default function PalettePanel({
           )}
 
           {/* Paint sub-tab: color grid */}
-          {toolMode === 'paint' && (
+          {(toolMode === 'paint' || toolMode === 'eyedropper') && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {/* Eraser row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, flexShrink: 0 }}>
@@ -643,14 +643,22 @@ export default function PalettePanel({
               </>
             )}
 
-            {/* Palette header + Browse button */}
+            {/* Palette header + Eyedropper + Browse buttons */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: '#8a8177', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Your palette</div>
-              <button
-                type="button"
-                onClick={onOpenAddBrowser}
-                style={{ border: '1px solid #d5cec6', borderRadius: 5, padding: '2px 7px', background: '#fff', color: '#3f382f', fontSize: 10, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
-              >Browse →</button>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => onToolModeChange(toolMode === 'eyedropper' ? 'paint' : 'eyedropper')}
+                  title="Sample a color from the source image"
+                  style={{ border: `1px solid ${toolMode === 'eyedropper' ? '#6e8d67' : '#d5cec6'}`, borderRadius: 5, padding: '2px 7px', background: toolMode === 'eyedropper' ? '#6e8d67' : '#fff', color: toolMode === 'eyedropper' ? '#fff' : '#3f382f', fontSize: 10, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
+                >⌖</button>
+                <button
+                  type="button"
+                  onClick={onOpenAddBrowser}
+                  style={{ border: '1px solid #d5cec6', borderRadius: 5, padding: '2px 7px', background: '#fff', color: '#3f382f', fontSize: 10, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
+                >Browse →</button>
+              </div>
             </div>
 
             {/* Color swatches — palette colors below */}

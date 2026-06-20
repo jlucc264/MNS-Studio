@@ -1766,6 +1766,42 @@ def recolor_stitch_preview(
 
     return preview_url, palette, cells
 
+def grid_first_render(
+    image_url: str,
+    stitch_width: int,
+    stitch_height: int,
+    mesh_count: int,
+    show_grid: bool,
+    palette: list[dict],
+) -> tuple[str, list[list[str]], list[dict]]:
+    src_path = _resolve_asset_path(image_url)
+    img = open_source_image(src_path)
+    resized = img.resize((stitch_width, stitch_height), Image.Resampling.LANCZOS)
+
+    palette_rgb = [(hex_to_rgb(c["hex"]), c) for c in palette]
+
+    cache: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    snapped: list[tuple[int, int, int]] = []
+    for pixel in resized.getdata():
+        if pixel not in cache:
+            best = min(palette_rgb, key=lambda p: color_distance(pixel, p[0]))
+            cache[pixel] = best[0]
+        snapped.append(cache[pixel])
+
+    result = Image.new("RGB", (stitch_width, stitch_height))
+    result.putdata(snapped)
+    result = despeckle_image(result)
+    result = cleanup_tiny_color_islands(result)
+
+    preview_url = render_preview_image(result, stitch_width, stitch_height, mesh_count, show_grid)
+    cells = image_to_cells(result)
+
+    used_hexes = {cell.upper() for row in cells for cell in row if cell != BLANK_CELL}
+    used_palette = [c for c in palette if c["hex"].upper() in used_hexes]
+
+    return preview_url, cells, used_palette
+
+
 def image_to_cells(img: Image.Image) -> list[list[str]]:
     width, height = img.size
     pixels = list(img.getdata())

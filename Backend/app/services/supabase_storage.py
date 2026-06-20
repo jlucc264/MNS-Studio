@@ -106,6 +106,25 @@ def upload_pdf_to_supabase(
     )
 
 
+def download_from_supabase_storage(object_path: str, bucket_env: str = "SUPABASE_INTERNAL_STORAGE_BUCKET") -> bytes | None:
+    """Download a file from Supabase storage using the service role key."""
+    supabase_url = _clean_supabase_url(os.getenv("SUPABASE_URL"))
+    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    bucket = os.getenv(bucket_env) or os.getenv("SUPABASE_STORAGE_BUCKET")
+    if not supabase_url or not service_role_key or not bucket:
+        return None
+    encoded_bucket = quote(bucket, safe="")
+    encoded_path = quote(object_path, safe="/")
+    url = f"{supabase_url}/storage/v1/object/{encoded_bucket}/{encoded_path}"
+    try:
+        req = Request(url, headers={"apikey": service_role_key, "Authorization": f"Bearer {service_role_key}"})
+        with urlopen(req, timeout=30) as resp:
+            return resp.read()
+    except (OSError, HTTPError, URLError) as exc:
+        logger.warning("Supabase download failed: %s", exc)
+        return None
+
+
 def upload_png_to_supabase(
     local_path: Path,
     *,

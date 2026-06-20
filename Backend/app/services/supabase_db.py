@@ -284,6 +284,16 @@ def _build_creator_slug_map(items: list[dict]) -> dict[str, str]:
     return slug_to_uid
 
 
+def mark_creator_earnings_paid(user_id: str) -> None:
+    encoded = quote(user_id, safe="")
+    _request(
+        "PATCH",
+        "/creator_earnings",
+        params=f"creator_user_id=eq.{encoded}&paid_out=eq.false",
+        body={"paid_out": True},
+    )
+
+
 def get_creator_earnings(user_id: str) -> dict:
     encoded_user_id = quote(user_id, safe="")
     result = _request(

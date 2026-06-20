@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
-import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, isDesignPrintable, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -377,7 +377,7 @@ export default function CreatorProfilePage() {
                   ))}
                 </div>
                 <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
-                  Each sale earns canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
+                  Each sale earns 18% of the sale price as canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
                 </p>
               </div>
             )}
@@ -536,7 +536,10 @@ export default function CreatorProfilePage() {
                   Use template
                 </button>
                 {(() => {
-                  const canvas = selectedPreview.width_inches && selectedPreview.height_inches
+                  const printable = selectedPreview.width_inches && selectedPreview.height_inches
+                    ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                    : false
+                  const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
                   const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null

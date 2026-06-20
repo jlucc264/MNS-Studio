@@ -8,7 +8,7 @@ type ShapeCell = { row: number; col: number; color: string }
 type Props = {
   cells: string[][]
   activeColor: string | null
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text'
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'
   meshCount: 13 | 18
   brushDensity: number
   centerKey?: number
@@ -25,6 +25,7 @@ type Props = {
   onApplyShapeCells?: (cells: ShapeCell[]) => void
   traceImageUrl?: string | null
   traceOpacity?: number
+  onEyedropperSample?: (cell: { row: number; col: number }) => void
   textFontSize?: FontSize
   textFontFamily?: FontFamily
   textBold?: boolean
@@ -494,6 +495,7 @@ export default function GridEditor({
   onApplyShapeCells,
   traceImageUrl,
   traceOpacity = 0,
+  onEyedropperSample,
   textFontSize = 'medium',
   textFontFamily = 'sans',
   textBold = false,
@@ -1217,6 +1219,14 @@ export default function GridEditor({
         return
       }
 
+      if (toolMode === 'eyedropper') {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        event.preventDefault()
+        onEyedropperSample?.({ row: hit.row, col: hit.col })
+        return
+      }
+
       if (toolMode !== 'merge' && !activeColorRef.current) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
@@ -1231,6 +1241,7 @@ export default function GridEditor({
     },
     [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
+     traceImageRef, cells, onEyedropperSample,
      textFontSize, textFontFamily, textBold, textItalic, textOutline]
   )
 
@@ -2050,8 +2061,8 @@ export default function GridEditor({
                   onPointerMove={handleCanvasPointerMove}
                   style={{
                     display: 'block',
-                    cursor: toolMode === 'text' ? 'text' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
-                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || highlightSelection) ? 'none' : 'pan-x pan-y',
+                    cursor: toolMode === 'text' ? 'text' : toolMode === 'eyedropper' ? 'crosshair' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || highlightSelection) ? 'none' : 'pan-x pan-y',
                   }}
                 />
                 <canvas

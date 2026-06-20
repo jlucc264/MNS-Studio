@@ -7,7 +7,8 @@ from urllib.request import Request, urlopen
 
 from PIL import Image
 
-from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR
+import base64
+from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR, ASSETS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +411,25 @@ def _build_system_prompt(context: dict) -> str:
     grid_info = f"\n- Grid size: {grid_rows} rows × {grid_cols} cols (cell coordinates for draw_shape/add_text/flood_fill)" if grid_rows and grid_cols else ""
 
     has_preview = context.get("has_preview", False)
+    has_preview_image = has_preview and bool(context.get("preview_image_url"))
+    has_source_image_vision = bool(context.get("source_image_url"))
+    if has_preview_image and has_source_image_vision:
+        vision_note = (
+            "\n\nVISION: Both the original source image and the current stitch preview are attached. "
+            "Use the source image to understand what the design is supposed to look like — colors, subject, features. "
+            "Use the stitch preview to see how those features were rendered into DMC thread colors. "
+            "Compare the two to identify where color mapping went wrong, which features are unclear, and what edits would improve fidelity. "
+            "Always match visual regions to DMC codes from the palette before calling tools."
+        )
+    elif has_preview_image:
+        vision_note = (
+            "\n\nVISION: The current stitch preview is attached. "
+            "Use it to visually identify which DMC colors correspond to which features — "
+            "background, main subject, details, shadows, etc. "
+            "Match what you see to the DMC codes in the palette above before making edits."
+        )
+    else:
+        vision_note = ""
     editing_bias = (
         "\n\nEDITING BIAS (important): A stitch preview is already on the canvas. "
         "For any request that could be interpreted as either a canvas edit OR a regeneration, "
@@ -427,7 +447,7 @@ Current canvas state:
 - Has source image loaded: {context.get('has_source_image', False)}
 - Has stitch preview: {has_preview}
 - Has active selection: {context.get('has_selection', False)}{' (user has highlighted a region — use fill_selection or clear_selection to edit it)' if context.get('has_selection') else ''}
-- Processing: clean_background={context.get('clean_background', False)}, simplify_colors={context.get('simplify_colors', False)}, strengthen_dark_detail={context.get('strengthen_dark_detail', False)}, preserve_accents={context.get('preserve_accents', False)}, contrast={context.get('contrast_level', 'normal')}{palette_lines}{editing_bias}
+- Processing: clean_background={context.get('clean_background', False)}, simplify_colors={context.get('simplify_colors', False)}, strengthen_dark_detail={context.get('strengthen_dark_detail', False)}, preserve_accents={context.get('preserve_accents', False)}, contrast={context.get('contrast_level', 'normal')}{palette_lines}{vision_note}{editing_bias}
 
 You help users by:
 1. Editing the stitch canvas directly (draw_shape, add_text, flood_fill, swap_color, remove_color, fill_selection)
@@ -441,6 +461,12 @@ Keep responses concise and natural. When making multiple changes, chain tool cal
 Coordinate guidance: row 0, col 0 is the top-left cell of the design. Use grid_rows and grid_cols to stay within bounds. For centered text, estimate: col ≈ (grid_cols - text_length * char_advance) / 2, where char_advance is ~4 for small, ~6 for medium, ~9 for large font.
 
 Image generation rule: before calling generate_source_image or edit_source_image, check the canvas state. If width_inches=4.0, height_inches=4.0, and mesh_count=13 (all defaults), ask the user to confirm or set their desired size and mesh count first — the image will be generated at exactly those stitch dimensions. If the user has already customized any of these values, proceed without asking.
+
+Visual editing guidance:
+- "Make the background white/blank": identify the dominant border-connected color in the image, then call clear_background with that DMC code and Blanc (B5200) or White as replacement_code
+- "Feature is blobby / lacks detail / not coming through": always try color edits first before suggesting any settings change. Look at the image, identify the feature's cells, then: (1) use flood_fill to add a dark outline around the feature's border cells to define its edges — this is the most effective single fix at low stitch counts; (2) if the feature uses only one color, use flood_fill to add a second contrasting color inside it for internal definition; (3) swap any colors that are too close in value to the surrounding area for more distinct ones. Only suggest increasing mesh count or canvas size if the feature occupies so few cells (under ~4×4) that no color edit can make it recognizable.
+- "Feature isn't coming through / too muddy": look at the image to identify which colors are muddying that feature, then use swap_color to replace them or call generate_stitch_preview with higher contrast
+- "Change X color": look at the image to identify which DMC code corresponds to X, then call swap_color
 
 Needlepoint design tips to share when relevant:
 - 13 mesh = larger stitches, good for bold designs; 18 mesh = finer detail, more colors visible
@@ -473,6 +499,29 @@ def _load_source_image_bytes(source_image_url: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _load_preview_image_b64(preview_url: str, max_size: int = 512) -> str | None:
+    """Load a preview image, resize to max_size, return base64 PNG. Returns None on failure."""
+    try:
+        raw: bytes | None = None
+        if preview_url.startswith("/assets/"):
+            local = ASSETS_DIR / preview_url[len("/assets/"):]
+            if local.exists():
+                raw = local.read_bytes()
+        if raw is None and preview_url.startswith("http"):
+            req = Request(preview_url, headers={"User-Agent": "MNS/1.0"})
+            with urlopen(req, timeout=20) as resp:
+                raw = resp.read()
+        if raw is None:
+            return None
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
 
 
 def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple[str, dict | None]:
@@ -670,7 +719,29 @@ def chat_with_claude(message: str, context: dict, history: list[dict] | None = N
         return {"reply": "AI assistant is not configured (ANTHROPIC_API_KEY missing).", "actions": [], "image_url": None}
 
     system = _build_system_prompt(context)
-    messages = [*(history or []), {"role": "user", "content": message}]
+
+    preview_url = context.get("preview_image_url")
+    source_url = context.get("source_image_url")
+    preview_b64 = _load_preview_image_b64(preview_url) if preview_url else None
+    source_b64 = _load_preview_image_b64(source_url) if source_url else None
+
+    if preview_b64 or source_b64:
+        user_content: list[dict] = []
+        if source_b64:
+            user_content += [
+                {"type": "text", "text": "Source image (original):"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": source_b64}},
+            ]
+        if preview_b64:
+            user_content += [
+                {"type": "text", "text": "Current stitch preview:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": preview_b64}},
+            ]
+        user_content.append({"type": "text", "text": message})
+    else:
+        user_content = message
+
+    messages = [*(history or []), {"role": "user", "content": user_content}]
     actions: list[dict] = []
     image_url: str | None = None
     max_iterations = 8

@@ -7,9 +7,10 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
 from PIL import Image, ImageDraw
 
-from .storage import finalized_output_path, preview_output_path, ASSETS_DIR
+from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 
 DISPLAY_CELL_SIZE = 12
 GRID_COLOR = (180, 180, 180, 255)
@@ -60,6 +61,8 @@ def _render_preview_image_from_cells(
     mesh_count: int,
     show_grid: bool,
     include_border: bool = True,
+    grid_color: tuple = GRID_COLOR,
+    grid_line_width: int = 1,
 ) -> Image.Image:
     stitch_height = len(cells)
     stitch_width = len(cells[0]) if stitch_height else 0
@@ -91,9 +94,9 @@ def _render_preview_image_from_cells(
     if show_grid:
         draw = ImageDraw.Draw(preview)
         for x in range(0, display_w + 1, DISPLAY_CELL_SIZE):
-            draw.line([(x, 0), (x, display_h)], fill=GRID_COLOR, width=1)
+            draw.line([(x, 0), (x, display_h)], fill=grid_color, width=grid_line_width)
         for y in range(0, display_h + 1, DISPLAY_CELL_SIZE):
-            draw.line([(0, y), (display_w, y)], fill=GRID_COLOR, width=1)
+            draw.line([(0, y), (display_w, y)], fill=grid_color, width=grid_line_width)
 
     return preview
 
@@ -388,15 +391,21 @@ def _draw_true_size_reference_page(
     mesh_count: int,
     cells: list[list[str]],
 ) -> None:
-    # Draw the design area only — no border — at exactly 1 inch = 72 PDF points.
-    draw_width = width_inches * 72
-    draw_height = height_inches * 72
+    # Derive physical dimensions from the stitch grid — cells are the ground truth.
+    # Stored width_inches/height_inches may have drifted; stitch_count/mesh_count never lies.
+    stitch_height = len(cells)
+    stitch_width = len(cells[0]) if stitch_height else 0
+    draw_width = (stitch_width / mesh_count) * 72
+    draw_height = (stitch_height / mesh_count) * 72
 
-    page_size = landscape(letter) if width_inches > height_inches else letter
+    page_size = landscape(letter) if stitch_width > stitch_height else letter
     page_width, page_height = page_size
     pdf.setPageSize(page_size)
 
-    true_size_image = _render_preview_image_from_cells(cells, mesh_count, show_grid=True, include_border=False)
+    true_size_image = _render_preview_image_from_cells(
+        cells, mesh_count, show_grid=True, include_border=False,
+        grid_color=(60, 60, 60, 255), grid_line_width=2,
+    )
     preview_buffer = BytesIO()
     true_size_image.save(preview_buffer, format="PNG")
     preview_buffer.seek(0)
@@ -410,7 +419,7 @@ def _draw_true_size_reference_page(
         y,
         width=draw_width,
         height=draw_height,
-        preserveAspectRatio=True,
+        preserveAspectRatio=False,
         mask='auto',
     )
 
@@ -485,3 +494,331 @@ def generate_preview_pdf(
     # The public URL is returned to the app for completion tracking; the internal file
     # is sent by the finalize endpoint and intentionally not exposed in the UI.
     return public_url, public_path, internal_path, preview_url, preview_path
+
+
+_NOZZLE_CHECK_COLORS = [
+    ("#E02020", "Red"),
+    ("#FF8C00", "Orange"),
+    ("#F5D000", "Yellow"),
+    ("#00A550", "Green"),
+    ("#0070C0", "Blue"),
+    ("#7030A0", "Purple"),
+    ("#808080", "Gray"),
+    ("#1A1A1A", "Black"),
+]
+
+
+def _set_print_actual_size(pdf: canvas.Canvas) -> None:
+    vp = ViewerPreferencesPDFDictionary()
+    vp['PrintScaling'] = 'None'
+    pdf._doc.Catalog.ViewerPreferences = vp
+
+
+def _draw_roll_cut_line(pdf: canvas.Canvas, y: float, roll_width_pts: float, gap_pts: float) -> None:
+    reg_inset = 18.0  # 0.25" from each edge
+    gap_half = gap_pts / 2
+
+    # Vertical registration lines — full height of gap zone
+    pdf.setStrokeColor(colors.HexColor("#555555"))
+    pdf.setLineWidth(1.0)
+    pdf.line(reg_inset, y + gap_half, reg_inset, y - gap_half)
+    pdf.line(roll_width_pts - reg_inset, y + gap_half, roll_width_pts - reg_inset, y - gap_half)
+
+    # Horizontal cut line — dashed
+    pdf.saveState()
+    pdf.setStrokeColor(colors.HexColor("#AAAAAA"))
+    pdf.setDash([5, 4])
+    pdf.setLineWidth(0.5)
+    pdf.line(0, y, roll_width_pts, y)
+    pdf.restoreState()
+
+    pdf.setFont("Helvetica", 7)
+    pdf.setFillColor(colors.HexColor("#999999"))
+    pdf.drawString(4, y + 3, "CUT")
+    pdf.drawRightString(roll_width_pts - 4, y + 3, "CUT")
+
+
+def generate_calibration_pdf(
+    mesh_count: int = 18,
+    roll_width_inches: float = 8.0,
+    leading_blank_inches: float = 0.5,
+    include_nozzle_check: bool = True,
+    include_header: bool = True,
+    include_instructions: bool = True,
+    cell_inches: float = 1.0,
+    grid_rows_override: int | None = None,
+) -> Path:
+    roll_width_pts = roll_width_inches * 72
+    side_margin = 36.0
+    content_width = roll_width_pts - 2 * side_margin
+
+    grid_cols = round(6 / cell_inches)
+    grid_rows = grid_rows_override if grid_rows_override is not None else round(4 / cell_inches)
+    cell_pts = cell_inches * 72
+    grid_w = grid_cols * cell_pts
+    grid_h = grid_rows * cell_pts
+
+    leading_pts = leading_blank_inches * 72
+    header_h = 60.0
+    nozzle_h = 56.0
+    grid_label_h = 20.0
+    instructions_h = 28.0
+    bottom_margin = 18.0
+
+    total_h = (
+        leading_pts
+        + (header_h + 14 if (include_nozzle_check and include_header) else 0)
+        + (nozzle_h + 20 if include_nozzle_check else 0)
+        + (grid_label_h if include_instructions else 8.0)
+        + grid_h
+        + (instructions_h + 14 if include_instructions else 0)
+        + bottom_margin
+    )
+
+    output_path = FINALIZED_DIR / "admin_calibration.pdf"
+    pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
+    pdf.setTitle("MNS Roll Print Calibration")
+
+    y = total_h - leading_pts
+
+    if include_nozzle_check and include_header:
+        pdf.setFillColor(colors.HexColor("#173F2A"))
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(side_margin, y - 18, "MNS Roll Print Calibration")
+        pdf.setFont("Helvetica", 10)
+        pdf.setFillColor(colors.HexColor("#5B635C"))
+        pdf.drawString(side_margin, y - 34, f"{mesh_count} mesh  ·  {roll_width_inches}\" roll  ·  Print at 100% actual size — no scaling")
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColor(colors.HexColor("#7A817A"))
+        pdf.drawString(side_margin, y - 50, datetime.now().strftime("%b %d, %Y"))
+        y -= header_h
+        pdf.setStrokeColor(colors.HexColor("#D9D9D9"))
+        pdf.line(side_margin, y, side_margin + content_width, y)
+        y -= 14
+
+    if include_nozzle_check:
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.setFillColor(colors.HexColor("#3A413B"))
+        pdf.drawString(side_margin, y - 12, "Nozzle Check")
+        y -= 16
+
+        bar_w = content_width / len(_NOZZLE_CHECK_COLORS)
+        bar_h = 28.0
+        for i, (hex_color, _) in enumerate(_NOZZLE_CHECK_COLORS):
+            bx = side_margin + i * bar_w
+            pdf.setFillColor(colors.HexColor(hex_color))
+            pdf.rect(bx, y - bar_h, bar_w, bar_h, fill=1, stroke=0)
+            pdf.saveState()
+            pdf.setStrokeColor(colors.HexColor("#CCCCCC"))
+            pdf.setLineWidth(0.3)
+            pdf.rect(bx, y - bar_h, bar_w, bar_h, fill=0, stroke=1)
+            pdf.restoreState()
+        y -= bar_h
+
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColor(colors.HexColor("#666666"))
+        for i, (_, label) in enumerate(_NOZZLE_CHECK_COLORS):
+            cx = side_margin + i * bar_w + bar_w / 2
+            pdf.drawCentredString(cx, y - 10, label)
+        y -= 12
+
+        y -= 8
+        pdf.setStrokeColor(colors.HexColor("#D9D9D9"))
+        pdf.line(side_margin, y, side_margin + content_width, y)
+        y -= 20
+
+    if include_instructions:
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.setFillColor(colors.HexColor("#3A413B"))
+        pdf.drawString(side_margin, y - 14, f"Calibration Grid — each square = {cell_inches:.0f}\" exactly")
+        y -= 20
+    else:
+        y -= 8
+
+    grid_x = (roll_width_pts - grid_w) / 2
+    grid_bottom = y - grid_h
+    grid_top = y
+
+    for row in range(grid_rows):
+        for col in range(grid_cols):
+            if (row + col) % 2 == 0:
+                pdf.setFillColor(colors.HexColor("#EBEBEB"))
+                pdf.rect(
+                    grid_x + col * cell_pts,
+                    grid_bottom + row * cell_pts,
+                    cell_pts, cell_pts,
+                    fill=1, stroke=0,
+                )
+
+    pdf.setStrokeColor(colors.HexColor("#333333"))
+    pdf.setLineWidth(0.75)
+    for col in range(grid_cols + 1):
+        pdf.line(grid_x + col * cell_pts, grid_bottom, grid_x + col * cell_pts, grid_top)
+    for row in range(grid_rows + 1):
+        pdf.line(grid_x, grid_bottom + row * cell_pts, grid_x + grid_w, grid_bottom + row * cell_pts)
+
+    if include_instructions:
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColor(colors.HexColor("#333333"))
+        for col in range(grid_cols):
+            cx = grid_x + col * cell_pts + cell_pts / 2
+            pdf.drawCentredString(cx, grid_top - cell_pts / 2 - 4, f'{(col + 1) * cell_inches:.0f}"')
+        for row in range(grid_rows):
+            rl_y = grid_top - (row + 0.5) * cell_pts - 4
+            pdf.drawRightString(grid_x - 6, rl_y, f'{(row + 1) * cell_inches:.0f}"')
+
+        y = grid_bottom - 14
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColor(colors.HexColor("#555555"))
+        pdf.drawString(side_margin, y - 12,
+            "Measure any square — must be exactly 1.0\"  ·  If off, ensure print dialog is set to 100% / actual size with no fit-to-page scaling")
+
+    _set_print_actual_size(pdf)
+    pdf.save()
+    return output_path
+
+
+def generate_blank_roll_pdf(
+    roll_width_inches: float = 8.0,
+    height_inches: float = 4.0,
+) -> Path:
+    w = roll_width_inches * 72
+    h = height_inches * 72
+    output_path = FINALIZED_DIR / "admin_blank_roll.pdf"
+    pdf = canvas.Canvas(str(output_path), pagesize=(w, h))
+    pdf.setTitle("MNS Blank Roll")
+    _set_print_actual_size(pdf)
+    pdf.save()
+    return output_path
+
+
+def generate_registration_test_pdf(
+    roll_width_inches: float = 8.0,
+    sheet_height_inches: float = 6.0,
+) -> Path:
+    w = roll_width_inches * 72
+    h = sheet_height_inches * 72
+    inset = 36.0  # 0.5" from edges for mark centres
+
+    marks = [
+        ("TL", inset, h - inset),
+        ("TR", w - inset, h - inset),
+        ("C",  w / 2,    h / 2),
+        ("BL", inset,    inset),
+        ("BR", w - inset, inset),
+    ]
+
+    output_path = FINALIZED_DIR / "admin_registration_test.pdf"
+    pdf = canvas.Canvas(str(output_path), pagesize=(w, h))
+    pdf.setTitle("MNS Registration Test")
+
+    # Header
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.setFillColor(colors.HexColor("#173F2A"))
+    pdf.drawCentredString(w / 2, h - 18, "MNS Registration Test")
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColor(colors.HexColor("#7A817A"))
+    pdf.drawCentredString(w / 2, h - 30, "Feed twice — marks must land exactly on top of each other")
+
+    arm = 14.0   # crosshair arm length
+    radius = 8.0
+
+    for label, mx, my in marks:
+        pdf.setStrokeColor(colors.HexColor("#111111"))
+        pdf.setLineWidth(0.75)
+        # Circle
+        pdf.circle(mx, my, radius, fill=0, stroke=1)
+        # Crosshair arms (don't draw inside circle)
+        pdf.line(mx - arm, my, mx - radius, my)
+        pdf.line(mx + radius, my, mx + arm, my)
+        pdf.line(mx, my + radius, mx, my + arm)
+        pdf.line(mx, my - arm, mx, my - radius)
+        # Label
+        pdf.setFont("Helvetica-Bold", 7)
+        pdf.setFillColor(colors.HexColor("#333333"))
+        pdf.drawCentredString(mx, my - arm - 9, label)
+
+    # Outer border so the sheet boundary is clear
+    pdf.setStrokeColor(colors.HexColor("#CCCCCC"))
+    pdf.setLineWidth(0.5)
+    pdf.rect(0, 0, w, h, fill=0, stroke=1)
+
+    _set_print_actual_size(pdf)
+    pdf.save()
+    return output_path
+
+
+def generate_roll_print_pdf(
+    designs: list[dict],
+    roll_width_inches: float = 8.0,
+    gap_inches: float = 2.0,
+) -> Path:
+    roll_width_pts = roll_width_inches * 72
+    gap_pts = gap_inches * 72
+    top_margin_pts = 36.0
+    bottom_margin_pts = 72.0
+    label_h = 16.0
+
+    rendered = []
+    for design in designs:
+        cells = design["cells"]
+        mesh = design.get("mesh_count", 18)
+        stitch_h = len(cells)
+        stitch_w = len(cells[0]) if stitch_h else 0
+        draw_w = (stitch_w / mesh) * 72
+        draw_h = (stitch_h / mesh) * 72
+        img = _render_preview_image_from_cells(cells, mesh, show_grid=False, include_border=False)
+        rendered.append({
+            "img": img,
+            "draw_w": draw_w,
+            "draw_h": draw_h,
+            "label": design.get("label", ""),
+        })
+
+    total_h = top_margin_pts
+    for i, r in enumerate(rendered):
+        if r["label"]:
+            total_h += label_h
+        total_h += r["draw_h"]
+        if i < len(rendered) - 1:
+            total_h += gap_pts
+    total_h += bottom_margin_pts
+
+    output_path = FINALIZED_DIR / "admin_roll_print.pdf"
+    pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
+    pdf.setTitle("MNS Roll Print")
+
+    y = total_h - top_margin_pts  # top of available area
+
+    for i, r in enumerate(rendered):
+        if r["label"]:
+            pdf.setFont("Helvetica", 8)
+            pdf.setFillColor(colors.HexColor("#7A817A"))
+            label_x = (roll_width_pts - r["draw_w"]) / 2
+            pdf.drawString(label_x, y - label_h + 4, r["label"])
+            y -= label_h
+
+        img_x = (roll_width_pts - r["draw_w"]) / 2
+        img_bottom = y - r["draw_h"]
+
+        buf = BytesIO()
+        r["img"].save(buf, format="PNG")
+        buf.seek(0)
+        pdf.drawImage(
+            ImageReader(buf),
+            img_x,
+            img_bottom,
+            width=r["draw_w"],
+            height=r["draw_h"],
+            preserveAspectRatio=False,
+            mask="auto",
+        )
+        y = img_bottom
+
+        if i < len(rendered) - 1:
+            _draw_roll_cut_line(pdf, y - gap_pts / 2, roll_width_pts, gap_pts)
+            y -= gap_pts
+
+    _set_print_actual_size(pdf)
+    pdf.save()
+    return output_path
