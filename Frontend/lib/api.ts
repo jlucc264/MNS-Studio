@@ -602,10 +602,11 @@ function _interpolatePriceCents(sqIn: number): number {
 export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
 
 export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
-  const canvasW = Math.ceil(widthInches + 4)
-  const canvasH = Math.ceil(heightInches + 4)
+  const canvasW = Math.round((widthInches + 4) * 2) / 2
+  const canvasH = Math.round((heightInches + 4) * 2) / 2
+  const fmt = (n: number) => n % 1 === 0 ? `${n}` : `${n.toFixed(1)}`
   return {
-    label: `${canvasW}×${canvasH}"`,
+    label: `${fmt(canvasW)}×${fmt(canvasH)}"`,
     canvasW,
     canvasH,
     priceCents: _interpolatePriceCents(canvasW * canvasH),
@@ -757,11 +758,8 @@ export async function downloadBlankRollPdf(accessToken: string, height = 4): Pro
   if (!res.ok) throw new Error('Failed to generate blank roll PDF')
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'mns_blank_roll.pdf'
-  a.click()
-  URL.revokeObjectURL(url)
+  window.open(url, '_blank')
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
 export async function downloadRegistrationTestPdf(accessToken: string): Promise<void> {
@@ -804,11 +802,14 @@ export async function downloadRollPrintPdf(
   projectIds: string[],
   copies: number,
   accessToken: string,
+  xOffsetInches: number = 0,
+  skewCorrectionInches: number = 0,
+  yScale: number = 1.0,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/admin/roll-print`, {
     method: 'POST',
     headers: { ...jsonHeaders(accessToken) },
-    body: JSON.stringify({ project_ids: projectIds, copies }),
+    body: JSON.stringify({ project_ids: projectIds, copies, x_offset_inches: xOffsetInches, skew_correction_inches: skewCorrectionInches, y_scale: yScale }),
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))

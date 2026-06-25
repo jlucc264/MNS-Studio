@@ -144,6 +144,9 @@ export default function AdminPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [copies, setCopies] = useState(1)
+  const [xOffsetInches, setXOffsetInches] = useState(0)
+  const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
+  const [yScale, setYScale] = useState(1.0)
   const [calibBusy, setCalibBusy] = useState(false)
   const [regBusy, setRegBusy] = useState(false)
   const [blankBusy, setBlankBusy] = useState(false)
@@ -212,7 +215,7 @@ export default function AdminPage() {
     setRollBusy(true)
     setRollError('')
     try {
-      await downloadRollPrintPdf(selectedIds, copies, session.access_token)
+      await downloadRollPrintPdf(selectedIds, copies, session.access_token, xOffsetInches, skewCorrectionInches, yScale)
     } catch (e: unknown) {
       setRollError(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -351,6 +354,41 @@ export default function AdminPage() {
             max={20}
             value={copies}
             onChange={e => setCopies(Math.max(1, parseInt(e.target.value) || 1))}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="xOffset">X offset (inches):</label>
+          <input
+            id="xOffset"
+            type="number"
+            step={0.0278}
+            value={xOffsetInches}
+            onChange={e => setXOffsetInches(parseFloat(e.target.value) || 0)}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="skewCorrection">Skew correction (inches):</label>
+          <input
+            id="skewCorrection"
+            type="number"
+            step={0.05}
+            value={skewCorrectionInches}
+            onChange={e => setSkewCorrectionInches(parseFloat(e.target.value) || 0)}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="yScale">Length scale (1.0 = no stretch):</label>
+          <input
+            id="yScale"
+            type="number"
+            step={0.001}
+            min={0.9}
+            max={1.1}
+            value={yScale}
+            onChange={e => setYScale(parseFloat(e.target.value) || 1.0)}
             style={styles.copiesInput}
           />
         </div>

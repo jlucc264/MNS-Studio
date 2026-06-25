@@ -38,11 +38,39 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function formatDimensions(p: Project) {
+function effectiveDimensions(p: Project): { w: number; h: number } | null {
+  const mesh = p.mesh_count ?? 13
+  const cells = p.cells
+  if (cells?.length && cells[0]?.length) {
+    const gridH = cells.length
+    const gridW = cells[0].length
+    let minRow = gridH, maxRow = -1, minCol = gridW, maxCol = -1
+    for (let r = 0; r < gridH; r++) {
+      for (let c = 0; c < gridW; c++) {
+        const cell = cells[r][c]
+        if (cell !== '__BLANK__' && cell !== '__FINISH_OUTLINE__') {
+          if (r < minRow) minRow = r
+          if (r > maxRow) maxRow = r
+          if (c < minCol) minCol = c
+          if (c > maxCol) maxCol = c
+        }
+      }
+    }
+    if (maxRow >= 0) {
+      return { w: (maxCol - minCol + 1) / mesh, h: (maxRow - minRow + 1) / mesh }
+    }
+    return { w: gridW / mesh, h: gridH / mesh }
+  }
   if (p.width_inches && p.height_inches) {
-    return `${p.width_inches.toFixed(1)}" × ${p.height_inches.toFixed(1)}"`
+    return { w: p.width_inches, h: p.height_inches }
   }
   return null
+}
+
+function formatDimensions(p: Project) {
+  const dims = effectiveDimensions(p)
+  if (!dims) return null
+  return `${dims.w.toFixed(1)}" × ${dims.h.toFixed(1)}"`
 }
 
 function isFinalizedProject(project: Project) {
@@ -739,9 +767,7 @@ function DraftCard({
               dimensions,
               project.mesh_count ? `${project.mesh_count} mesh` : null,
               project.color_count ? `${project.color_count} colors` : null,
-              project.width_inches && project.height_inches
-                ? `${getCanvasForDesign(project.width_inches, project.height_inches).label} canvas`
-                : null,
+              (() => { const d = effectiveDimensions(project); return d ? `${getCanvasForDesign(d.w, d.h).label} canvas` : null })(),
             ]
               .filter(Boolean)
               .join(' · ') || 'No preview yet'}

@@ -283,6 +283,7 @@ def visualize(request: VisualizeRequest):
 
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest):
+    from app.services.supabase_db import get_logo_cells
     delete_finalized_output(request.previous_pdf_url)
     pdf_url, public_pdf_path, internal_pdf_path, preview_image_url, preview_image_path = generate_preview_pdf(
         preview_url=request.preview_url,
@@ -294,6 +295,7 @@ def finalize(request: FinalizeRequest):
         show_grid=request.show_grid,
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
+        logo_cells=get_logo_cells(request.mesh_count),
     )
     supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
     if supabase_pdf_url:
@@ -717,10 +719,11 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
 @app.post("/admin/roll-print")
 def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_current_user_id)):
     _require_admin(user_id)
-    from app.services.supabase_db import get_project as db_get_project
+    from app.services.supabase_db import get_project as db_get_project, get_logo_cells
 
     project_ids = request.project_ids * request.copies
     designs = []
+    mesh_counts_used: set[int] = set()
     for pid in project_ids:
         project = db_get_project(pid, user_id)
         if not project:
@@ -729,8 +732,13 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         mesh_count = project.get("mesh_count") or 18
         label = project.get("title") or project.get("name") or ""
         designs.append({"cells": cells, "mesh_count": mesh_count, "label": label})
+        mesh_counts_used.add(mesh_count)
 
-    path = generate_roll_print_pdf(designs)
+    logo_cells_by_mesh = {m: get_logo_cells(m) for m in mesh_counts_used}
+    logo_cells_by_mesh = {m: c for m, c in logo_cells_by_mesh.items() if c}
+    x_offset_pts = request.x_offset_inches * 72
+    skew_correction_pts = request.skew_correction_inches * 72
+    path = generate_roll_print_pdf(designs, logo_cells_by_mesh=logo_cells_by_mesh or None, x_offset_pts=x_offset_pts, skew_correction_pts=skew_correction_pts, y_scale=request.y_scale)
     return FileResponse(
         str(path),
         media_type="application/pdf",

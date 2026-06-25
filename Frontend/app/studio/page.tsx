@@ -2313,8 +2313,8 @@ function StudioPage() {
     try {
       const result = await finalizePreview({
         preview_url: previewImagePath,
-        width_inches: settingsForFinalize.width_inches,
-        height_inches: settingsForFinalize.height_inches,
+        width_inches: finishApplied ? finishW : (contentBounds?.width_inches ?? settingsForFinalize.width_inches),
+        height_inches: finishApplied ? finishH : (contentBounds?.height_inches ?? settingsForFinalize.height_inches),
         mesh_count: settingsForFinalize.mesh_count,
         color_count: currentDesignPalette.length,
         contrast_level: settingsForFinalize.contrast_level,
@@ -2422,8 +2422,8 @@ function StudioPage() {
           submitter_name: userDisplayName(user),
           preview_image_url: finalPreviewImagePath ?? previewImagePath,
           pdf_url: finalPdfPath,
-          width_inches: lastSettings?.width_inches ?? null,
-          height_inches: lastSettings?.height_inches ?? null,
+          width_inches: finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? null),
+          height_inches: finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? null),
           mesh_count: lastSettings?.mesh_count ?? null,
           color_count: currentDesignPalette.length,
           palette: currentDesignPalette.map((c) => ({ hex: c.hex, dmc_code: c.dmc_code, dmc_name: c.dmc_name })),
@@ -2455,8 +2455,8 @@ function StudioPage() {
       const { client_secret } = await createPrintOwnCheckout(
         {
           pdf_url: finalPdfPath,
-          width_inches: lastSettings.width_inches,
-          height_inches: lastSettings.height_inches,
+          width_inches: finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings.width_inches),
+          height_inches: finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings.height_inches),
           parent_gallery_item_id: parentGalleryItemId ?? null,
           internal_pdf_supabase_path: internalPdfSupabasePath,
         },
@@ -3150,10 +3150,10 @@ function StudioPage() {
                   : `${resolvedFinishSize.toFixed(1)}" square`
                 : 'N/A'}
             </div>
-            <div><strong>Canvas:</strong> {Math.round(finishW + 2)}&quot; × {Math.round(finishH + 2)}&quot;</div>
+            <div><strong>Canvas:</strong> {getCanvasForDesign(finishW, finishH).label}</div>
           </div>
           <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            {`${Math.round(finishW + 2)}" × ${Math.round(finishH + 2)}" canvas with 1" working border on each side.`}
+            {`${getCanvasForDesign(finishW, finishH).label} canvas with 2" working border on each side.`}
           </div>
         </div>
         <div

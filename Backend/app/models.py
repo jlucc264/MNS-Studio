@@ -275,3 +275,6 @@ class GalleryItemResponse(BaseModel):
 class RollPrintRequest(BaseModel):
     project_ids: list[str]
     copies: int = 1
+    x_offset_inches: float = 0.0
+    skew_correction_inches: float = 0.0
+    y_scale: float = 1.0

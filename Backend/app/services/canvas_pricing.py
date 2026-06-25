@@ -40,13 +40,17 @@ def _interpolate_price_cents(sq_in: float) -> int:
     return round(a2_p + slope * (sq_in - a2_sq))
 
 
+def _fmt_canvas(n: float) -> str:
+    return str(int(n)) if n == int(n) else f"{n:.1f}"
+
+
 def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
-    """Compute canvas dimensions (2" waste on each side, rounded up) and interpolated price."""
-    canvas_w = math.ceil(width_inches + 4)
-    canvas_h = math.ceil(height_inches + 4)
+    """Compute canvas dimensions (2" waste on each side, rounded to nearest 0.5") and interpolated price."""
+    canvas_w = round((width_inches + 4) * 2) / 2
+    canvas_h = round((height_inches + 4) * 2) / 2
     price = _interpolate_price_cents(canvas_w * canvas_h)
     return {
-        "label": f"{canvas_w}×{canvas_h}",
+        "label": f"{_fmt_canvas(canvas_w)}×{_fmt_canvas(canvas_h)}",
         "width": canvas_w,
         "height": canvas_h,
         "price_cents": price,

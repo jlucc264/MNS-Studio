@@ -13,6 +13,27 @@ from PIL import Image, ImageDraw
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 
 DISPLAY_CELL_SIZE = 12
+
+def _fmt_canvas(n: float) -> str:
+    return str(int(n)) if n == int(n) else f"{n:.1f}"
+
+
+def _crop_to_content(cells: list[list[str]]) -> list[list[str]]:
+    """Crop cells to the bounding box of non-blank content."""
+    if not cells or not cells[0]:
+        return cells
+    rows, cols = len(cells), len(cells[0])
+    min_r, max_r, min_c, max_c = rows, -1, cols, -1
+    for r, row in enumerate(cells):
+        for c, cell in enumerate(row):
+            if cell != BLANK_CELL:
+                if r < min_r: min_r = r
+                if r > max_r: max_r = r
+                if c < min_c: min_c = c
+                if c > max_c: max_c = c
+    if max_r < 0:
+        return cells
+    return [row[min_c:max_c + 1] for row in cells[min_r:max_r + 1]]
 GRID_COLOR = (180, 180, 180, 255)
 BORDER_INCHES = 1.0
 PAGE_MARGIN = 42
@@ -20,19 +41,6 @@ CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
 
-_CANVAS_SIZES = [
-    ("5 x 6", 5, 6),
-    ("8 x 6", 8, 6),
-    ("8 x 12", 8, 12),
-]
-
-def _suggested_canvas_label(width_inches: float, height_inches: float) -> str:
-    rw = width_inches + 2
-    rh = height_inches + 2
-    for label, cw, ch in _CANVAS_SIZES:
-        if (rw <= cw and rh <= ch) or (rw <= ch and rh <= cw):
-            return f'{label}"'
-    return f'{_CANVAS_SIZES[-1][0]}"'
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
@@ -63,10 +71,12 @@ def _render_preview_image_from_cells(
     include_border: bool = True,
     grid_color: tuple = GRID_COLOR,
     grid_line_width: int = 1,
+    logo_cells: list[list[str]] | None = None,
+    border_inches: float = BORDER_INCHES,
 ) -> Image.Image:
     stitch_height = len(cells)
     stitch_width = len(cells[0]) if stitch_height else 0
-    border_stitches = int(BORDER_INCHES * mesh_count) if include_border else 0
+    border_stitches = int(border_inches * mesh_count) if include_border else 0
 
     total_width = stitch_width + (2 * border_stitches)
     total_height = stitch_height + (2 * border_stitches)
@@ -97,6 +107,27 @@ def _render_preview_image_from_cells(
             draw.line([(x, 0), (x, display_h)], fill=grid_color, width=grid_line_width)
         for y in range(0, display_h + 1, DISPLAY_CELL_SIZE):
             draw.line([(0, y), (display_w, y)], fill=grid_color, width=grid_line_width)
+
+    if include_border and logo_cells and border_stitches > 0:
+        cropped_logo = _crop_to_content(logo_cells)
+        logo_h = len(cropped_logo)
+        logo_w = len(cropped_logo[0]) if logo_h else 0
+        if logo_w and logo_h:
+            logo_img = Image.new("RGBA", (logo_w, logo_h), (255, 255, 255, 0))
+            logo_img.putdata([
+                (255, 255, 255, 0) if cell == BLANK_CELL
+                else (0, 0, 0, 255) if cell == FINISH_OUTLINE_CELL
+                else (*_hex_to_rgb(cell), 255)
+                for row in cropped_logo
+                for cell in row
+            ])
+            logo_display_w = logo_w * DISPLAY_CELL_SIZE
+            logo_display_h = logo_h * DISPLAY_CELL_SIZE
+            logo_scaled = logo_img.resize((logo_display_w, logo_display_h), Image.Resampling.NEAREST)
+            padding = DISPLAY_CELL_SIZE
+            paste_x = display_w - logo_display_w - padding
+            paste_y = display_h - logo_display_h - padding
+            preview.paste(logo_scaled, (paste_x, paste_y), logo_scaled)
 
     return preview
 
@@ -194,7 +225,7 @@ def _draw_report_page(
     summary_y = page_height - 112
     summary_pairs = [
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
-        ("Canvas", _suggested_canvas_label(width_inches, height_inches)),
+        ("Canvas", f'{_fmt_canvas(round((width_inches + 4) * 2) / 2)}" × {_fmt_canvas(round((height_inches + 4) * 2) / 2)}"'),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Total stitches", str(total_stitches)),
@@ -310,6 +341,7 @@ def _draw_cover_page(
     used_colors: int,
     total_stitches: int,
     has_outline: bool = False,
+    preview_border_inches: float = BORDER_INCHES,
 ) -> None:
     page_width, page_height = page_size
     margin = PAGE_MARGIN
@@ -331,8 +363,8 @@ def _draw_cover_page(
     preview_buffer.seek(0)
     img = ImageReader(preview_buffer)
 
-    total_width_inches = width_inches + BORDER_INCHES * 2
-    total_height_inches = height_inches + BORDER_INCHES * 2
+    total_width_inches = width_inches + preview_border_inches * 2
+    total_height_inches = height_inches + preview_border_inches * 2
     preview_print_width = total_width_inches * 72
     preview_print_height = total_height_inches * 72
     max_preview_width = content_width - 48
@@ -362,7 +394,7 @@ def _draw_cover_page(
     footer_y = margin + 28
     stat_pairs = [
         ("Finished size", f'{width_inches:.1f}" x {height_inches:.1f}"'),
-        ("Canvas", _suggested_canvas_label(width_inches, height_inches)),
+        ("Canvas", f'{_fmt_canvas(round((width_inches + 4) * 2) / 2)}" × {_fmt_canvas(round((height_inches + 4) * 2) / 2)}"'),
         ("Mesh", str(mesh_count)),
         ("Colors used", str(used_colors)),
         ("Stitches", str(total_stitches)),
@@ -434,14 +466,27 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
+    logo_cells: list[list[str]] | None = None,
 ) -> tuple[str, Path, Path, str, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
     preview_path, preview_url = preview_output_path()
 
-    page_size = landscape(letter) if width_inches > height_inches else letter
-    preview_image = _render_preview_image_from_cells(cells, mesh_count, show_grid)
+    # Derive authoritative design dimensions from cell content, not import settings
+    preview_cells = _crop_to_content(cells)
+    design_w = len(preview_cells[0]) / mesh_count if preview_cells and preview_cells[0] else width_inches
+    design_h = len(preview_cells) / mesh_count if preview_cells else height_inches
+
+    page_size = landscape(letter) if design_w > design_h else letter
+    # Cover preview: design + 2" canvas margin on each side, with logo
+    preview_image = _render_preview_image_from_cells(
+        preview_cells, mesh_count, show_grid, logo_cells=logo_cells, border_inches=2.0,
+    )
     preview_image.save(preview_path, format="PNG")
+    # Report thumbnail: just the design (no canvas border) so it fills the small thumb area
+    thumb_image = _render_preview_image_from_cells(
+        preview_cells, mesh_count, show_grid, include_border=False,
+    )
     report_rows = _build_report_rows(cells, palette)
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
@@ -452,22 +497,23 @@ def generate_preview_pdf(
             pdf,
             page_size,
             preview_image,
-            width_inches,
-            height_inches,
+            design_w,
+            design_h,
             mesh_count,
             contrast_level,
             used_colors,
             total_stitches,
             has_outline,
+            preview_border_inches=2.0,
         )
 
         pdf.showPage()
         _draw_report_page(
             pdf,
             page_size,
-            preview_image,
-            width_inches,
-            height_inches,
+            thumb_image,
+            design_w,
+            design_h,
             mesh_count,
             contrast_level,
             palette,
@@ -484,10 +530,10 @@ def generate_preview_pdf(
     internal_pdf.showPage()
     _draw_true_size_reference_page(
         internal_pdf,
-        width_inches,
-        height_inches,
+        design_w,
+        design_h,
         mesh_count,
-        cells,
+        preview_cells,
     )
     internal_pdf.save()
 
@@ -752,6 +798,10 @@ def generate_roll_print_pdf(
     designs: list[dict],
     roll_width_inches: float = 8.0,
     gap_inches: float = 2.0,
+    logo_cells_by_mesh: dict[int, list[list[str]]] | None = None,
+    x_offset_pts: float = 0.0,
+    skew_correction_pts: float = 0.0,
+    y_scale: float = 1.0,
 ) -> Path:
     roll_width_pts = roll_width_inches * 72
     gap_pts = gap_inches * 72
@@ -766,13 +816,14 @@ def generate_roll_print_pdf(
         stitch_h = len(cells)
         stitch_w = len(cells[0]) if stitch_h else 0
         draw_w = (stitch_w / mesh) * 72
-        draw_h = (stitch_h / mesh) * 72
+        draw_h = (stitch_h / mesh) * 72 * y_scale
         img = _render_preview_image_from_cells(cells, mesh, show_grid=False, include_border=False)
         rendered.append({
             "img": img,
             "draw_w": draw_w,
             "draw_h": draw_h,
             "label": design.get("label", ""),
+            "mesh": mesh,
         })
 
     total_h = top_margin_pts
@@ -788,6 +839,12 @@ def generate_roll_print_pdf(
     pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
     pdf.setTitle("MNS Roll Print")
 
+    # Apply shear to correct parallelogram drift: shifts bottom of print by
+    # skew_correction_pts in X relative to the top. Positive = correct rightward drift.
+    if skew_correction_pts:
+        skew_factor = skew_correction_pts / total_h
+        pdf.transform(1, 0, skew_factor, 1, -skew_factor * total_h, 0)
+
     y = total_h - top_margin_pts  # top of available area
 
     for i, r in enumerate(rendered):
@@ -798,7 +855,7 @@ def generate_roll_print_pdf(
             pdf.drawString(label_x, y - label_h + 4, r["label"])
             y -= label_h
 
-        img_x = (roll_width_pts - r["draw_w"]) / 2
+        img_x = (roll_width_pts - r["draw_w"]) / 2 + x_offset_pts
         img_bottom = y - r["draw_h"]
 
         buf = BytesIO()
@@ -813,6 +870,37 @@ def generate_roll_print_pdf(
             preserveAspectRatio=False,
             mask="auto",
         )
+        # Draw logo in bottom-right of this design's canvas margin area
+        logo_cells = (logo_cells_by_mesh or {}).get(rendered[i].get("mesh", 18))
+        if logo_cells:
+            logo_cells = _crop_to_content(logo_cells)
+            logo_ch = len(logo_cells)
+            logo_cw = len(logo_cells[0]) if logo_ch else 0
+            mesh = rendered[i].get("mesh", 18)
+            if logo_cw and logo_ch:
+                logo_pts_w = (logo_cw / mesh) * 72
+                logo_pts_h = (logo_ch / mesh) * 72
+                logo_img_raw = Image.new("RGBA", (logo_cw, logo_ch), (255, 255, 255, 0))
+                logo_img_raw.putdata([
+                    (255, 255, 255, 0) if cell == BLANK_CELL
+                    else (0, 0, 0, 255) if cell == FINISH_OUTLINE_CELL
+                    else (*_hex_to_rgb(cell), 255)
+                    for row in logo_cells
+                    for cell in row
+                ])
+                logo_buf = BytesIO()
+                logo_img_raw.save(logo_buf, format="PNG")
+                logo_buf.seek(0)
+                padding_pts = 4
+                logo_x = roll_width_pts - logo_pts_w - padding_pts
+                logo_y = img_bottom - logo_pts_h - padding_pts
+                pdf.drawImage(
+                    ImageReader(logo_buf),
+                    logo_x, logo_y,
+                    width=logo_pts_w, height=logo_pts_h,
+                    preserveAspectRatio=False, mask="auto",
+                )
+
         y = img_bottom
 
         if i < len(rendered) - 1:

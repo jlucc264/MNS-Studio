@@ -69,6 +69,15 @@ def log_chat(user_message: str, assistant_reply: str, actions: list, context: di
     except Exception as exc:
         logger.warning("Chat log write failed: %s", exc)
 
+def get_logo_cells(mesh_count: int) -> list[list[str]] | None:
+    name = quote(f"Logo - {mesh_count} Mesh", safe="")
+    result = _request("GET", "/projects", params=f"name=eq.{name}&select=cells&limit=1")
+    rows = result if isinstance(result, list) else []
+    if rows and rows[0].get("cells"):
+        return rows[0]["cells"]
+    return None
+
+
 def list_projects(user_id: str) -> list[dict]:
     encoded_user_id = quote(user_id, safe="")
     result = _request(
