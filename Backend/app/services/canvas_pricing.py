@@ -7,10 +7,10 @@ _ANCHORS = [
     (96, 1400),   # 8×12 = $14
 ]
 
-PRINT_OWN_BASE_CENTS = 1500       # $15
-PRINT_GALLERY_BASE_CENTS = 2000   # $20
+PRINT_OWN_BASE_CENTS = 1200       # $12
+PRINT_GALLERY_BASE_CENTS = 1700   # $17
 TEMPLATE_PRICE_CENTS = 500        # $5
-CREATOR_EARNINGS_CENTS = 450      # $4.50 per template or gallery print sale
+# Creator earnings: 18% of sale amount_total, recorded in main.py _record_creator_earnings
 
 # Maximum printable design dimensions (short side × long side).
 # Corresponds to an 8×12 canvas with 1" stitching margin each side.

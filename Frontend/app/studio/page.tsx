@@ -704,6 +704,7 @@ function StudioPage() {
       setCells(loadedCells)
       setOriginalCells(loadedCells)
 
+      if (project.parent_gallery_item_id) setParentGalleryItemId(project.parent_gallery_item_id)
       if (project.source_image_url) setActiveImagePath(project.source_image_url)
       if (project.preview_image_url) {
         setPreviewImagePath(project.preview_image_url)
@@ -2344,6 +2345,7 @@ function StudioPage() {
         preview_image_url: result.preview_image_url,
         pdf_url: result.pdf_url,
         finalized: true,
+        parent_gallery_item_id: parentGalleryItemId ?? null,
       }
       if (existingId) {
         await updateProject(existingId, finalizedPayload, session.access_token)
@@ -2656,6 +2658,7 @@ function StudioPage() {
         preview_image_url: previewImagePath,
         pdf_url: finalPdfPath,
         finalized: Boolean(finalPdfPath),
+        parent_gallery_item_id: parentGalleryItemId ?? null,
       }
       const existingId = activeDraftProjectId
       let isNewProject = false
@@ -2734,8 +2737,8 @@ function StudioPage() {
     }
     if (!hasBlank || maxRow === -1) return null
     return {
-      width_inches: Math.round((maxCol - minCol + 1) / gridW * lastSettings.width_inches * 100) / 100,
-      height_inches: Math.round((maxRow - minRow + 1) / gridH * lastSettings.height_inches * 100) / 100,
+      width_inches: Math.round((maxCol - minCol + 1) / lastSettings.mesh_count * 100) / 100,
+      height_inches: Math.round((maxRow - minRow + 1) / lastSettings.mesh_count * 100) / 100,
     }
   }, [cells, lastSettings])
 
@@ -4033,7 +4036,7 @@ function StudioPage() {
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
         const printable = isDesignPrintable(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
-        const printBase = parentGalleryItemId ? 2000 : 1500
+        const printBase = parentGalleryItemId ? 1700 : 1200
         const printTotal = canvas ? printBase + canvas.priceCents : null
         return (
           <div
@@ -4063,6 +4066,7 @@ function StudioPage() {
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
                       <div>{canvas.label} canvas</div>
                       <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
+                      <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
                       {parentGalleryItemId && (
                         <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 18% creator credit</div>
                       )}

@@ -387,6 +387,7 @@ export type Project = {
   source_image_url: string | null
   preview_image_url: string | null
   pdf_url: string | null
+  parent_gallery_item_id: string | null
 }
 
 export type ProjectSavePayload = Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>> & {

@@ -11,6 +11,18 @@ from .canvas_pricing import (
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+_SHIPPING_OPTIONS = [{
+    "shipping_rate_data": {
+        "type": "fixed_amount",
+        "fixed_amount": {"amount": 700, "currency": "usd"},
+        "display_name": "Standard Shipping",
+        "delivery_estimate": {
+            "minimum": {"unit": "business_day", "value": 5},
+            "maximum": {"unit": "business_day", "value": 7},
+        },
+    },
+}]
+
 
 def _cents_to_display(cents: int) -> str:
     return f"${cents / 100:.2f}".replace(".00", "")
@@ -84,7 +96,7 @@ def create_print_own_checkout(
         }],
         "mode": "payment",
         "ui_mode": "embedded_page",
-        "shipping_address_collection": {"allowed_countries": ["US"]},
+        "shipping_options": _SHIPPING_OPTIONS,
         "return_url": f"{FRONTEND_URL}/studio?order=success",
         "metadata": metadata,
     }
@@ -184,7 +196,7 @@ def create_gallery_print_checkout(
         }],
         "mode": "payment",
         "ui_mode": "embedded_page",
-        "shipping_address_collection": {"allowed_countries": ["US"]},
+        "shipping_options": _SHIPPING_OPTIONS,
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }

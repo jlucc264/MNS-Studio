@@ -137,6 +137,7 @@ class ProjectSaveRequest(BaseModel):
     preview_image_url: Optional[str] = None
     pdf_url: Optional[str] = None
     finalized: bool = False
+    parent_gallery_item_id: Optional[str] = None
 
 
 class ProjectResponse(BaseModel):
@@ -161,6 +162,7 @@ class ProjectResponse(BaseModel):
     source_image_url: Optional[str] = None
     preview_image_url: Optional[str] = None
     pdf_url: Optional[str] = None
+    parent_gallery_item_id: Optional[str] = None
 
 
 class PrintOwnCheckoutRequest(BaseModel):
