@@ -959,28 +959,21 @@ export default function PalettePanel({
       {isSelectTab && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Sub-tab toggle */}
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5', flexShrink: 0 }}>
             {(['color', 'move'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 onClick={() => setSelectSubMode(mode)}
                 style={{
-                  flex: 1,
-                  padding: '5px 0',
-                  borderRadius: 7,
-                  border: '1px solid',
-                  borderColor: selectSubMode === mode ? '#5c7856' : '#d5cec6',
-                  background: selectSubMode === mode ? '#6e8d67' : '#fff',
-                  color: selectSubMode === mode ? '#fff' : '#6f665b',
+                  ...pill,
+                  background: selectSubMode === mode ? '#6e8d67' : 'transparent',
+                  color: selectSubMode === mode ? '#fff' : '#8a8177',
                   fontSize: 11,
-                  fontWeight: 600,
-                  fontFamily: 'inherit',
-                  cursor: 'pointer',
                   textTransform: 'capitalize',
                 }}
               >
-                {mode}
+                {mode === 'color' ? '◉ Color' : '✥ Move'}
               </button>
             ))}
           </div>
