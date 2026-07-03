@@ -93,7 +93,7 @@ const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
 
 function estimateSkeins(stitchCount: number, meshCount: number): number {
-  const stitchesPerSkein = meshCount >= 18 ? 350 : 200
+  const stitchesPerSkein = meshCount >= 18 ? 1750 : 1250
   return Math.max(1, Math.ceil(stitchCount / stitchesPerSkein))
 }
 
@@ -1581,6 +1581,60 @@ function StudioPage() {
     setSelectedRegions([])
   }
 
+  function handleMoveSelection(direction: 'up' | 'down' | 'left' | 'right') {
+    if (!cells.length || !selectedRegions.length) return
+    const dr = direction === 'up' ? -1 : direction === 'down' ? 1 : 0
+    const dc = direction === 'left' ? -1 : direction === 'right' ? 1 : 0
+    const gridH = cells.length
+    const gridW = cells[0].length
+
+    const toMove: Array<{ r: number; c: number; value: string }> = []
+    for (const rect of selectedRegions) {
+      const r0 = Math.min(rect.startRow, rect.endRow)
+      const r1 = Math.max(rect.startRow, rect.endRow)
+      const c0 = Math.min(rect.startCol, rect.endCol)
+      const c1 = Math.max(rect.startCol, rect.endCol)
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          if (cells[r]?.[c] === undefined) continue
+          if (cells[r][c] === FINISH_OUTLINE_CELL) continue
+          toMove.push({ r, c, value: cells[r][c] })
+        }
+      }
+    }
+
+    const nextCells = cloneCells(cells)
+    const nextOverrides = { ...manualCellOverrides }
+
+    for (const { r, c } of toMove) {
+      nextCells[r][c] = BLANK_CELL
+      nextOverrides[makeCellKey(r, c)] = BLANK_CELL
+    }
+    for (const { r, c, value } of toMove) {
+      const nr = r + dr
+      const nc = c + dc
+      if (nr < 0 || nr >= gridH || nc < 0 || nc >= gridW) continue
+      nextCells[nr][nc] = value
+      nextOverrides[makeCellKey(nr, nc)] = value
+    }
+
+    const nextRegions = selectedRegions.map((rect) => ({
+      startRow: Math.max(0, Math.min(gridH - 1, rect.startRow + dr)),
+      endRow: Math.max(0, Math.min(gridH - 1, rect.endRow + dr)),
+      startCol: Math.max(0, Math.min(gridW - 1, rect.startCol + dc)),
+      endCol: Math.max(0, Math.min(gridW - 1, rect.endCol + dc)),
+    }))
+
+    pushUndoSnapshot()
+    setCells(nextCells)
+    setManualCellOverrides(nextOverrides)
+    setSelectedRegions(nextRegions)
+    refreshPreviewPalette(nextCells)
+    setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
+    setViewMode('stitch')
+  }
+
   const handleEyedropperSample = useCallback(async ({ row, col }: { row: number; col: number }) => {
     if (!activeImagePath || !lastSettings) return
     const stitchWidth = Math.max(1, Math.round(lastSettings.width_inches * lastSettings.mesh_count))
@@ -2414,13 +2468,18 @@ function StudioPage() {
     setGalleryStatus('posting')
     setGalleryError('')
     try {
+      const originTags: string[] = []
+      if (parentGalleryItemId) originTags.push('remix')
+      if (lastSettings?.source_type === 'photo' || lastSettings?.source_type === 'stitched_photo') originTags.push('from photo')
+      if (lastSettings?.source_type === 'graphic_art') originTags.push('graphic art')
+
+      const userTags = galleryTags.split(',').map((t) => t.trim()).filter(Boolean)
+      const allTags = Array.from(new Set([...originTags, ...userTags]))
+
       const publishedItem = await publishGalleryItem(
         {
           title,
-          tags: galleryTags
-            .split(',')
-            .map((tag) => tag.trim())
-            .filter(Boolean),
+          tags: allTags,
           submitter_name: userDisplayName(user),
           preview_image_url: finalPreviewImagePath ?? previewImagePath,
           pdf_url: finalPdfPath,
@@ -3845,6 +3904,7 @@ function StudioPage() {
 
               onApplyColorToSelection={handleApplyColorToSelection}
               onClearSelection={handleClearSelection}
+              onMoveSelection={handleMoveSelection}
               onSelect={(color) => {
                 setActivePaintColor(color.hex)
                 if (toolMode !== 'select') {

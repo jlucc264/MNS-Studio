@@ -133,7 +133,7 @@ def _render_preview_image_from_cells(
 
 
 def _calculate_skeins(stitch_count: int, mesh_count: int) -> int:
-    stitches_per_skein = 350 if mesh_count >= 18 else 200
+    stitches_per_skein = 1750 if mesh_count >= 18 else 1250
     return max(1, math.ceil(stitch_count / stitches_per_skein))
 
 

@@ -13,6 +13,8 @@ import CheckoutModal from '../../components/CheckoutModal'
 
 const MOBILE_BREAKPOINT = 768
 
+const ORIGIN_TAGS = new Set(['remix', 'from photo', 'graphic art'])
+
 const shimmerKeyframes = `
 @keyframes gallery-shimmer {
   0% { background-position: -600px 0 }
@@ -761,7 +763,9 @@ function GalleryPage() {
                           key={tag}
                           type="button"
                           onClick={() => setSearch(tag)}
-                          style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                          style={ORIGIN_TAGS.has(tag)
+                            ? { border: '1px solid #b5ccb0', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#4a7a42', background: '#f0f5ee', cursor: 'pointer', font: 'inherit' }
+                            : { border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
                         >
                           #{tag}
                         </button>
@@ -1036,7 +1040,9 @@ function GalleryPage() {
                             key={tag}
                             type="button"
                             onClick={() => { setSearch(tag); setSelectedPreview(null) }}
-                            style={{ border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
+                            style={ORIGIN_TAGS.has(tag)
+                              ? { border: '1px solid #b5ccb0', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#4a7a42', background: '#f0f5ee', cursor: 'pointer', font: 'inherit' }
+                              : { border: '1px solid #e1d9ce', borderRadius: 999, padding: '1px 6px', fontSize: 9, color: '#6f675f', background: 'transparent', cursor: 'pointer', font: 'inherit' }}
                           >
                             #{tag}
                           </button>

@@ -33,6 +33,7 @@ type Props = {
   selectionMergeSuggestions: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
+  onMoveSelection: (direction: 'up' | 'down' | 'left' | 'right') => void
   onSelect: (color: PaletteColor) => void
   onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
@@ -98,6 +99,7 @@ export default function PalettePanel({
   selectionMergeSuggestions,
   onApplyColorToSelection,
   onClearSelection,
+  onMoveSelection,
   onSelect,
   onSelectBlankCanvas,
   moreColors,
@@ -122,6 +124,7 @@ export default function PalettePanel({
   onShapeBorderSizeChange,
 }: Props) {
   const [hoveredSwatchHex, setHoveredSwatchHex] = useState<string | null>(null)
+  const [selectSubMode, setSelectSubMode] = useState<'color' | 'move'>('color')
 
 
 
@@ -955,6 +958,33 @@ export default function PalettePanel({
       {/* Select tab */}
       {isSelectTab && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Sub-tab toggle */}
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+            {(['color', 'move'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setSelectSubMode(mode)}
+                style={{
+                  flex: 1,
+                  padding: '5px 0',
+                  borderRadius: 7,
+                  border: '1px solid',
+                  borderColor: selectSubMode === mode ? '#5c7856' : '#d5cec6',
+                  background: selectSubMode === mode ? '#6e8d67' : '#fff',
+                  color: selectSubMode === mode ? '#fff' : '#6f665b',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  textTransform: 'capitalize',
+                }}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+
           <div
             style={{
               display: 'grid',
@@ -969,7 +999,10 @@ export default function PalettePanel({
               flexShrink: 0,
             }}
           >
-            <span>Choose a color to highlight all active cells, or select a region first. Can select multiple regions by holding down CTRL.</span>
+            {selectSubMode === 'color'
+              ? <span>Choose a color to highlight all active cells, or select a region first. Can select multiple regions by holding down CTRL.</span>
+              : <span>Select a region, then use the arrows to shift it one cell at a time. Cells moved off the edge are discarded.</span>
+            }
             {hasSelectedRegion && (
               <button
                 type="button"
@@ -990,7 +1023,44 @@ export default function PalettePanel({
             )}
           </div>
 
-          <div
+          {/* Move controls */}
+          {selectSubMode === 'move' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 36px)', gridTemplateRows: 'repeat(3, 36px)', gap: 4, justifyContent: 'center', flexShrink: 0, paddingTop: 4 }}>
+              {[
+                { dir: 'up' as const, label: '↑', col: 2, row: 1 },
+                { dir: 'left' as const, label: '←', col: 1, row: 2 },
+                { dir: 'right' as const, label: '→', col: 3, row: 2 },
+                { dir: 'down' as const, label: '↓', col: 2, row: 3 },
+              ].map(({ dir, label, col, row }) => (
+                <button
+                  key={dir}
+                  type="button"
+                  onClick={() => onMoveSelection(dir)}
+                  disabled={!hasSelectedRegion}
+                  style={{
+                    gridColumn: col,
+                    gridRow: row,
+                    width: 36,
+                    height: 36,
+                    border: '1px solid #d5cec6',
+                    borderRadius: 8,
+                    background: hasSelectedRegion ? '#fff' : '#f5f2ee',
+                    color: hasSelectedRegion ? '#3f382f' : '#b0a89e',
+                    fontSize: 16,
+                    cursor: hasSelectedRegion ? 'pointer' : 'not-allowed',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectSubMode === 'color' && <div
             style={{
               flex: 1,
               minHeight: 0,
@@ -1125,7 +1195,7 @@ export default function PalettePanel({
                 </div>
               )
             })}
-          </div>
+          </div>}
         </div>
       )}
     </div>
