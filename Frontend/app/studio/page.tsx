@@ -443,6 +443,7 @@ function StudioPage() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showMobilePanel, setShowMobilePanel] = useState(true)
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
+  const [showPriceBreakdownModal, setShowPriceBreakdownModal] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
@@ -3157,11 +3158,11 @@ function StudioPage() {
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
             <button
               type="button"
-              onClick={() => void handlePrintOwnCheckout()}
+              onClick={() => setShowPriceBreakdownModal(true)}
               disabled={!lastSettings || printCheckoutLoading || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)}
               style={{ ...btnSecondary, opacity: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 0.55 : 1, cursor: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 'not-allowed' : 'pointer' }}
             >
-              {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
+              Review order
             </button>
             <button type="button" onClick={openGalleryPublishModal} style={btnSecondary}>
               Share to gallery
@@ -3212,10 +3213,16 @@ function StudioPage() {
                   : `${resolvedFinishSize.toFixed(1)}" square`
                 : 'N/A'}
             </div>
-            <div><strong>Canvas:</strong> {getCanvasForDesign(finishW, finishH).label}</div>
+            <div><strong>Canvas:</strong> {getCanvasForDesign(
+              finishApplied ? finishW : (contentBounds?.width_inches ?? designWidthInches),
+              finishApplied ? finishH : (contentBounds?.height_inches ?? designHeightInches),
+            ).label}</div>
           </div>
           <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
-            {`${getCanvasForDesign(finishW, finishH).label} canvas with 2" working border on each side.`}
+            {`${getCanvasForDesign(
+              finishApplied ? finishW : (contentBounds?.width_inches ?? designWidthInches),
+              finishApplied ? finishH : (contentBounds?.height_inches ?? designHeightInches),
+            ).label} canvas with 2" working border on each side.`}
           </div>
         </div>
         <div
@@ -4135,11 +4142,11 @@ function StudioPage() {
                   {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
                   <button
                     type="button"
-                    onClick={() => void handlePrintOwnCheckout()}
+                    onClick={() => setShowPriceBreakdownModal(true)}
                     disabled={!canvas || !printable || printCheckoutLoading}
                     style={{ ...btnPrimary, opacity: (!canvas || !printable) ? 0.5 : 1, cursor: (!canvas || !printable) ? 'not-allowed' : 'pointer' }}
                   >
-                    {printCheckoutLoading ? 'Loading checkout...' : 'Order print'}
+                    Review order
                   </button>
                 </div>
 
@@ -4489,6 +4496,74 @@ function StudioPage() {
           </div>
         </div>
       )}
+
+      {showPriceBreakdownModal && (() => {
+        const bW = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0)
+        const bH = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0)
+        const bCanvas = lastSettings ? getCanvasForDesign(bW, bH) : null
+        const bBase = parentGalleryItemId ? 1700 : 1200
+        const bShipping = 700
+        const bTotal = bCanvas ? bBase + bCanvas.priceCents + bShipping : null
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 30, padding: 18 }}
+          >
+            <div style={{ background: '#fffdf8', borderRadius: 14, width: 380, maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8', display: 'grid', gap: 0 }}>
+              <div style={{ padding: '20px 22px 14px', borderBottom: '1px solid #e7e1d8' }}>
+                <h2 style={{ margin: 0, fontSize: 18 }}>Order summary</h2>
+                <p style={{ margin: '4px 0 0', color: '#8a8177', fontSize: 13 }}>Review before continuing to checkout.</p>
+              </div>
+              <div style={{ padding: '16px 22px', display: 'grid', gap: 10, fontSize: 14 }}>
+                {bCanvas && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#5f574f' }}>{bCanvas.label} canvas</span>
+                      <span>{formatCents(bCanvas.priceCents)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#5f574f' }}>Printing &amp; fulfillment</span>
+                      <span>{formatCents(bBase)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#5f574f' }}>Shipping (Standard, 5–7 days)</span>
+                      <span>{formatCents(bShipping)}</span>
+                    </div>
+                    {parentGalleryItemId && (
+                      <div style={{ fontSize: 12, color: '#8a8177', borderTop: '1px solid #e7e1d8', paddingTop: 8 }}>
+                        Includes 18% creator credit for the original designer
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16, borderTop: '1px solid #e7e1d8', paddingTop: 10 }}>
+                      <span>Total</span>
+                      <span>{bTotal !== null ? formatCents(bTotal) : '—'}</span>
+                    </div>
+                  </>
+                )}
+                {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
+              </div>
+              <div style={{ padding: '12px 22px 18px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowPriceBreakdownModal(false)}
+                  style={{ ...btnSecondary, textAlign: 'center' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowPriceBreakdownModal(false); void handlePrintOwnCheckout() }}
+                  disabled={!bCanvas || printCheckoutLoading}
+                  style={{ ...btnPrimary, opacity: !bCanvas ? 0.5 : 1, cursor: !bCanvas ? 'not-allowed' : 'pointer' }}
+                >
+                  {printCheckoutLoading ? 'Loading...' : 'Proceed to checkout'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {checkoutClientSecret && (
         <CheckoutModal

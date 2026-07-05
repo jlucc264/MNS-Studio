@@ -97,6 +97,7 @@ def create_print_own_checkout(
         "mode": "payment",
         "ui_mode": "embedded_page",
         "shipping_options": _SHIPPING_OPTIONS,
+        "shipping_address_collection": {"allowed_countries": ["US"]},
         "return_url": f"{FRONTEND_URL}/studio?order=success",
         "metadata": metadata,
     }
@@ -197,6 +198,7 @@ def create_gallery_print_checkout(
         "mode": "payment",
         "ui_mode": "embedded_page",
         "shipping_options": _SHIPPING_OPTIONS,
+        "shipping_address_collection": {"allowed_countries": ["US"]},
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }
