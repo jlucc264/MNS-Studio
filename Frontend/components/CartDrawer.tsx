@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { createCartCheckout, formatCents } from '../lib/api'
 import { cartRead, cartRemove, cartSetQty, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem } from '../lib/cart'
@@ -100,7 +101,20 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
             <div key={item.id} style={{ display: 'grid', gap: 8, paddingBottom: 14, borderBottom: '1px solid #e7e1d8' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{item.title}</div>
+                  {(() => {
+                    const href = item.gallery_item_id
+                      ? `/gallery?item=${item.gallery_item_id}`
+                      : item.project_id
+                        ? `/studio?project=${item.project_id}`
+                        : null
+                    return href ? (
+                      <Link href={href} onClick={onClose} style={{ fontWeight: 600, fontSize: 14, color: '#3f382f', textDecoration: 'underline', textDecorationColor: '#d7d0c8' }}>
+                        {item.title}
+                      </Link>
+                    ) : (
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.title}</div>
+                    )
+                  })()}
                   <div style={{ fontSize: 12, color: '#8a8177', marginTop: 2 }}>{item.canvas_label} canvas</div>
                   {(item.gallery_item_id ?? item.parent_gallery_item_id) && (
                     <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>Includes 18% creator credit</div>

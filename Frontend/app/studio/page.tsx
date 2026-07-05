@@ -4583,6 +4583,7 @@ function StudioPage() {
                       base_price_cents: bBase,
                       gallery_item_id: null,
                       parent_gallery_item_id: parentGalleryItemId,
+                      project_id: savedProjectId,
                     })
                     setShowPriceBreakdownModal(false)
                     setShowCartDrawer(true)

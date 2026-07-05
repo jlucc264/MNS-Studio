@@ -321,6 +321,7 @@ function GalleryPage() {
       base_price_cents: 1700,
       gallery_item_id: item.id,
       parent_gallery_item_id: null,
+      project_id: null,
     })
     setAddedToCartId(item.id)
     setTimeout(() => setAddedToCartId(null), 2000)

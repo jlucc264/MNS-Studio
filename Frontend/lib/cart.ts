@@ -13,8 +13,9 @@ export type CartItem = {
   canvas_label: string
   canvas_price_cents: number
   base_price_cents: number
-  gallery_item_id: string | null        // gallery print (creator = gallery item's owner)
-  parent_gallery_item_id: string | null // own design remix (creator = parent's owner)
+  gallery_item_id: string | null        // gallery print — links to /gallery?item=<id>
+  parent_gallery_item_id: string | null // own design remix (creator attribution)
+  project_id: string | null             // own design — links to /studio?project=<id>
 }
 
 const CART_KEY = 'mns_cart'
