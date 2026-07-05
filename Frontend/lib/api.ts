@@ -752,6 +752,30 @@ export async function createGalleryPrintCheckout(galleryItemId: string): Promise
   return res.json()
 }
 
+export async function createCartCheckout(
+  items: Array<{
+    pdf_url: string
+    internal_pdf_supabase_path: string | null
+    width_inches: number
+    height_inches: number
+    quantity: number
+    gallery_item_id: string | null
+    parent_gallery_item_id: string | null
+  }>,
+  accessToken: string,
+): Promise<CheckoutResponse> {
+  const res = await fetch(`${API_BASE}/checkout/cart`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ items }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not create checkout session')
+  }
+  return res.json()
+}
+
 export async function downloadBlankRollPdf(accessToken: string, height = 4): Promise<void> {
   const res = await fetch(`${API_BASE}/admin/blank-roll-pdf?height=${height}`, {
     headers: authHeaders(accessToken),

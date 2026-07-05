@@ -19,12 +19,14 @@ import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
 import { ColorBrowserModal } from '../../components/ColorBrowserModal'
 import CheckoutModal from '../../components/CheckoutModal'
+import CartDrawer from '../../components/CartDrawer'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
+import { cartAdd, useCart } from '../../lib/cart'
 import {
   assetUrl,
   CanvasContext,
@@ -444,7 +446,9 @@ function StudioPage() {
   const [showMobilePanel, setShowMobilePanel] = useState(true)
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showPriceBreakdownModal, setShowPriceBreakdownModal] = useState(false)
+  const [showCartDrawer, setShowCartDrawer] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
+  const { count: cartCount } = useCart()
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
@@ -3409,6 +3413,18 @@ function StudioPage() {
             title="Tutorial"
             style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >?</button>
+          <button
+            type="button"
+            onClick={() => setShowCartDrawer(true)}
+            aria-label="Open cart"
+            title="Cart"
+            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
+          >
+            🛒
+            {cartCount > 0 && (
+              <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
+            )}
+          </button>
           {session ? (
             <NavAccountControls
               user={user}
@@ -4553,11 +4569,28 @@ function StudioPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setShowPriceBreakdownModal(false); void handlePrintOwnCheckout() }}
-                  disabled={!bCanvas || printCheckoutLoading}
+                  onClick={() => {
+                    if (!bCanvas || !lastSettings) return
+                    cartAdd({
+                      pdf_url: finalPdfPath ?? '',
+                      internal_pdf_supabase_path: internalPdfSupabasePath ?? null,
+                      width_inches: bW,
+                      height_inches: bH,
+                      quantity: 1,
+                      title: bCanvas.label + ' canvas',
+                      canvas_label: bCanvas.label,
+                      canvas_price_cents: bCanvas.priceCents,
+                      base_price_cents: bBase,
+                      gallery_item_id: null,
+                      parent_gallery_item_id: parentGalleryItemId,
+                    })
+                    setShowPriceBreakdownModal(false)
+                    setShowCartDrawer(true)
+                  }}
+                  disabled={!bCanvas}
                   style={{ ...btnPrimary, opacity: !bCanvas ? 0.5 : 1, cursor: !bCanvas ? 'not-allowed' : 'pointer' }}
                 >
-                  {printCheckoutLoading ? 'Loading...' : 'Proceed to checkout'}
+                  Add to cart
                 </button>
               </div>
             </div>
@@ -4571,6 +4604,12 @@ function StudioPage() {
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}
+      <CartDrawer
+        open={showCartDrawer}
+        onClose={() => setShowCartDrawer(false)}
+        accessToken={session?.access_token ?? null}
+        onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
+      />
       {saveStatus !== 'idle' && (
         <div style={{
           position: 'fixed',

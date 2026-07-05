@@ -55,6 +55,7 @@ def send_order_notification(
     shipping: dict | None,
     pdf_attachment_bytes: bytes | None = None,
     pdf_attachment_name: str = "production_report.pdf",
+    extra_attachments: list[tuple[bytes, str]] | None = None,
 ) -> bool:
     if not _ready():
         return False
@@ -63,6 +64,7 @@ def send_order_notification(
         "print_own": "Print: Own Design",
         "template": "Template Purchase",
         "print_gallery": "Print: Gallery Design",
+        "cart": "Cart Order",
     }
     subject = f"[MNS Order] {type_labels.get(order_type, order_type)}"
     if metadata.get("title"):
@@ -77,6 +79,8 @@ def send_order_notification(
         lines.append(f"Design dimensions: {metadata['width_inches']}\" × {metadata['height_inches']}\"")
     if metadata.get("pdf_url"):
         lines.append(f"PDF: {metadata['pdf_url']}")
+    if metadata.get("item_count"):
+        lines.append(f"Items in cart: {metadata['item_count']}")
     if customer_email:
         lines.append(f"\nCustomer email: {customer_email}")
     if shipping:
@@ -94,11 +98,14 @@ def send_order_notification(
         "subject": subject,
         "text": "\n".join(lines),
     }
+
+    attachments = []
     if pdf_attachment_bytes:
-        params["attachments"] = [{
-            "filename": pdf_attachment_name,
-            "content": list(pdf_attachment_bytes),
-        }]
+        attachments.append({"filename": pdf_attachment_name, "content": list(pdf_attachment_bytes)})
+    for pdf_bytes, pdf_name in (extra_attachments or []):
+        attachments.append({"filename": pdf_name, "content": list(pdf_bytes)})
+    if attachments:
+        params["attachments"] = attachments
 
     resend.Emails.send(params)
     return True

@@ -7,9 +7,11 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { assetUrl, buildCreatorSlugMap, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { cartAdd, useCart } from '../../lib/cart'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
+import CartDrawer from '../../components/CartDrawer'
 
 const MOBILE_BREAKPOINT = 768
 
@@ -177,7 +179,10 @@ function GalleryPage() {
   const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
+  const [showCartDrawer, setShowCartDrawer] = useState(false)
+  const [addedToCartId, setAddedToCartId] = useState<string | null>(null)
   const [hasActiveDesign, setHasActiveDesign] = useState(false)
+  const { count: cartCount } = useCart()
   const [activeDraftName, setActiveDraftName] = useState('Untitled')
   const [shareToast, setShareToast] = useState(false)
 
@@ -301,17 +306,24 @@ function GalleryPage() {
     router.push('/studio')
   }
 
-  async function handlePrintCheckout(item: GalleryItem) {
-    setCheckoutError('')
-    setCheckoutLoading('print')
-    try {
-      const { client_secret } = await createGalleryPrintCheckout(item.id)
-      setCheckoutClientSecret(client_secret)
-    } catch (err) {
-      setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
-    } finally {
-      setCheckoutLoading(null)
-    }
+  function handleAddToCart(item: GalleryItem) {
+    if (!item.width_inches || !item.height_inches || !item.pdf_url) return
+    const canvas = getCanvasForDesign(item.width_inches, item.height_inches)
+    cartAdd({
+      pdf_url: item.pdf_url,
+      internal_pdf_supabase_path: null,
+      width_inches: item.width_inches,
+      height_inches: item.height_inches,
+      quantity: 1,
+      title: item.title || `${canvas.label} canvas`,
+      canvas_label: canvas.label,
+      canvas_price_cents: canvas.priceCents,
+      base_price_cents: 1700,
+      gallery_item_id: item.id,
+      parent_gallery_item_id: null,
+    })
+    setAddedToCartId(item.id)
+    setTimeout(() => setAddedToCartId(null), 2000)
   }
 
   async function handleLike(item: GalleryItem) {
@@ -395,6 +407,18 @@ function GalleryPage() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setShowCartDrawer(true)}
+            aria-label="Open cart"
+            title="Cart"
+            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
+          >
+            🛒
+            {cartCount > 0 && (
+              <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
+            )}
+          </button>
           {session ? (
             <>
               {!isMobile && (
@@ -1148,18 +1172,14 @@ function GalleryPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => void handlePrintCheckout(selectedPreview)}
-                            disabled={!printPrice || checkoutLoading !== null}
+                            onClick={() => { handleAddToCart(selectedPreview); setShowCartDrawer(true) }}
+                            disabled={!printPrice}
                             style={{
                               ...btnSecondary,
                               ...(printPrice ? {} : { color: '#8a8177', background: '#f4efe7', cursor: 'not-allowed' }),
                             }}
                           >
-                            {checkoutLoading === 'print'
-                              ? 'Redirecting...'
-                              : printPrice
-                                ? `Order print — ${printPrice}`
-                                : 'Print unavailable'}
+                            {addedToCartId === selectedPreview.id ? 'Added to cart!' : printPrice ? `Add to cart — ${printPrice}` : 'Print unavailable'}
                           </button>
                           {canvas && printPrice && (
                             <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
@@ -1289,8 +1309,8 @@ function GalleryPage() {
                     return (
                       <button
                         type="button"
-                        onClick={() => void handlePrintCheckout(selectedPreview)}
-                        disabled={!printPrice || checkoutLoading !== null}
+                        onClick={() => { handleAddToCart(selectedPreview); setShowCartDrawer(true) }}
+                        disabled={!printPrice}
                         style={{
                           ...btnSecondary,
                           flex: 1,
@@ -1300,7 +1320,7 @@ function GalleryPage() {
                           cursor: printPrice ? 'pointer' : 'not-allowed',
                         }}
                       >
-                        {checkoutLoading === 'print' ? 'Loading…' : printPrice ? `Print — ${printPrice}` : 'Print unavailable'}
+                        {addedToCartId === selectedPreview.id ? 'Added!' : printPrice ? `Add to cart — ${printPrice}` : 'Print unavailable'}
                       </button>
                     )
                   })()}
@@ -1364,6 +1384,12 @@ function GalleryPage() {
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}
+      <CartDrawer
+        open={showCartDrawer}
+        onClose={() => setShowCartDrawer(false)}
+        accessToken={session?.access_token ?? null}
+        onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
+      />
     </div>
   )
 }

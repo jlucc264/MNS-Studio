@@ -36,6 +36,7 @@ from app.models import (
     GalleryCreateRequest,
     GalleryItemResponse,
     PrintOwnCheckoutRequest,
+    CartCheckoutRequest,
     CheckoutResponse,
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
@@ -47,6 +48,7 @@ from app.services.stripe_service import (
     create_print_own_checkout,
     create_template_checkout,
     create_gallery_print_checkout,
+    create_cart_checkout,
 )
 from app.services.canvas_pricing import get_canvas_for_design, is_design_printable
 from app.services.auth import get_current_user_id, get_optional_user_id
@@ -631,6 +633,39 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
     return CheckoutResponse(client_secret=url)
 
 
+@app.post("/checkout/cart", response_model=CheckoutResponse)
+def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_current_user_id)):
+    from app.services.supabase_db import get_gallery_item
+    if not request.items:
+        raise HTTPException(status_code=422, detail="Cart is empty.")
+
+    items_data = []
+    for item in request.items:
+        if not is_design_printable(item.width_inches, item.height_inches):
+            raise HTTPException(status_code=422, detail=f"A design ({item.width_inches}\" × {item.height_inches}\") exceeds maximum printable size.")
+        creator_user_id = None
+        creator_gallery_item_id = item.gallery_item_id or item.parent_gallery_item_id
+        if creator_gallery_item_id:
+            gi = get_gallery_item(creator_gallery_item_id)
+            if gi:
+                creator_user_id = gi.get("user_id")
+        items_data.append({
+            "pdf_url": item.pdf_url,
+            "internal_pdf_supabase_path": item.internal_pdf_supabase_path,
+            "width_inches": item.width_inches,
+            "height_inches": item.height_inches,
+            "quantity": item.quantity,
+            "creator_gallery_item_id": creator_gallery_item_id,
+            "creator_user_id": creator_user_id,
+        })
+
+    try:
+        client_secret = create_cart_checkout(items_data, user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return CheckoutResponse(client_secret=client_secret)
+
+
 # ── Stripe webhook ────────────────────────────────────────────────────────────
 
 def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str, sale_amount_cents: int) -> None:
@@ -652,6 +687,8 @@ def _handle_completed_session(session: dict) -> None:
     customer_email = customer_details.get("email")
     shipping = session.get("shipping_details")
 
+    import urllib.request as _ur
+
     pdf_bytes: bytes | None = None
     pdf_name = "production_report.pdf"
     if order_type in {"print_own", "print_gallery"}:
@@ -660,16 +697,49 @@ def _handle_completed_session(session: dict) -> None:
             pdf_bytes = download_from_supabase_storage(internal_path, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
             pdf_name = "internal_production_report.pdf"
         if not pdf_bytes and metadata.get("pdf_url"):
-            import urllib.request as _ur
             try:
                 with _ur.urlopen(metadata["pdf_url"], timeout=20) as r:
                     pdf_bytes = r.read()
             except Exception:
                 pass
 
+    cart_attachments: list[tuple[bytes, str]] = []
+    if order_type == "cart":
+        item_count = int(metadata.get("item_count", 0))
+        for i in range(item_count):
+            raw = metadata.get(f"item_{i}", "{}")
+            try:
+                item_meta = json.loads(raw)
+            except Exception:
+                continue
+            item_pdf: bytes | None = None
+            ip = item_meta.get("ip")
+            if ip:
+                item_pdf = download_from_supabase_storage(ip, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
+            if not item_pdf:
+                pdf_url = item_meta.get("pdf")
+                if pdf_url:
+                    try:
+                        with _ur.urlopen(pdf_url, timeout=20) as r:
+                            item_pdf = r.read()
+                    except Exception:
+                        pass
+            if item_pdf:
+                cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
+            # Record creator earnings per remixed cart item
+            gi = item_meta.get("gi")
+            cu = item_meta.get("cu")
+            if gi and cu:
+                item_total = (item_meta.get("b", 0) + item_meta.get("cv", 0)) * item_meta.get("qty", 1)
+                try:
+                    _record_creator_earnings(f"{session['id']}_{i}", cu, gi, "cart", item_total)
+                except Exception:
+                    logger.exception("Failed to record cart creator earnings for session %s item %d", session.get("id"), i)
+
     try:
         send_order_notification(order_type, metadata, customer_email, shipping,
-                                pdf_attachment_bytes=pdf_bytes, pdf_attachment_name=pdf_name)
+                                pdf_attachment_bytes=pdf_bytes, pdf_attachment_name=pdf_name,
+                                extra_attachments=cart_attachments if cart_attachments else None)
     except Exception:
         logger.exception("Order notification email failed for session %s", session.get("id"))
 

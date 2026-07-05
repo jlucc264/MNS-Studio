@@ -1,3 +1,4 @@
+import json
 import os
 import stripe
 
@@ -6,6 +7,8 @@ from .canvas_pricing import (
     print_own_total_cents,
     print_gallery_total_cents,
     TEMPLATE_PRICE_CENTS,
+    PRINT_OWN_BASE_CENTS,
+    PRINT_GALLERY_BASE_CENTS,
 )
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
@@ -200,6 +203,71 @@ def create_gallery_print_checkout(
         "shipping_options": _SHIPPING_OPTIONS,
         "shipping_address_collection": {"allowed_countries": ["US"]},
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
+        "metadata": metadata,
+    }
+    if coupon_id:
+        session_params["discounts"] = [{"coupon": coupon_id}]
+
+    session = stripe.checkout.Session.create(**session_params)
+    return session.client_secret
+
+
+def create_cart_checkout(items: list[dict], user_id: str) -> str:
+    line_items = []
+    metadata: dict = {"type": "cart", "user_id": user_id, "item_count": str(len(items))}
+    subtotal_for_credit = 0
+
+    for i, item in enumerate(items):
+        canvas = get_canvas_for_design(item["width_inches"], item["height_inches"])
+        has_creator = bool(item.get("creator_user_id"))
+        base = PRINT_GALLERY_BASE_CENTS if has_creator else PRINT_OWN_BASE_CENTS
+        qty = item.get("quantity", 1)
+        unit = base + canvas["price_cents"]
+        subtotal_for_credit += unit * qty
+
+        line_items.append({
+            "price_data": {
+                "currency": "usd",
+                "unit_amount": unit,
+                "product_data": {
+                    "name": f"Needlepoint canvas print — {canvas['label']}\"",
+                    "description": f"{item['width_inches']}\" × {item['height_inches']}\" · {canvas['label']}\" canvas",
+                },
+            },
+            "quantity": qty,
+        })
+
+        item_meta: dict = {
+            "w": item["width_inches"],
+            "h": item["height_inches"],
+            "qty": qty,
+            "b": base,
+            "cv": canvas["price_cents"],
+        }
+        ip = item.get("internal_pdf_supabase_path")
+        if ip:
+            item_meta["ip"] = ip
+        else:
+            item_meta["pdf"] = item["pdf_url"]
+        if has_creator:
+            item_meta["gi"] = item.get("creator_gallery_item_id", "")
+            item_meta["cu"] = item["creator_user_id"]
+
+        metadata[f"item_{i}"] = json.dumps(item_meta)
+
+    coupon_id, applied_cents = _apply_canvas_credit(user_id, subtotal_for_credit)
+    if applied_cents:
+        metadata["applied_credit_user_id"] = user_id
+        metadata["applied_credit_cents"] = str(applied_cents)
+
+    session_params: dict = {
+        "payment_method_types": ["card"],
+        "line_items": line_items,
+        "mode": "payment",
+        "ui_mode": "embedded_page",
+        "shipping_options": _SHIPPING_OPTIONS,
+        "shipping_address_collection": {"allowed_countries": ["US"]},
+        "return_url": f"{FRONTEND_URL}/studio?order=success",
         "metadata": metadata,
     }
     if coupon_id:

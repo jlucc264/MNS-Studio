@@ -177,6 +177,20 @@ class CheckoutResponse(BaseModel):
     client_secret: str
 
 
+class CartCheckoutItem(BaseModel):
+    pdf_url: str
+    internal_pdf_supabase_path: Optional[str] = None
+    width_inches: float
+    height_inches: float
+    quantity: int = 1
+    gallery_item_id: Optional[str] = None
+    parent_gallery_item_id: Optional[str] = None
+
+
+class CartCheckoutRequest(BaseModel):
+    items: list[CartCheckoutItem]
+
+
 class GalleryCreateRequest(BaseModel):
     title: str
     tags: list[str] = []
