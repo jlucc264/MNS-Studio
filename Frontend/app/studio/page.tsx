@@ -27,6 +27,7 @@ import { NavAccountControls } from '../../components/NavAccountControls'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, useCart } from '../../lib/cart'
+import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import {
   assetUrl,
   CanvasContext,
@@ -449,6 +450,7 @@ function StudioPage() {
   const [showCartDrawer, setShowCartDrawer] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const { count: cartCount } = useCart()
+  const pendingCents = useCanvasCredit(session?.access_token)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
@@ -3413,6 +3415,14 @@ function StudioPage() {
             title="Tutorial"
             style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >?</button>
+          {pendingCents !== null && pendingCents > 0 && (
+            <span
+              title="Canvas credit available"
+              style={{ background: '#e8f0e6', color: '#4a7244', border: '1px solid #c5d9c2', borderRadius: 12, padding: '2px 9px', fontSize: 12, fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}
+            >
+              {formatCents(pendingCents)} credit
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setShowCartDrawer(true)}
@@ -4610,6 +4620,7 @@ function StudioPage() {
         onClose={() => setShowCartDrawer(false)}
         accessToken={session?.access_token ?? null}
         onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
+        pendingCents={pendingCents}
       />
       {saveStatus !== 'idle' && (
         <div style={{

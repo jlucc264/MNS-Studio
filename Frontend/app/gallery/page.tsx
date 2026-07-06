@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import Image from 'next/image'
-import { type CSSProperties, useEffect, useMemo, useState, Suspense } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
@@ -10,6 +10,7 @@ import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, useCart } from '../../lib/cart'
+import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
@@ -173,6 +174,7 @@ function GalleryPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { session, user, signOut } = useAuth()
+  const handledUrlItemRef = useRef<string | null>(null)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'recent' | 'popular'>('recent')
@@ -189,6 +191,7 @@ function GalleryPage() {
   const [addedToCartId, setAddedToCartId] = useState<string | null>(null)
   const [hasActiveDesign, setHasActiveDesign] = useState(false)
   const { count: cartCount } = useCart()
+  const pendingCents = useCanvasCredit(session?.access_token)
   const [activeDraftName, setActiveDraftName] = useState('Untitled')
   const [shareToast, setShareToast] = useState(false)
 
@@ -248,9 +251,10 @@ function GalleryPage() {
 
   useEffect(() => {
     const itemId = searchParams.get('item')
-    if (!itemId || items.length === 0) return
+    if (!itemId || items.length === 0 || handledUrlItemRef.current === itemId) return
+    handledUrlItemRef.current = itemId
     const found = items.find((i) => i.id === itemId)
-    if (found) setSelectedPreview(found)
+    if (found) setSelectedPreview(prev => prev ?? found)
   }, [searchParams, items])
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
@@ -414,6 +418,14 @@ function GalleryPage() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, flexShrink: 0 }}>
+          {pendingCents !== null && pendingCents > 0 && (
+            <span
+              title="Canvas credit available"
+              style={{ background: '#e8f0e6', color: '#4a7244', border: '1px solid #c5d9c2', borderRadius: 12, padding: '2px 9px', fontSize: 12, fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}
+            >
+              {formatCents(pendingCents)} credit
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setShowCartDrawer(true)}
@@ -907,6 +919,7 @@ function GalleryPage() {
                 minHeight: 0,
                 display: 'grid',
                 gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 320px',
+                gridTemplateRows: 'minmax(0, 1fr)',
                 background: isMobile ? '#1a1714' : '#f8f4ec',
                 borderRadius: isMobile ? 0 : 10,
                 overflow: 'hidden',
@@ -916,22 +929,31 @@ function GalleryPage() {
             >
               <div
                 style={{
-                  minHeight: 0,
-                  display: 'grid',
-                  placeItems: 'center',
-                  padding: isMobile ? 12 : 20,
-                  boxSizing: 'border-box',
                   position: 'relative',
+                  height: '100%',
                   overflow: 'hidden',
                   minWidth: 0,
-                  height: '100%',
                 }}
               >
-                <GalleryImage
-                  src={resolveMaybeAssetUrl(selectedPreview.preview_image_url)}
-                  alt={selectedPreview.title}
-                  inset={isMobile ? 12 : 20}
-                />
+                {resolveMaybeAssetUrl(selectedPreview.preview_image_url) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={selectedPreview.id}
+                    src={resolveMaybeAssetUrl(selectedPreview.preview_image_url)!}
+                    alt={selectedPreview.title}
+                    style={{
+                      position: 'absolute',
+                      inset: isMobile ? 12 : 20,
+                      width: `calc(100% - ${isMobile ? 24 : 40}px)`,
+                      height: `calc(100% - ${isMobile ? 24 : 40}px)`,
+                      objectFit: 'contain',
+                      objectPosition: 'center',
+                      display: 'block',
+                    }}
+                  />
+                ) : (
+                  <span style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: isMobile ? '#b0a898' : '#8a8177', fontSize: 13 }}>No preview available</span>
+                )}
               </div>
               {!isMobile && (
                 <aside
@@ -1081,6 +1103,7 @@ function GalleryPage() {
                                   overflow: 'hidden',
                                   cursor: 'pointer',
                                   background: '#f0ece5',
+                                  position: 'relative',
                                 }}
                               >
                                 <GalleryImage
@@ -1372,6 +1395,7 @@ function GalleryPage() {
         onClose={() => setShowCartDrawer(false)}
         accessToken={session?.access_token ?? null}
         onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
+        pendingCents={pendingCents}
       />
     </div>
   )

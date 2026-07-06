@@ -10,9 +10,10 @@ interface Props {
   onClose: () => void
   accessToken: string | null
   onCheckoutReady: (clientSecret: string) => void
+  pendingCents: number | null
 }
 
-export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady }: Props) {
+export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady, pendingCents }: Props) {
   const [items, setItems] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -66,6 +67,8 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
 
   const subtotal = cartSubtotal(items)
   const total = cartTotal(items)
+  const credit = pendingCents && pendingCents > 0 ? Math.min(pendingCents, total) : 0
+  const totalAfterCredit = total - credit
   const itemCount = items.reduce((s, i) => s + i.quantity, 0)
 
   const btn: React.CSSProperties = {
@@ -149,8 +152,13 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#5f574f' }}>
               <span>Shipping (Standard, 5–7 days)</span><span>{formatCents(CART_SHIPPING_CENTS)}</span>
             </div>
+            {credit > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#4a7244' }}>
+                <span>Canvas credit</span><span>−{formatCents(credit)}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16, borderTop: '1px solid #e7e1d8', paddingTop: 10, marginTop: 2 }}>
-              <span>Total</span><span>{formatCents(total)}</span>
+              <span>Total</span><span>{formatCents(totalAfterCredit)}</span>
             </div>
             {error && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{error}</p>}
             {!accessToken && (
