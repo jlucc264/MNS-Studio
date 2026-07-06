@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { type CSSProperties, useEffect, useMemo, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { AuthPanel } from '../../components/AuthPanel'
@@ -122,12 +123,14 @@ function designSpecs(item: GalleryItem) {
 function GalleryImage({
   src,
   alt,
-  style,
+  inset = 0,
+  fit = 'contain',
   placeholderText = 'Preview unavailable',
 }: {
   src: string | null
   alt: string
-  style: CSSProperties
+  inset?: number
+  fit?: 'contain' | 'cover'
   placeholderText?: string
 }) {
   const [failed, setFailed] = useState(false)
@@ -136,7 +139,8 @@ function GalleryImage({
     return (
       <span
         style={{
-          ...style,
+          position: 'absolute',
+          inset,
           display: 'grid',
           placeItems: 'center',
           color: '#8a8177',
@@ -152,13 +156,16 @@ function GalleryImage({
   }
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={alt}
-      onError={() => setFailed(true)}
-      style={style}
-    />
+    <div style={{ position: 'absolute', inset }}>
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        sizes="(max-width: 768px) 40vw, 22vw"
+        style={{ objectFit: fit, objectPosition: 'center' }}
+        onError={() => setFailed(true)}
+      />
+    </div>
   )
 }
 
@@ -560,15 +567,8 @@ function GalleryPage() {
                   <GalleryImage
                     src={resolveMaybeAssetUrl(item.preview_image_url)}
                     alt={item.title}
+                    inset={6}
                     placeholderText="No preview"
-                    style={{
-                      position: 'absolute',
-                      inset: 6,
-                      width: 'calc(100% - 12px)',
-                      height: 'calc(100% - 12px)',
-                      objectFit: 'contain',
-                      objectPosition: 'center center',
-                    }}
                   />
                   <span
                     style={{
@@ -710,15 +710,6 @@ function GalleryPage() {
                       <GalleryImage
                         src={resolveMaybeAssetUrl(item.preview_image_url)}
                         alt={item.title}
-                        style={{
-                          display: 'block',
-                          position: 'absolute',
-                          inset: 0,
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'contain',
-                          objectPosition: 'center center',
-                        }}
                       />
                       {(() => {
                         const isNew = Date.now() - new Date(item.created_at).getTime() < sevenDaysMs
@@ -940,15 +931,7 @@ function GalleryPage() {
                 <GalleryImage
                   src={resolveMaybeAssetUrl(selectedPreview.preview_image_url)}
                   alt={selectedPreview.title}
-                  style={{
-                    display: 'block',
-                    position: 'absolute',
-                    inset: isMobile ? 12 : 20,
-                    width: isMobile ? 'calc(100% - 24px)' : 'calc(100% - 40px)',
-                    height: isMobile ? 'calc(100% - 24px)' : 'calc(100% - 40px)',
-                    objectFit: 'contain',
-                    objectPosition: 'center center',
-                  }}
+                  inset={isMobile ? 12 : 20}
                 />
               </div>
               {!isMobile && (
@@ -1104,7 +1087,7 @@ function GalleryPage() {
                                 <GalleryImage
                                   src={moreItem.preview_image_url}
                                   alt={moreItem.title}
-                                  style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+                                  fit="cover"
                                 />
                               </button>
                             ))}
