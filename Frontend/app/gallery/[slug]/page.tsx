@@ -377,7 +377,7 @@ export default function CreatorProfilePage() {
                   ))}
                 </div>
                 <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
-                  Each sale earns 18% of the sale price as canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
+                  Each sale earns 20% of the sale price as canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
                 </p>
               </div>
             )}

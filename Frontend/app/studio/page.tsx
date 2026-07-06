@@ -3153,7 +3153,7 @@ function StudioPage() {
           </a>
           {parentGalleryItemId && (
             <div style={{ background: '#f0ece5', border: '1px solid #ddd5c8', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#5f574f' }}>
-              Working from a gallery template · print includes 18% creator credit
+              Working from a gallery template · print includes 20% creator credit
             </div>
           )}
           {!isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches) && (
@@ -4119,7 +4119,7 @@ function StudioPage() {
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
         const printable = isDesignPrintable(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
-        const printBase = parentGalleryItemId ? 1700 : 1200
+        const printBase = parentGalleryItemId ? 1200 : 700
         const printTotal = canvas ? printBase + canvas.priceCents : null
         return (
           <div
@@ -4151,7 +4151,7 @@ function StudioPage() {
                       <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
                       <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
                       {parentGalleryItemId && (
-                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 18% creator credit</div>
+                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 20% creator credit</div>
                       )}
                     </div>
                   ) : null}
@@ -4170,7 +4170,7 @@ function StudioPage() {
                   <div>
                     <strong style={{ fontSize: 15 }}>Share to gallery</strong>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
-                      Let the MNS community see your work. If someone buys your design, earn 18% of the sale in canvas credit!
+                      Let the MNS community see your work. If someone buys your design, earn 20% of the sale in canvas credit!
                     </p>
                   </div>
                   <div style={{ fontSize: 13, color: '#5f574f' }}>
@@ -4517,7 +4517,7 @@ function StudioPage() {
         const bW = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0)
         const bH = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0)
         const bCanvas = lastSettings ? getCanvasForDesign(bW, bH) : null
-        const bBase = parentGalleryItemId ? 1700 : 1200
+        const bBase = parentGalleryItemId ? 1200 : 700
         const bShipping = 700
         const bTotal = bCanvas ? bBase + bCanvas.priceCents + bShipping : null
         return (
@@ -4548,7 +4548,7 @@ function StudioPage() {
                     </div>
                     {parentGalleryItemId && (
                       <div style={{ fontSize: 12, color: '#8a8177', borderTop: '1px solid #e7e1d8', paddingTop: 8 }}>
-                        Includes 18% creator credit for the original designer
+                        Includes 20% creator credit for the original designer
                       </div>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16, borderTop: '1px solid #e7e1d8', paddingTop: 10 }}>

@@ -187,7 +187,7 @@ export default function TermsPage() {
             </Sub>
             <Sub title="5.2 Royalty Rate">
               <p style={p}>
-                Creators earn 18% of the sale price for each Product sold featuring their design. MNS Studio reserves the right
+                Creators earn 20% of the sale price for each Product sold featuring their design. MNS Studio reserves the right
                 to adjust royalty rates with reasonable advance notice. Rate changes will not apply to orders already placed
                 before the change takes effect.
               </p>

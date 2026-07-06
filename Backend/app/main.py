@@ -675,7 +675,7 @@ def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item
         "creator_user_id": creator_user_id,
         "gallery_item_id": gallery_item_id,
         "order_type": order_type,
-        "amount_cents": round(sale_amount_cents * 0.18),
+        "amount_cents": round(sale_amount_cents * 0.20),
         "paid_out": False,
     })
 

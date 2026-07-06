@@ -117,7 +117,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
                   })()}
                   <div style={{ fontSize: 12, color: '#8a8177', marginTop: 2 }}>{item.canvas_label} canvas</div>
                   {(item.gallery_item_id ?? item.parent_gallery_item_id) && (
-                    <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>Includes 18% creator credit</div>
+                    <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>Includes 20% creator credit</div>
                   )}
                 </div>
                 <div style={{ fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
