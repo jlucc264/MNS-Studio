@@ -1,4 +1,5 @@
 import { AuthProvider } from '../components/AuthProvider'
+import { Analytics } from '@vercel/analytics/next'
 
 export const metadata = {
   title: 'MNS Studio',
@@ -24,6 +25,7 @@ export default function RootLayout({
         }}
       >
         <AuthProvider>{children}</AuthProvider>
+        <Analytics />
       </body>
     </html>
   )
