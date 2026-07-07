@@ -82,7 +82,7 @@ def create_print_own_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "payment_method_types": ["card"],
+        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -131,7 +131,7 @@ def create_template_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "payment_method_types": ["card"],
+        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -183,7 +183,7 @@ def create_gallery_print_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "payment_method_types": ["card"],
+        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -261,13 +261,13 @@ def create_cart_checkout(items: list[dict], user_id: str) -> str:
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "payment_method_types": ["card"],
+        "automatic_payment_methods": {"enabled": True},
         "line_items": line_items,
         "mode": "payment",
         "ui_mode": "embedded_page",
         "shipping_options": _SHIPPING_OPTIONS,
         "shipping_address_collection": {"allowed_countries": ["US"]},
-        "return_url": f"{FRONTEND_URL}/studio?order=success",
+        "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }
     if coupon_id:
