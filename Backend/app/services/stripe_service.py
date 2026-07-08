@@ -82,7 +82,6 @@ def create_print_own_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -131,7 +130,6 @@ def create_template_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -183,7 +181,6 @@ def create_gallery_print_checkout(
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "automatic_payment_methods": {"enabled": True},
         "line_items": [{
             "price_data": {
                 "currency": "usd",
@@ -261,7 +258,6 @@ def create_cart_checkout(items: list[dict], user_id: str) -> str:
         metadata["applied_credit_cents"] = str(applied_cents)
 
     session_params: dict = {
-        "automatic_payment_methods": {"enabled": True},
         "line_items": line_items,
         "mode": "payment",
         "ui_mode": "embedded_page",
