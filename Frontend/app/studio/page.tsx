@@ -26,7 +26,7 @@ import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
-import { cartAdd, useCart } from '../../lib/cart'
+import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import {
   assetUrl,
@@ -753,6 +753,10 @@ function StudioPage() {
       // project load failed silently — user starts fresh
     })
   }, [searchParams, session?.access_token])
+
+  useEffect(() => {
+    if (searchParams.get('order') === 'success') cartClear()
+  }, [searchParams])
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 

@@ -9,7 +9,7 @@ import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
-import { cartAdd, useCart } from '../../lib/cart'
+import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
@@ -257,6 +257,10 @@ function GalleryPage() {
     if (found) setSelectedPreview(prev => prev ?? found)
   }, [searchParams, items])
 
+  useEffect(() => {
+    if (searchParams.get('order') === 'success') cartClear()
+  }, [searchParams])
+
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
   async function handleUseTemplate(item: GalleryItem) {
@@ -333,6 +337,7 @@ function GalleryPage() {
       parent_gallery_item_id: null,
       project_id: null,
     })
+    setSelectedPreview(null)
     setAddedToCartId(item.id)
     setTimeout(() => setAddedToCartId(null), 2000)
   }
