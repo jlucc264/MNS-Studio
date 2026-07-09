@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { loadStripe, type Appearance } from '@stripe/stripe-js'
 import {
   Elements,
+  ExpressCheckoutElement,
   PaymentElement,
   AddressElement,
   useStripe,
@@ -16,11 +17,12 @@ const appearance: Appearance = {
   theme: 'stripe',
   variables: {
     colorPrimary: '#4a7244',
-    colorBackground: '#fffdf8',
+    colorBackground: '#ffffff',
     fontFamily: 'inherit',
     borderRadius: '6px',
     colorText: '#3f382f',
     colorTextSecondary: '#5f574f',
+    spacingUnit: '4px',
   },
 }
 
@@ -35,68 +37,89 @@ function CheckoutForm({ onClose, returnPath }: { onClose: () => void; returnPath
   const elements = useElements()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [expressReady, setExpressReady] = useState(false)
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  async function confirm() {
     if (!stripe || !elements) return
     setLoading(true)
     setError('')
-
     const { error: confirmError } = await stripe.confirmPayment({
       elements,
       confirmParams: {
         return_url: `${window.location.origin}${returnPath}`,
       },
     })
-
     if (confirmError) {
       setError(confirmError.message ?? 'Payment failed. Please try again.')
       setLoading(false)
     }
   }
 
-  const label: React.CSSProperties = {
-    margin: '0 0 8px',
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#3f382f',
-    display: 'block',
+  const sectionLabel: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    color: '#8a8177',
+    margin: '0 0 10px',
   }
 
-  const btn: React.CSSProperties = {
-    width: '100%',
-    border: 'none',
-    borderRadius: 8,
-    padding: '13px 20px',
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  }
+  const divider = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '4px 0' }}>
+      <div style={{ flex: 1, height: 1, background: '#e7e1d8' }} />
+      <span style={{ fontSize: 12, color: '#8a8177', flexShrink: 0 }}>or pay with card</span>
+      <div style={{ flex: 1, height: 1, background: '#e7e1d8' }} />
+    </div>
+  )
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} style={{ display: 'grid', gap: 20 }}>
+    <div style={{ display: 'grid', gap: 20 }}>
+      {/* Express checkout (Apple Pay, Google Pay) */}
+      <div style={{ display: expressReady ? 'block' : 'none' }}>
+        <ExpressCheckoutElement
+          onConfirm={() => void confirm()}
+          onReady={({ availablePaymentMethods }) => {
+            if (availablePaymentMethods && Object.keys(availablePaymentMethods).length > 0) {
+              setExpressReady(true)
+            }
+          }}
+          options={{ buttonType: { applePay: 'buy', googlePay: 'buy' } }}
+        />
+      </div>
+
+      {expressReady && divider}
+
+      {/* Shipping address */}
       <div>
-        <span style={label}>Shipping address</span>
+        <p style={sectionLabel}>Shipping address</p>
         <AddressElement options={{ mode: 'shipping', allowedCountries: ['US'] }} />
       </div>
+
+      {/* Card payment */}
       <div>
-        <span style={label}>Payment</span>
-        <PaymentElement options={{ layout: 'accordion' }} />
+        <p style={sectionLabel}>Payment details</p>
+        <PaymentElement options={{ layout: 'tabs' }} />
       </div>
-      {error && (
-        <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{error}</p>
-      )}
-      <div style={{ display: 'grid', gap: 8 }}>
+
+      {error && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{error}</p>}
+
+      <div style={{ display: 'grid', gap: 8, paddingTop: 4 }}>
         <button
-          type="submit"
+          type="button"
+          onClick={() => void confirm()}
           disabled={loading || !stripe}
           style={{
-            ...btn,
+            width: '100%',
             background: '#4a7244',
             color: '#fff',
-            opacity: loading || !stripe ? 0.65 : 1,
+            border: 'none',
+            borderRadius: 8,
+            padding: '13px 20px',
+            fontSize: 15,
+            fontWeight: 600,
             cursor: loading || !stripe ? 'not-allowed' : 'pointer',
+            opacity: loading || !stripe ? 0.65 : 1,
+            fontFamily: 'inherit',
           }}
         >
           {loading ? 'Processing…' : 'Place order'}
@@ -105,17 +128,21 @@ function CheckoutForm({ onClose, returnPath }: { onClose: () => void; returnPath
           type="button"
           onClick={onClose}
           style={{
-            ...btn,
+            width: '100%',
             background: 'none',
             border: '1px solid #d7d0c8',
-            color: '#5f574f',
+            borderRadius: 8,
+            padding: '11px 20px',
             fontSize: 14,
+            color: '#5f574f',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
           }}
         >
           Cancel
         </button>
       </div>
-    </form>
+    </div>
   )
 }
 
@@ -143,11 +170,10 @@ export default function CheckoutModal({ clientSecret, onClose, returnPath }: Pro
         background: '#fffdf8',
         borderRadius: 12,
         width: '100%',
-        maxWidth: 480,
+        maxWidth: 460,
         maxHeight: '90vh',
         overflowY: 'auto',
         boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
-        position: 'relative',
       }}>
         <div style={{
           padding: '18px 24px 14px',
@@ -155,6 +181,10 @@ export default function CheckoutModal({ clientSecret, onClose, returnPath }: Pro
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          position: 'sticky',
+          top: 0,
+          background: '#fffdf8',
+          zIndex: 1,
         }}>
           <h2 style={{ margin: 0, fontSize: 18, color: '#3f382f' }}>Checkout</h2>
           <button
