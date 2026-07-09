@@ -13,36 +13,21 @@ from .canvas_pricing import (
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-_SHIPPING_OPTIONS = [{
-    "shipping_rate_data": {
-        "type": "fixed_amount",
-        "fixed_amount": {"amount": 700, "currency": "usd"},
-        "display_name": "Standard Shipping",
-        "delivery_estimate": {
-            "minimum": {"unit": "business_day", "value": 5},
-            "maximum": {"unit": "business_day", "value": 7},
-        },
-    },
-}]
+SHIPPING_CENTS = 700
 
 
 def _cents_to_display(cents: int) -> str:
     return f"${cents / 100:.2f}".replace(".00", "")
 
 
-def _apply_canvas_credit(buyer_user_id: str | None, total_cents: int) -> tuple[str | None, int]:
+def _apply_canvas_credit(buyer_user_id: str | None, total_cents: int) -> int:
     if not buyer_user_id:
-        return None, 0
+        return 0
     from .supabase_db import get_creator_earnings
     pending = get_creator_earnings(buyer_user_id).get("pending_cents", 0)
     if pending <= 0:
-        return None, 0
-    apply = min(pending, max(0, total_cents - 50))
-    if apply <= 0:
-        return None, 0
-    coupon = stripe.Coupon.create(amount_off=apply, currency="usd", duration="once")
-    return coupon.id, apply
+        return 0
+    return max(0, min(pending, max(0, total_cents - 50)))
 
 
 def create_print_own_checkout(
@@ -55,12 +40,11 @@ def create_print_own_checkout(
     internal_pdf_supabase_path: str | None = None,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
-
     is_remixed = bool(gallery_item_id and creator_user_id)
-    total = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
-    name = f"Custom needlepoint canvas print — {canvas['label']}\""
-    if is_remixed:
-        name += " (remixed template)"
+    print_price = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
+    subtotal = print_price + SHIPPING_CENTS
+    credit = _apply_canvas_credit(user_id, subtotal)
+    amount = subtotal - credit
 
     metadata: dict = {
         "type": "print_gallery" if is_remixed else "print_own",
@@ -69,45 +53,24 @@ def create_print_own_checkout(
         "width_inches": str(width_inches),
         "height_inches": str(height_inches),
         "user_id": user_id,
+        "print_subtotal_cents": str(print_price),
     }
     if is_remixed:
         metadata["gallery_item_id"] = gallery_item_id
         metadata["creator_user_id"] = creator_user_id
     if internal_pdf_supabase_path:
         metadata["internal_pdf_supabase_path"] = internal_pdf_supabase_path
-
-    coupon_id, applied_cents = _apply_canvas_credit(user_id, total)
-    if applied_cents:
+    if credit:
         metadata["applied_credit_user_id"] = user_id
-        metadata["applied_credit_cents"] = str(applied_cents)
+        metadata["applied_credit_cents"] = str(credit)
 
-    session_params: dict = {
-        "line_items": [{
-            "price_data": {
-                "currency": "usd",
-                "unit_amount": total,
-                "product_data": {
-                    "name": name,
-                    "description": (
-                        f"{width_inches}\" × {height_inches}\" design on a "
-                        f"{canvas['label']}\" canvas · includes PDF report"
-                    ),
-                },
-            },
-            "quantity": 1,
-        }],
-        "mode": "payment",
-        "ui_mode": "embedded_page",
-        "shipping_options": _SHIPPING_OPTIONS,
-        "shipping_address_collection": {"allowed_countries": ["US"]},
-        "return_url": f"{FRONTEND_URL}/studio?order=success",
-        "metadata": metadata,
-    }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
-
-    session = stripe.checkout.Session.create(**session_params)
-    return session.client_secret
+    intent = stripe.PaymentIntent.create(
+        amount=amount,
+        currency="usd",
+        automatic_payment_methods={"enabled": True},
+        metadata=metadata,
+    )
+    return intent.client_secret
 
 
 def create_template_checkout(
@@ -117,40 +80,28 @@ def create_template_checkout(
     pdf_url: str,
     buyer_user_id: str | None = None,
 ) -> str:
-    metadata = {
+    credit = _apply_canvas_credit(buyer_user_id, TEMPLATE_PRICE_CENTS)
+    amount = TEMPLATE_PRICE_CENTS - credit
+
+    metadata: dict = {
         "type": "template",
         "gallery_item_id": gallery_item_id,
         "creator_user_id": creator_user_id,
         "pdf_url": pdf_url,
         "title": gallery_item_title,
+        "print_subtotal_cents": str(TEMPLATE_PRICE_CENTS),
     }
-    coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, TEMPLATE_PRICE_CENTS)
-    if applied_cents:
+    if credit:
         metadata["applied_credit_user_id"] = buyer_user_id
-        metadata["applied_credit_cents"] = str(applied_cents)
+        metadata["applied_credit_cents"] = str(credit)
 
-    session_params: dict = {
-        "line_items": [{
-            "price_data": {
-                "currency": "usd",
-                "unit_amount": TEMPLATE_PRICE_CENTS,
-                "product_data": {
-                    "name": f"Needlepoint template: {gallery_item_title}",
-                    "description": "Finalized PDF pattern with color palette and stitch counts",
-                },
-            },
-            "quantity": 1,
-        }],
-        "mode": "payment",
-        "ui_mode": "embedded_page",
-        "return_url": f"{FRONTEND_URL}/gallery?order=success",
-        "metadata": metadata,
-    }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
-
-    session = stripe.checkout.Session.create(**session_params)
-    return session.client_secret
+    intent = stripe.PaymentIntent.create(
+        amount=amount,
+        currency="usd",
+        automatic_payment_methods={"enabled": True},
+        metadata=metadata,
+    )
+    return intent.client_secret
 
 
 def create_gallery_print_checkout(
@@ -163,9 +114,12 @@ def create_gallery_print_checkout(
     buyer_user_id: str | None = None,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
-    total = print_gallery_total_cents(canvas)
+    print_price = print_gallery_total_cents(canvas)
+    subtotal = print_price + SHIPPING_CENTS
+    credit = _apply_canvas_credit(buyer_user_id, subtotal)
+    amount = subtotal - credit
 
-    metadata = {
+    metadata: dict = {
         "type": "print_gallery",
         "gallery_item_id": gallery_item_id,
         "creator_user_id": creator_user_id,
@@ -174,43 +128,22 @@ def create_gallery_print_checkout(
         "title": gallery_item_title,
         "width_inches": str(width_inches),
         "height_inches": str(height_inches),
+        "print_subtotal_cents": str(print_price),
     }
-    coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, total)
-    if applied_cents:
+    if credit:
         metadata["applied_credit_user_id"] = buyer_user_id
-        metadata["applied_credit_cents"] = str(applied_cents)
+        metadata["applied_credit_cents"] = str(credit)
 
-    session_params: dict = {
-        "line_items": [{
-            "price_data": {
-                "currency": "usd",
-                "unit_amount": total,
-                "product_data": {
-                    "name": f"Needlepoint canvas print: {gallery_item_title} — {canvas['label']}\"",
-                    "description": (
-                        f"{width_inches}\" × {height_inches}\" design on a "
-                        f"{canvas['label']}\" canvas · includes PDF report"
-                    ),
-                },
-            },
-            "quantity": 1,
-        }],
-        "mode": "payment",
-        "ui_mode": "embedded_page",
-        "shipping_options": _SHIPPING_OPTIONS,
-        "shipping_address_collection": {"allowed_countries": ["US"]},
-        "return_url": f"{FRONTEND_URL}/gallery?order=success",
-        "metadata": metadata,
-    }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
-
-    session = stripe.checkout.Session.create(**session_params)
-    return session.client_secret
+    intent = stripe.PaymentIntent.create(
+        amount=amount,
+        currency="usd",
+        automatic_payment_methods={"enabled": True},
+        metadata=metadata,
+    )
+    return intent.client_secret
 
 
 def create_cart_checkout(items: list[dict], user_id: str) -> str:
-    line_items = []
     metadata: dict = {"type": "cart", "user_id": user_id, "item_count": str(len(items))}
     subtotal_for_credit = 0
 
@@ -221,18 +154,6 @@ def create_cart_checkout(items: list[dict], user_id: str) -> str:
         qty = item.get("quantity", 1)
         unit = base + canvas["price_cents"]
         subtotal_for_credit += unit * qty
-
-        line_items.append({
-            "price_data": {
-                "currency": "usd",
-                "unit_amount": unit,
-                "product_data": {
-                    "name": f"Needlepoint canvas print — {canvas['label']}\"",
-                    "description": f"{item['width_inches']}\" × {item['height_inches']}\" · {canvas['label']}\" canvas",
-                },
-            },
-            "quantity": qty,
-        })
 
         item_meta: dict = {
             "w": item["width_inches"],
@@ -252,22 +173,19 @@ def create_cart_checkout(items: list[dict], user_id: str) -> str:
 
         metadata[f"item_{i}"] = json.dumps(item_meta)
 
-    coupon_id, applied_cents = _apply_canvas_credit(user_id, subtotal_for_credit)
-    if applied_cents:
+    total = subtotal_for_credit + SHIPPING_CENTS
+    credit = _apply_canvas_credit(user_id, total)
+    amount = total - credit
+
+    metadata["print_subtotal_cents"] = str(subtotal_for_credit)
+    if credit:
         metadata["applied_credit_user_id"] = user_id
-        metadata["applied_credit_cents"] = str(applied_cents)
+        metadata["applied_credit_cents"] = str(credit)
 
-    session_params: dict = {
-        "line_items": line_items,
-        "mode": "payment",
-        "ui_mode": "embedded_page",
-        "shipping_options": _SHIPPING_OPTIONS,
-        "shipping_address_collection": {"allowed_countries": ["US"]},
-        "return_url": f"{FRONTEND_URL}/gallery?order=success",
-        "metadata": metadata,
-    }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
-
-    session = stripe.checkout.Session.create(**session_params)
-    return session.client_secret
+    intent = stripe.PaymentIntent.create(
+        amount=amount,
+        currency="usd",
+        automatic_payment_methods={"enabled": True},
+        metadata=metadata,
+    )
+    return intent.client_secret

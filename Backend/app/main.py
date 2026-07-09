@@ -680,12 +680,21 @@ def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item
     })
 
 
-def _handle_completed_session(session: dict) -> None:
-    metadata = session.get("metadata") or {}
+def _handle_completed_session(pi: dict) -> None:
+    metadata = pi.get("metadata") or {}
     order_type = metadata.get("type", "")
-    customer_details = session.get("customer_details") or {}
-    customer_email = customer_details.get("email")
-    shipping = session.get("shipping_details")
+
+    customer_email = None
+    latest_charge_id = pi.get("latest_charge")
+    if latest_charge_id:
+        try:
+            import stripe as _stripe
+            charge = _stripe.Charge.retrieve(latest_charge_id)
+            customer_email = (charge.get("billing_details") or {}).get("email")
+        except Exception:
+            pass
+
+    shipping = pi.get("shipping")
 
     import urllib.request as _ur
 
@@ -732,25 +741,25 @@ def _handle_completed_session(session: dict) -> None:
             if gi and cu:
                 item_total = (item_meta.get("b", 0) + item_meta.get("cv", 0)) * item_meta.get("qty", 1)
                 try:
-                    _record_creator_earnings(f"{session['id']}_{i}", cu, gi, "cart", item_total)
+                    _record_creator_earnings(f"{pi['id']}_{i}", cu, gi, "cart", item_total)
                 except Exception:
-                    logger.exception("Failed to record cart creator earnings for session %s item %d", session.get("id"), i)
+                    logger.exception("Failed to record cart creator earnings for pi %s item %d", pi.get("id"), i)
 
     try:
         send_order_notification(order_type, metadata, customer_email, shipping,
                                 pdf_attachment_bytes=pdf_bytes, pdf_attachment_name=pdf_name,
                                 extra_attachments=cart_attachments if cart_attachments else None)
     except Exception:
-        logger.exception("Order notification email failed for session %s", session.get("id"))
+        logger.exception("Order notification email failed for pi %s", pi.get("id"))
 
     if order_type in {"template", "print_gallery"}:
         creator_user_id = metadata.get("creator_user_id", "")
         gallery_item_id = metadata.get("gallery_item_id", "")
         if creator_user_id and gallery_item_id:
             try:
-                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type, session.get("amount_total", 0))
+                _record_creator_earnings(pi["id"], creator_user_id, gallery_item_id, order_type, pi.get("amount", 0))
             except Exception:
-                logger.exception("Failed to record creator earnings for session %s", session.get("id"))
+                logger.exception("Failed to record creator earnings for pi %s", pi.get("id"))
 
     applied_credit_user_id = metadata.get("applied_credit_user_id")
     if applied_credit_user_id:
@@ -828,6 +837,6 @@ async def stripe_webhook(
         event = stripe_lib.Webhook.construct_event(payload, stripe_signature, webhook_secret)
     except (ValueError, stripe_lib.error.SignatureVerificationError):
         raise HTTPException(status_code=400, detail="Invalid webhook signature.")
-    if event["type"] == "checkout.session.completed":
+    if event["type"] == "payment_intent.succeeded":
         _handle_completed_session(event["data"]["object"])
     return {"received": True}

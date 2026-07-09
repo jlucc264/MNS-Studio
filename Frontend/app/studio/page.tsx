@@ -463,7 +463,7 @@ function StudioPage() {
   const [traceOpacity, setTraceOpacity] = useState(0)
   const [printCheckoutLoading, setPrintCheckoutLoading] = useState(false)
   const [printCheckoutError, setPrintCheckoutError] = useState('')
-  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
+  const [checkoutConfig, setCheckoutConfig] = useState<{ clientSecret: string; returnPath: string } | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
   const [dimensionLimitHit, setDimensionLimitHit] = useState(false)
   const [draftSaveError, setDraftSaveError] = useState('')
@@ -2534,7 +2534,7 @@ function StudioPage() {
         },
         session.access_token,
       )
-      setCheckoutClientSecret(client_secret)
+      setCheckoutConfig({ clientSecret: client_secret, returnPath: '/studio?order=success' })
     } catch (err) {
       setPrintCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
     } finally {
@@ -4613,17 +4613,18 @@ function StudioPage() {
         )
       })()}
 
-      {checkoutClientSecret && (
+      {checkoutConfig && (
         <CheckoutModal
-          clientSecret={checkoutClientSecret}
-          onClose={() => setCheckoutClientSecret(null)}
+          clientSecret={checkoutConfig.clientSecret}
+          returnPath={checkoutConfig.returnPath}
+          onClose={() => setCheckoutConfig(null)}
         />
       )}
       <CartDrawer
         open={showCartDrawer}
         onClose={() => setShowCartDrawer(false)}
         accessToken={session?.access_token ?? null}
-        onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
+        onCheckoutReady={(secret) => setCheckoutConfig({ clientSecret: secret, returnPath: '/gallery?order=success' })}
         pendingCents={pendingCents}
       />
       {saveStatus !== 'idle' && (

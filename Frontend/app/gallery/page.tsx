@@ -1392,6 +1392,7 @@ function GalleryPage() {
       {checkoutClientSecret && (
         <CheckoutModal
           clientSecret={checkoutClientSecret}
+          returnPath="/gallery?order=success"
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}

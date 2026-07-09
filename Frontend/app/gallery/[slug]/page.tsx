@@ -467,6 +467,7 @@ export default function CreatorProfilePage() {
       {checkoutClientSecret && (
         <CheckoutModal
           clientSecret={checkoutClientSecret}
+          returnPath="/gallery?order=success"
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}
