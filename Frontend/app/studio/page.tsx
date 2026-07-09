@@ -26,7 +26,7 @@ import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
-import { cartAdd, cartClear, useCart } from '../../lib/cart'
+import { cartAdd, cartClear, useCart, CART_SHIPPING_CENTS, PRINT_OWN_BASE_CENTS, PRINT_GALLERY_BASE_CENTS, type CheckoutSummary } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import {
   assetUrl,
@@ -463,7 +463,7 @@ function StudioPage() {
   const [traceOpacity, setTraceOpacity] = useState(0)
   const [printCheckoutLoading, setPrintCheckoutLoading] = useState(false)
   const [printCheckoutError, setPrintCheckoutError] = useState('')
-  const [checkoutConfig, setCheckoutConfig] = useState<{ clientSecret: string; returnPath: string } | null>(null)
+  const [checkoutConfig, setCheckoutConfig] = useState<{ clientSecret: string; returnPath: string; summary?: CheckoutSummary } | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
   const [dimensionLimitHit, setDimensionLimitHit] = useState(false)
   const [draftSaveError, setDraftSaveError] = useState('')
@@ -2534,7 +2534,20 @@ function StudioPage() {
         },
         session.access_token,
       )
-      setCheckoutConfig({ clientSecret: client_secret, returnPath: '/studio?order=success' })
+      const w = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings.width_inches)
+      const h = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings.height_inches)
+      const canvas = getCanvasForDesign(w, h)
+      const base = parentGalleryItemId ? PRINT_GALLERY_BASE_CENTS : PRINT_OWN_BASE_CENTS
+      const printCents = base + canvas.priceCents
+      const subtotal = printCents + CART_SHIPPING_CENTS
+      const creditCents = pendingCents ? Math.min(pendingCents, Math.max(0, subtotal - 50)) : 0
+      const summary: CheckoutSummary = {
+        lines: [{ label: `Needlepoint canvas — ${canvas.label}`, cents: printCents }],
+        shippingCents: CART_SHIPPING_CENTS,
+        creditCents,
+        totalCents: subtotal - creditCents,
+      }
+      setCheckoutConfig({ clientSecret: client_secret, returnPath: '/studio?order=success', summary })
     } catch (err) {
       setPrintCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
     } finally {
@@ -4617,6 +4630,7 @@ function StudioPage() {
         <CheckoutModal
           clientSecret={checkoutConfig.clientSecret}
           returnPath={checkoutConfig.returnPath}
+          summary={checkoutConfig.summary}
           onClose={() => setCheckoutConfig(null)}
         />
       )}
@@ -4624,7 +4638,7 @@ function StudioPage() {
         open={showCartDrawer}
         onClose={() => setShowCartDrawer(false)}
         accessToken={session?.access_token ?? null}
-        onCheckoutReady={(secret) => setCheckoutConfig({ clientSecret: secret, returnPath: '/gallery?order=success' })}
+        onCheckoutReady={(secret, summary) => setCheckoutConfig({ clientSecret: secret, returnPath: '/gallery?order=success', summary })}
         pendingCents={pendingCents}
       />
       {saveStatus !== 'idle' && (

@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react'
 
 export const CART_SHIPPING_CENTS = 700
+export const PRINT_OWN_BASE_CENTS = 1200
+export const PRINT_GALLERY_BASE_CENTS = 1700
+
+export interface CheckoutSummary {
+  lines: { label: string; cents: number }[]
+  shippingCents: number
+  creditCents: number
+  totalCents: number
+}
 
 export type CartItem = {
   id: string
