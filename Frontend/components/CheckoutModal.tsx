@@ -83,7 +83,10 @@ function CheckoutForm({ onClose, returnPath }: { onClose: () => void; returnPath
               setExpressReady(true)
             }
           }}
-          options={{ buttonType: { applePay: 'buy', googlePay: 'buy' } }}
+          options={{
+            buttonType: { applePay: 'buy', googlePay: 'buy' },
+            paymentMethods: { applePay: 'always', googlePay: 'always', link: 'auto', amazonPay: 'auto' },
+          }}
         />
       </div>
 
