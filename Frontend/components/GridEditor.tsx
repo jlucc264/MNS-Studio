@@ -1353,6 +1353,7 @@ export default function GridEditor({
       if (!pinchPointersRef.current.has(event.pointerId)) return
       pinchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
       if (pinchPointersRef.current.size !== 2) return
+      event.preventDefault()
       const [p1, p2] = Array.from(pinchPointersRef.current.values())
       const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
       if (pinchStartDistRef.current === null) {
@@ -1383,7 +1384,7 @@ export default function GridEditor({
       passive: false,
     })
     viewport.addEventListener('pointerdown', handleViewportPointerDown)
-    viewport.addEventListener('pointermove', handleViewportPointerMove, { passive: true })
+    viewport.addEventListener('pointermove', handleViewportPointerMove, { passive: false })
     viewport.addEventListener('pointerup', handleViewportPointerUp)
     viewport.addEventListener('pointercancel', handleViewportPointerUp)
 
@@ -1769,6 +1770,10 @@ export default function GridEditor({
         padding: 8,
         borderRadius: 12,
         gap: 8,
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        // @ts-ignore — non-standard but required for iOS Safari
+        WebkitTouchCallout: 'none',
       }}
     >
       <div
@@ -2033,7 +2038,7 @@ export default function GridEditor({
               minWidth: 0,
               overflowX: 'auto',
               overflowY: 'auto',
-              touchAction: 'pan-x pan-y',
+              touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || highlightSelection) ? 'none' : 'pan-x pan-y',
               overscrollBehavior: 'contain',
               WebkitOverflowScrolling: 'touch',
             }}
