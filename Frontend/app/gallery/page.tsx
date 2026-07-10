@@ -186,7 +186,7 @@ function GalleryPage() {
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
   const [viewportWidth, setViewportWidth] = useState(1200)
   const [checkoutError] = useState('')
-  const [checkoutConfig, setCheckoutConfig] = useState<{ clientSecret: string; summary: import('../../lib/cart').CheckoutSummary } | null>(null)
+  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [showCartDrawer, setShowCartDrawer] = useState(false)
   const [addedToCartId, setAddedToCartId] = useState<string | null>(null)
   const [hasActiveDesign, setHasActiveDesign] = useState(false)
@@ -1389,19 +1389,17 @@ function GalleryPage() {
         </div>
       )}
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
-      {checkoutConfig && (
+      {checkoutClientSecret && (
         <CheckoutModal
-          clientSecret={checkoutConfig.clientSecret}
-          returnPath="/gallery?order=success"
-          summary={checkoutConfig.summary}
-          onClose={() => setCheckoutConfig(null)}
+          clientSecret={checkoutClientSecret}
+          onClose={() => setCheckoutClientSecret(null)}
         />
       )}
       <CartDrawer
         open={showCartDrawer}
         onClose={() => setShowCartDrawer(false)}
         accessToken={session?.access_token ?? null}
-        onCheckoutReady={(secret, summary) => setCheckoutConfig({ clientSecret: secret, summary })}
+        onCheckoutReady={(secret) => setCheckoutClientSecret(secret)}
         pendingCents={pendingCents}
       />
     </div>

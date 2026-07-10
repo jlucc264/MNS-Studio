@@ -6,7 +6,6 @@ import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
 import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, isDesignPrintable, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
-import { CART_SHIPPING_CENTS, PRINT_GALLERY_BASE_CENTS, type CheckoutSummary } from '../../../lib/cart'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -117,7 +116,7 @@ export default function CreatorProfilePage() {
 
   const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
-  const [checkoutConfig, setCheckoutConfig] = useState<{ clientSecret: string; summary: CheckoutSummary } | null>(null)
+  const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
 
   const isOwnProfile = !!(profile && user && profile.user_id === user.id)
 
@@ -203,16 +202,7 @@ export default function CreatorProfilePage() {
     setCheckoutLoading('print')
     try {
       const { client_secret } = await createGalleryPrintCheckout(item.id)
-      const canvas = getCanvasForDesign(item.width_inches ?? 4, item.height_inches ?? 4)
-      const printCents = PRINT_GALLERY_BASE_CENTS + canvas.priceCents
-      const subtotal = printCents + CART_SHIPPING_CENTS
-      const summary: CheckoutSummary = {
-        lines: [{ label: item.title || `Needlepoint canvas — ${canvas.label}`, cents: printCents }],
-        shippingCents: CART_SHIPPING_CENTS,
-        creditCents: 0,
-        totalCents: subtotal,
-      }
-      setCheckoutConfig({ clientSecret: client_secret, summary })
+      setCheckoutClientSecret(client_secret)
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Could not start checkout.')
     } finally {
@@ -474,12 +464,10 @@ export default function CreatorProfilePage() {
         )}
       </main>
 
-      {checkoutConfig && (
+      {checkoutClientSecret && (
         <CheckoutModal
-          clientSecret={checkoutConfig.clientSecret}
-          returnPath="/gallery?order=success"
-          summary={checkoutConfig.summary}
-          onClose={() => setCheckoutConfig(null)}
+          clientSecret={checkoutClientSecret}
+          onClose={() => setCheckoutClientSecret(null)}
         />
       )}
 

@@ -3,13 +3,13 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { createCartCheckout, formatCents } from '../lib/api'
-import { cartRead, cartRemove, cartSetQty, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem, type CheckoutSummary } from '../lib/cart'
+import { cartRead, cartRemove, cartSetQty, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem } from '../lib/cart'
 
 interface Props {
   open: boolean
   onClose: () => void
   accessToken: string | null
-  onCheckoutReady: (clientSecret: string, summary: CheckoutSummary) => void
+  onCheckoutReady: (clientSecret: string) => void
   pendingCents: number | null
 }
 
@@ -46,17 +46,8 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
         })),
         accessToken,
       )
-      const summary: CheckoutSummary = {
-        lines: items.map(i => ({
-          label: i.quantity > 1 ? `${i.title} × ${i.quantity}` : i.title,
-          cents: (i.base_price_cents + i.canvas_price_cents) * i.quantity,
-        })),
-        shippingCents: CART_SHIPPING_CENTS,
-        creditCents: credit,
-        totalCents: totalAfterCredit,
-      }
       onClose()
-      onCheckoutReady(client_secret, summary)
+      onCheckoutReady(client_secret)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start checkout.')
     } finally {
