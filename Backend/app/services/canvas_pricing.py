@@ -13,9 +13,10 @@ TEMPLATE_PRICE_CENTS = 500        # $5
 # Creator earnings: 20% of sale amount_total, recorded in main.py _record_creator_earnings
 
 # Maximum printable design dimensions (short side × long side).
-# Corresponds to an 8×12 canvas with 1" stitching margin each side.
-_MAX_PRINT_SHORT_IN = 6.0
-_MAX_PRINT_LONG_IN = 10.0
+# Short side bounded by the 13" print roll; long side by the editor's
+# 20" canvas stage.
+_MAX_PRINT_SHORT_IN = 13.0
+_MAX_PRINT_LONG_IN = 20.0
 
 
 def is_design_printable(width_inches: float, height_inches: float) -> bool:

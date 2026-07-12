@@ -376,6 +376,33 @@ export async function importPatternImage(payload: ImportPatternPayload): Promise
   return res.json()
 }
 
+export type ImportStitchlyResponse = {
+  message: string
+  cells: string[][]
+  palette: PaletteColor[]
+  stitch_width: number
+  stitch_height: number
+  mesh_count: number | null
+  pattern_name: string | null
+  source_image_url: string | null
+  preview_image_url: string | null
+  unknown_codes: string[]
+  backstitch_count: number
+  point_stitch_count: number
+}
+
+export async function importStitchlyFile(file: File): Promise<ImportStitchlyResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE}/import-stitchly`, { method: 'POST', body: form })
+  if (res.status === 422) {
+    const body = await res.json().catch(() => null)
+    throw new ImportPatternError(body?.detail?.code ?? 'unreadable', body?.detail?.message ?? 'Could not read this .stitchly file')
+  }
+  if (!res.ok) throw new Error('Stitchly import failed')
+  return res.json()
+}
+
 export async function nearestDmc(hex: string): Promise<PaletteColor> {
   const res = await fetch(`${API_BASE}/nearest-dmc`, {
     method: 'POST',
@@ -653,11 +680,14 @@ export function getCanvasForDesign(widthInches: number, heightInches: number): C
   }
 }
 
-// Max printable: short side ≤ 6", long side ≤ 10" (fits on 8×12 canvas)
+// Max printable: short side ≤ 13" (roll width), long side ≤ 20" (editor stage)
+export const MAX_PRINTABLE_SHORT_SIDE = 13
+export const MAX_PRINTABLE_LONG_SIDE = 20
+
 export function isDesignPrintable(widthInches: number, heightInches: number): boolean {
   const short = Math.min(widthInches, heightInches)
   const long = Math.max(widthInches, heightInches)
-  return short <= 6 && long <= 10
+  return short <= MAX_PRINTABLE_SHORT_SIDE && long <= MAX_PRINTABLE_LONG_SIDE
 }
 
 export function formatCents(cents: number): string {

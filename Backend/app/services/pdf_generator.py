@@ -431,6 +431,11 @@ def _draw_true_size_reference_page(
     draw_height = (stitch_height / mesh_count) * 72
 
     page_size = landscape(letter) if stitch_width > stitch_height else letter
+    if draw_width > page_size[0] - 36 or draw_height > page_size[1] - 36:
+        # Larger than letter paper: emit a custom-size page (design + 0.5"
+        # margin per side) so the true-size reference stays true-size on
+        # roll printers instead of clipping.
+        page_size = (draw_width + 72, draw_height + 72)
     page_width, page_height = page_size
     pdf.setPageSize(page_size)
 

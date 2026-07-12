@@ -16,8 +16,7 @@ export type PreviewSettings = {
   source_type: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
-const MAX_PRINTABLE_SHORT_SIDE = 6
-const MAX_PRINTABLE_LONG_SIDE = 10
+import { MAX_PRINTABLE_LONG_SIDE, MAX_PRINTABLE_SHORT_SIDE } from '../lib/api'
 
 
 
@@ -198,7 +197,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max="10"
+            max={MAX_PRINTABLE_LONG_SIDE}
             step="0.5"
             value={widthInches}
             onChange={(e) => {
@@ -219,7 +218,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max="10"
+            max={MAX_PRINTABLE_LONG_SIDE}
             step="0.5"
             value={heightInches}
             onChange={(e) => {

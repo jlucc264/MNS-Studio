@@ -30,6 +30,7 @@ from app.models import (
     GridRenderResponse,
     ImportPatternRequest,
     ImportPatternResponse,
+    ImportStitchlyResponse,
     NearestDmcRequest,
     SamplePixelRequest,
     PaletteColor,
@@ -80,6 +81,8 @@ from app.services.supabase_db import (
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
 from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
 from app.services.stitch_visualizer import import_pattern_image, PatternImportError
+from app.services.stitch_visualizer import render_preview_image_from_cells
+from app.services.stitchly_import import parse_stitchly, StitchlyParseError
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -351,6 +354,46 @@ def recolor(request: RecolorRequest):
         stitch_preview_url=preview_url,
         palette=[p for p in palette],
         cells=cells,
+    )
+
+
+@app.post("/import-stitchly", response_model=ImportStitchlyResponse)
+def import_stitchly(file: UploadFile = File(...)):
+    if not (file.filename or "").lower().endswith(".stitchly"):
+        raise HTTPException(status_code=400, detail="Expected a .stitchly file.")
+
+    try:
+        parsed = parse_stitchly(file.file.read())
+    except StitchlyParseError as exc:
+        raise HTTPException(status_code=422, detail={"code": "unreadable", "message": str(exc)})
+
+    source_image_url = None
+    if parsed["source_image_bytes"]:
+        from uuid import uuid4
+        from app.services.storage import UPLOADS_DIR
+        filename = f"{uuid4().hex}.png"
+        (UPLOADS_DIR / filename).write_bytes(parsed["source_image_bytes"])
+        source_image_url = durable_image_url(f"/assets/uploads/{filename}", prefix="source-images")
+
+    mesh_count = parsed["mesh_count"] if parsed["mesh_count"] in (13, 18) else 13
+    preview_url = render_preview_image_from_cells(
+        cells=parsed["cells"], mesh_count=mesh_count, show_grid=False
+    )
+    preview_url = durable_preview_url(preview_url, prefix="draft-previews")
+
+    return ImportStitchlyResponse(
+        message="Stitchly pattern imported.",
+        cells=parsed["cells"],
+        palette=[PaletteColor(**c) for c in parsed["palette"]],
+        stitch_width=parsed["stitch_width"],
+        stitch_height=parsed["stitch_height"],
+        mesh_count=parsed["mesh_count"],
+        pattern_name=parsed["pattern_name"],
+        source_image_url=source_image_url,
+        preview_image_url=preview_url,
+        unknown_codes=parsed["unknown_codes"],
+        backstitch_count=parsed["backstitch_count"],
+        point_stitch_count=parsed["point_stitch_count"],
     )
 
 

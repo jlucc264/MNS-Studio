@@ -54,6 +54,21 @@ class ImportPatternResponse(BaseModel):
     snapped_color_count: int
 
 
+class ImportStitchlyResponse(BaseModel):
+    message: str
+    cells: list[list[str]]
+    palette: list[PaletteColor]
+    stitch_width: int
+    stitch_height: int
+    mesh_count: int | None = None
+    pattern_name: str | None = None
+    source_image_url: str | None = None
+    preview_image_url: str | None = None
+    unknown_codes: list[str] = []
+    backstitch_count: int = 0
+    point_stitch_count: int = 0
+
+
 class GridRenderRequest(BaseModel):
     image_url: str
     stitch_width: int

@@ -55,8 +55,11 @@ import {
   updateProject,
   uploadImage,
   importPatternImage,
+  importStitchlyFile,
   ImportPatternError,
   type ImportPatternResponse,
+  MAX_PRINTABLE_LONG_SIDE,
+  MAX_PRINTABLE_SHORT_SIDE,
 } from '../../lib/api'
 
 type ColorEditSnapshot = {
@@ -2388,17 +2391,42 @@ function StudioPage() {
     }
   }
 
-  function applyImportedPattern(imageUrl: string, result: ImportPatternResponse) {
+  function applyImportedPattern(
+    imageUrl: string | null,
+    result: Pick<ImportPatternResponse, 'cells' | 'palette' | 'stitch_width' | 'stitch_height'>,
+    extras?: { meshCount?: PreviewSettings['mesh_count']; patternName?: string; previewUrl?: string | null }
+  ) {
+    // Pick a mesh that keeps the pattern inside the printable bounds when
+    // possible — otherwise PreviewControls' aspect-lock clamp rewrites the
+    // height, and the settings change wipes the imported grid.
+    const fitsPrintable = (mesh: PreviewSettings['mesh_count']) => {
+      const w = result.stitch_width / mesh
+      const h = result.stitch_height / mesh
+      return Math.max(w, h) <= MAX_PRINTABLE_LONG_SIDE && Math.min(w, h) <= MAX_PRINTABLE_SHORT_SIDE
+    }
+    const preferred = extras?.meshCount ?? DEFAULT_SETTINGS.mesh_count
+    const mesh = fitsPrintable(preferred) ? preferred : fitsPrintable(18) ? 18 : preferred
     const settings: PreviewSettings = {
       ...DEFAULT_SETTINGS,
-      width_inches: result.stitch_width / DEFAULT_SETTINGS.mesh_count,
-      height_inches: result.stitch_height / DEFAULT_SETTINGS.mesh_count,
+      mesh_count: mesh,
+      width_inches: Math.round((result.stitch_width / mesh) * 100) / 100,
+      height_inches: Math.round((result.stitch_height / mesh) * 100) / 100,
       color_count: result.palette.length,
     }
-    setActiveImagePath(imageUrl)
-    setPreviewImagePath(imageUrl)
-    setOriginalPreviewImagePath(imageUrl)
-    setLastVisibleImageUrl(imageUrl)
+    // Imported stitch grids aren't rescalable, so the photo-flow aspect lock
+    // (which force-rewrites height and triggers a canvas reset) stays off.
+    setLockAspectRatio(false)
+    // Deliberately do NOT set activeImagePath: the imported cells are the
+    // source of truth, and arming the photo pipeline with a source image
+    // lets the settings-sync effect regenerate (and destroy) the pattern.
+    setActiveImagePath(null)
+    const preview = extras?.previewUrl ?? imageUrl
+    if (preview) {
+      setPreviewImagePath(preview)
+      setOriginalPreviewImagePath(preview)
+      setLastVisibleImageUrl(preview)
+    }
+    if (extras?.patternName) setDraftName(extras.patternName)
     setAllPalette(result.palette)
     setPreviewPalette(result.palette)
     setEnabledColorHexes(result.palette.map((c) => c.hex))
@@ -2420,6 +2448,21 @@ function StudioPage() {
     setUploadError(null)
     setLoading(true)
     try {
+      if (file.name.toLowerCase().endsWith('.stitchly')) {
+        const res = await importStitchlyFile(file)
+        applyImportedPattern(res.source_image_url, res, {
+          meshCount: res.mesh_count === 18 ? 18 : 13,
+          patternName: res.pattern_name ?? undefined,
+          previewUrl: res.preview_image_url,
+        })
+        if (res.backstitch_count > 0 || res.point_stitch_count > 0) {
+          setUploadError(
+            `Imported. Note: ${res.backstitch_count + res.point_stitch_count} backstitch/specialty stitches aren't supported yet and were skipped.`
+          )
+        }
+        return
+      }
+
       const uploaded = await uploadImage(file)
       let result: ImportPatternResponse
       try {
@@ -3122,7 +3165,7 @@ function StudioPage() {
           <input
             ref={patternImportInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.stitchly"
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0]
@@ -3136,7 +3179,7 @@ function StudioPage() {
             disabled={loading}
             style={btnSecondary}
           >
-            Import a chart (Stitchly / pixel pattern)
+            Import from Stitchly (.stitchly or chart image)
           </button>
           {statusBlock}
           {activeImagePath && (
