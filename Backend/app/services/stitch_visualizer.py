@@ -2,6 +2,7 @@ from pathlib import Path
 import colorsys
 from io import BytesIO
 from urllib.request import Request, urlopen
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from .storage import preview_output_path, ASSETS_DIR
 from app.data.dmc_colors import DMC_COLORS
@@ -191,6 +192,300 @@ def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 def color_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+
+def _srgb_channel_to_linear(value: int) -> float:
+    u = value / 255.0
+    return u / 12.92 if u <= 0.04045 else ((u + 0.055) / 1.055) ** 2.4
+
+
+def srgb_to_oklab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    r = _srgb_channel_to_linear(rgb[0])
+    g = _srgb_channel_to_linear(rgb[1])
+    b = _srgb_channel_to_linear(rgb[2])
+    l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+    l_, m_, s_ = l ** (1 / 3), m ** (1 / 3), s ** (1 / 3)
+    return (
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+    )
+
+
+_OKLAB_M1 = np.array([
+    [0.4122214708, 0.5363325363, 0.0514459929],
+    [0.2119034982, 0.6806995451, 0.1073969566],
+    [0.0883024619, 0.2817188376, 0.6299787005],
+])
+_OKLAB_M2 = np.array([
+    [0.2104542553, 0.7936177850, -0.0040720468],
+    [1.9779984951, -2.4285922050, 0.4505937099],
+    [0.0259040371, 0.7827717662, -0.8086757660],
+])
+_OKLAB_M1_INV = np.linalg.inv(_OKLAB_M1)
+_OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
+
+
+def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
+    u = rgb / 255.0
+    lin = np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4)
+    return np.cbrt(lin @ _OKLAB_M1.T) @ _OKLAB_M2.T
+
+
+def _oklab_to_srgb_array(lab: np.ndarray) -> np.ndarray:
+    lms = (lab @ _OKLAB_M2_INV.T) ** 3
+    lin = lms @ _OKLAB_M1_INV.T
+    u = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.clip(lin, 0.0, None) ** (1 / 2.4) - 0.055)
+    return np.clip(u * 255.0, 0.0, 255.0)
+
+
+BLEND_CLUSTER_MAX_PERP_RATIO = 0.12
+BLEND_CLUSTER_MIN_SPAN = 0.08
+BLEND_CLUSTER_MAX_WEIGHT_RATIO = 0.35
+BLEND_CLUSTER_MIN_CONTACT_FRACTION = 0.5
+OKLAB_CLUSTER_MERGE_DISTANCE = 0.07
+OKLAB_MERGE_MAX_CHROMA_DIFF = 0.045
+OKLAB_MERGE_HUE_GUARD_CHROMA = 0.03
+OKLAB_MERGE_MAX_HUE_ANGLE = 60.0
+
+
+def _mergeable_pair(center_a: np.ndarray, center_b: np.ndarray) -> bool:
+    """Guard against merging colors OKLab distance underestimates.
+
+    Chroma compresses toward zero at low lightness, so a dark green field and
+    its black shadow gaps measure deceptively close. Refuse merges across a
+    large chroma gap (a colored thread into a neutral) or between distinctly
+    different hues when both clusters are actually chromatic.
+    """
+    chroma_a = float(np.hypot(center_a[1], center_a[2]))
+    chroma_b = float(np.hypot(center_b[1], center_b[2]))
+    if abs(chroma_a - chroma_b) > OKLAB_MERGE_MAX_CHROMA_DIFF:
+        return False
+    if min(chroma_a, chroma_b) >= OKLAB_MERGE_HUE_GUARD_CHROMA:
+        hue_a = np.degrees(np.arctan2(center_a[2], center_a[1]))
+        hue_b = np.degrees(np.arctan2(center_b[2], center_b[1]))
+        hue_diff = abs(hue_a - hue_b) % 360.0
+        if min(hue_diff, 360.0 - hue_diff) > OKLAB_MERGE_MAX_HUE_ANGLE:
+            return False
+    return True
+
+
+def _merge_close_clusters(
+    centers: np.ndarray, lab: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    """Merge cluster centers closer than one perceptual step in OKLab.
+
+    K-means at an over-provisioned budget frequently lands two centers on the
+    same thread family (both snapping to the same or adjacent DMC codes); the
+    downstream RGB-threshold consolidation can't reliably merge them. Same-
+    family duplicates measure ≲0.065 apart in OKLab while genuinely distinct
+    colors (pink vs lavender, light vs dark of one hue) measure ≳0.09.
+    """
+    while len(centers) > 2:
+        assignment = ((lab[:, None, :] - centers[None]) ** 2).sum(-1).argmin(1)
+        cluster_weights = np.array([
+            weights[assignment == j].sum() for j in range(len(centers))
+        ])
+        distances = np.sqrt(((centers[:, None, :] - centers[None]) ** 2).sum(-1))
+        np.fill_diagonal(distances, np.inf)
+        for a in range(len(centers)):
+            for b in range(a + 1, len(centers)):
+                if distances[a, b] < OKLAB_CLUSTER_MERGE_DISTANCE and not _mergeable_pair(
+                    centers[a], centers[b]
+                ):
+                    distances[a, b] = distances[b, a] = np.inf
+        a, b = np.unravel_index(np.argmin(distances), distances.shape)
+        if distances[a, b] >= OKLAB_CLUSTER_MERGE_DISTANCE:
+            return centers
+        total = cluster_weights[a] + cluster_weights[b]
+        if total > 0:
+            merged = (
+                centers[a] * cluster_weights[a] + centers[b] * cluster_weights[b]
+            ) / total
+        else:
+            merged = (centers[a] + centers[b]) / 2
+        centers = np.delete(centers, max(a, b), axis=0)
+        centers[min(a, b)] = merged
+    return centers
+
+
+def _adjacent_to(mask: np.ndarray) -> np.ndarray:
+    touches = np.zeros_like(mask)
+    touches[1:, :] |= mask[:-1, :]
+    touches[:-1, :] |= mask[1:, :]
+    touches[:, 1:] |= mask[:, :-1]
+    touches[:, :-1] |= mask[:, 1:]
+    return touches
+
+
+def _drop_blend_clusters(
+    centers: np.ndarray,
+    lab: np.ndarray,
+    weights: np.ndarray,
+    inverse: np.ndarray,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Remove clusters that are anti-aliased blends of two larger clusters.
+
+    Edge pixels between a subject and the canvas form their own OKLab cluster
+    (e.g. a gray fringe between dark green and white). A blend cluster is
+    identified by two properties a genuine color region never has together:
+    its center lies on the straight OKLab segment between two parent
+    clusters, AND most of its pixels sit spatially sandwiched between those
+    parents (touching both). Lighter tints of a real color share the first
+    property but fail the second, so motif fills survive.
+    """
+    while len(centers) > 2:
+        assignment = ((lab[:, None, :] - centers[None]) ** 2).sum(-1).argmin(1)
+        cluster_weights = np.array([
+            weights[assignment == j].sum() for j in range(len(centers))
+        ])
+        pixel_assignment = assignment[inverse].reshape(shape)
+
+        blend_index = None
+        for c in np.argsort(cluster_weights):
+            mask_c = pixel_assignment == c
+            c_total = mask_c.sum()
+            if c_total == 0:
+                blend_index = int(c)
+                break
+
+            on_segment = False
+            for a in range(len(centers)):
+                if a == c:
+                    continue
+                for b in range(a + 1, len(centers)):
+                    if b == c:
+                        continue
+                    if cluster_weights[c] > BLEND_CLUSTER_MAX_WEIGHT_RATIO * min(
+                        cluster_weights[a], cluster_weights[b]
+                    ):
+                        continue
+                    span = centers[b] - centers[a]
+                    span_len = np.linalg.norm(span)
+                    if span_len < BLEND_CLUSTER_MIN_SPAN:
+                        continue
+                    offset = centers[c] - centers[a]
+                    t = float(offset @ span) / float(span @ span)
+                    if not 0.1 <= t <= 0.9:
+                        continue
+                    perp = np.linalg.norm(offset - t * span)
+                    if perp <= BLEND_CLUSTER_MAX_PERP_RATIO * span_len:
+                        on_segment = True
+                        break
+                if on_segment:
+                    break
+
+            if not on_segment:
+                continue
+
+            # Spatial confirmation: a fringe is thin, so most of its pixels
+            # touch at least two different foreign clusters (one per side).
+            # The parents may be split across several near-identical clusters,
+            # so count distinct foreign contacts rather than a specific pair.
+            foreign_contacts = np.zeros(shape, dtype=np.int64)
+            for j in range(len(centers)):
+                if j != c:
+                    foreign_contacts += _adjacent_to(pixel_assignment == j)
+            sandwiched = (mask_c & (foreign_contacts >= 2)).sum()
+            if sandwiched / c_total >= BLEND_CLUSTER_MIN_CONTACT_FRACTION:
+                blend_index = int(c)
+                break
+
+        if blend_index is None:
+            return centers
+        centers = np.delete(centers, blend_index, axis=0)
+    return centers
+
+
+def resize_linear_light(
+    img: Image.Image, size: tuple[int, int], resampling: Image.Resampling
+) -> Image.Image:
+    """Resize in linear-light RGB instead of gamma-encoded sRGB.
+
+    Averaging gamma-encoded values darkens blends, so a white stitch averaged
+    with dark gaps comes out muddier than it should. Downsampling in linear
+    light keeps light details (e.g. white lettering on a dark field)
+    measurably brighter and closer to their true color.
+    """
+    arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+    channels = [
+        np.asarray(
+            Image.fromarray(lin[:, :, c].astype(np.float32), mode="F").resize(size, resampling)
+        )
+        for c in range(3)
+    ]
+    lin_small = np.stack(channels, axis=-1)
+    srgb = np.where(
+        lin_small <= 0.0031308,
+        lin_small * 12.92,
+        1.055 * np.clip(lin_small, 0.0, None) ** (1 / 2.4) - 0.055,
+    )
+    return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
+
+
+def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dither) -> Image.Image:
+    """Reduce an image to `colors` colors via weighted k-means in OKLab space.
+
+    Replaces PIL's MEDIANCUT for the main quantization pass: median cut splits
+    boxes purely by pixel population, so small accent regions (a dozen yellow
+    stitches in a lavender field) never earn a palette entry at any budget.
+    Seeding is deterministic so the same upload always previews identically.
+    """
+    rgb_img = img.convert("RGB")
+    pixels = np.asarray(rgb_img, dtype=np.float64).reshape(-1, 3)
+    unique_colors, inverse, counts = np.unique(
+        pixels, axis=0, return_inverse=True, return_counts=True
+    )
+    if len(unique_colors) <= colors:
+        return rgb_img
+
+    lab = _srgb_to_oklab_array(unique_colors)
+    weights = counts.astype(np.float64)
+
+    # Weighted k-means++ seeding, deterministically anchored on the most
+    # common color so identical inputs always produce identical palettes.
+    rng = np.random.default_rng(0)
+    centers = lab[[int(np.argmax(weights))]]
+    for _ in range(colors - 1):
+        d2 = ((lab[:, None, :] - centers[None]) ** 2).sum(-1).min(1)
+        probs = d2 * weights
+        total = probs.sum()
+        if total <= 0:
+            break
+        centers = np.vstack([centers, lab[int(rng.choice(len(lab), p=probs / total))]])
+
+    for _ in range(24):
+        assignment = ((lab[:, None, :] - centers[None]) ** 2).sum(-1).argmin(1)
+        updated = centers.copy()
+        for j in range(len(centers)):
+            member_mask = assignment == j
+            if member_mask.any():
+                w = weights[member_mask]
+                updated[j] = (lab[member_mask] * w[:, None]).sum(0) / w.sum()
+        if np.allclose(updated, centers, atol=1e-7):
+            centers = updated
+            break
+        centers = updated
+
+    centers = _merge_close_clusters(centers, lab, weights)
+    centers = _drop_blend_clusters(
+        centers, lab, weights, inverse, (rgb_img.height, rgb_img.width)
+    )
+    palette = np.rint(_oklab_to_srgb_array(centers)).astype(np.uint8)
+
+    if dither != Image.Dither.NONE:
+        palette_img = Image.new("P", (1, 1))
+        flat = palette.reshape(-1).tolist()
+        palette_img.putpalette(flat + [0] * (768 - len(flat)))
+        return rgb_img.quantize(palette=palette_img, dither=dither).convert("RGB")
+
+    assignment = ((lab[:, None, :] - centers[None]) ** 2).sum(-1).argmin(1)
+    mapped = palette[assignment][inverse].reshape(rgb_img.height, rgb_img.width, 3)
+    return Image.fromarray(mapped, "RGB")
 
 
 def brightness(rgb: tuple[int, int, int]) -> int:
@@ -625,8 +920,36 @@ def hue_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return min(diff, 360 - diff)
 
 
+_DMC_OKLAB = [(dmc, srgb_to_oklab(tuple(dmc["rgb"]))) for dmc in DMC_COLORS]
+_NEAREST_DMC_CACHE: dict[tuple[int, int, int], dict] = {}
+
+# OKLab compresses hue separation at low lightness, so plain OKLab distance
+# snaps very dark greens to black-brown threads. Weighting the hue component
+# of the distance restores the family (ΔE² = ΔL² + ΔC² + K·ΔH²).
+DMC_SNAP_HUE_WEIGHT = 3.0
+
+
+def _dmc_snap_distance(
+    l: float, a: float, b: float, chroma: float, dmc_lab: tuple[float, float, float]
+) -> float:
+    l2, a2, b2 = dmc_lab
+    chroma2 = (a2 * a2 + b2 * b2) ** 0.5
+    dab2 = (a - a2) ** 2 + (b - b2) ** 2
+    dc2 = (chroma - chroma2) ** 2
+    dh2 = max(0.0, dab2 - dc2)
+    return (l - l2) ** 2 + dc2 + DMC_SNAP_HUE_WEIGHT * dh2
+
+
 def nearest_dmc(rgb: tuple[int, int, int]) -> dict:
-    return min(DMC_COLORS, key=lambda dmc: color_distance(rgb, dmc["rgb"]))
+    rgb = tuple(rgb)
+    if rgb not in _NEAREST_DMC_CACHE:
+        l, a, b = srgb_to_oklab(rgb)
+        chroma = (a * a + b * b) ** 0.5
+        _NEAREST_DMC_CACHE[rgb] = min(
+            _DMC_OKLAB,
+            key=lambda entry: _dmc_snap_distance(l, a, b, chroma, entry[1]),
+        )[0]
+    return _NEAREST_DMC_CACHE[rgb]
 
 
 def remap_image_to_nearest_dmc(img: Image.Image) -> Image.Image:
@@ -824,6 +1147,15 @@ def enhance_small_structured_regions(img: Image.Image, source_type: str) -> Imag
     return enhanced
 
 
+STITCHED_DARK_FIELD_LUMINANCE = 60
+STITCHED_DARK_FIELD_FRACTION = 0.15
+
+
+def _has_dark_field(img: Image.Image) -> bool:
+    lum = np.asarray(img.convert("L"), dtype=np.float64)
+    return float((lum < STITCHED_DARK_FIELD_LUMINANCE).mean()) > STITCHED_DARK_FIELD_FRACTION
+
+
 def prepare_source_image(
     img: Image.Image,
     source_type: str,
@@ -887,9 +1219,13 @@ def prepare_source_image(
 
     cleaned = simplify_source_colors(img, source_type) if simplify_colors else img
     cleaned = reduce_stitched_canvas_noise(cleaned) if clean_background else cleaned
-    if clean_background:
-        cleaned = cleaned.filter(ImageFilter.MedianFilter(size=3))
-    cleaned = cleaned.filter(ImageFilter.UnsharpMask(radius=1.35, percent=170, threshold=2))
+    # No median filter: it erases 1-2 stitch accents and thin strokes, and
+    # canvas noise is already handled by reduce_stitched_canvas_noise.
+    # Unsharp only helps low-contrast content; on designs that are already
+    # high-contrast (light text on a dark field) it amplifies field texture
+    # into spurious near-black palette colors.
+    if not _has_dark_field(cleaned):
+        cleaned = cleaned.filter(ImageFilter.UnsharpMask(radius=1.35, percent=170, threshold=2))
     if strengthen_dark_detail_enabled:
         cleaned = strengthen_dark_detail(cleaned)
     cleaned = preserve_text_strokes(cleaned, source_type)
@@ -1617,7 +1953,7 @@ def generate_stitch_preview(
     resize_resampling = (
         Image.Resampling.LANCZOS if source_type == "graphic_art" else Image.Resampling.BILINEAR
     )
-    resized = img.resize((stitch_width, stitch_height), resize_resampling)
+    resized = resize_linear_light(img, (stitch_width, stitch_height), resize_resampling)
     if source_type == "graphic_art":
         resized = boost_graphic_art_saturation(resized)
     photo_background_ratio = (
@@ -1657,15 +1993,15 @@ def generate_stitch_preview(
     if preserve_accents:
         effective_color_count = min(128, effective_color_count + 12)
 
-    quantized = enhanced.quantize(
+    quantized = quantize_image_perceptual(
+        enhanced,
         colors=max(2, effective_color_count),
-        method=Image.MEDIANCUT,
         dither=(
             Image.Dither.NONE
             if source_type in {"stitched_photo", "graphic_art"} or photo_background_ratio >= ISOLATED_SUBJECT_BACKGROUND_RATIO
             else Image.Dither.FLOYDSTEINBERG
         ),
-    ).convert("RGB")
+    )
     quantized = normalize_background_after_quantization(quantized, source_type, clean_background)
     if source_type == "stitched_photo":
         quantized = consolidate_stitched_shades(quantized, max(2, target_color_count))
@@ -1734,7 +2070,7 @@ def recolor_stitch_preview(
     src_path = _resolve_asset_path(image_url)
     img = open_source_image(src_path)
 
-    base = img.resize((stitch_width, stitch_height), Image.Resampling.BILINEAR)
+    base = resize_linear_light(img, (stitch_width, stitch_height), Image.Resampling.BILINEAR)
 
     allowed_colors = [hex_to_rgb(color["hex"]) for color in selected_palette]
     if not allowed_colors:
@@ -1776,7 +2112,7 @@ def grid_first_render(
 ) -> tuple[str, list[list[str]], list[dict]]:
     src_path = _resolve_asset_path(image_url)
     img = open_source_image(src_path)
-    resized = img.resize((stitch_width, stitch_height), Image.Resampling.LANCZOS)
+    resized = resize_linear_light(img, (stitch_width, stitch_height), Image.Resampling.LANCZOS)
 
     palette_rgb = [(hex_to_rgb(c["hex"]), c) for c in palette]
 
