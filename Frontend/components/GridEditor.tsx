@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type FontSize, type FontFamily, type TextStyle, getFontMeta, getCharAdvance, getTextCells } from '../lib/bitmapFonts'
+import { useIsTouch } from '../lib/useViewport'
 
 type ShapeCell = { row: number; col: number; color: string }
 
 type Props = {
   cells: string[][]
   activeColor: string | null
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill'
   meshCount: 13 | 18
   brushDensity: number
   centerKey?: number
@@ -26,6 +27,7 @@ type Props = {
   traceImageUrl?: string | null
   traceOpacity?: number
   onEyedropperSample?: (cell: { row: number; col: number }) => void
+  onFillCell?: (cell: { row: number; col: number }) => void
   textFontSize?: FontSize
   textFontFamily?: FontFamily
   textBold?: boolean
@@ -496,6 +498,7 @@ export default function GridEditor({
   traceImageUrl,
   traceOpacity = 0,
   onEyedropperSample,
+  onFillCell,
   textFontSize = 'medium',
   textFontFamily = 'sans',
   textBold = false,
@@ -506,6 +509,8 @@ export default function GridEditor({
 
   const highlightSelection = toolMode === 'select'
 
+  const isTouch = useIsTouch()
+  const toolbarButtonPadding = isTouch ? '12px 14px' : '4px 10px'
   const onSelectionChangeRef = useRef(onSelectionChange)
   useEffect(() => { onSelectionChangeRef.current = onSelectionChange })
 
@@ -1227,7 +1232,15 @@ export default function GridEditor({
         return
       }
 
-      if (toolMode !== 'merge' && !activeColorRef.current) return
+      if (toolMode === 'fill') {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        event.preventDefault()
+        onFillCell?.({ row: hit.row, col: hit.col })
+        return
+      }
+
+      if (toolMode !== 'merge' && toolMode !== 'erase' && !activeColorRef.current) return
 
       const hit = getCellFromClientPoint(event.clientX, event.clientY)
       if (!hit) return
@@ -1241,7 +1254,7 @@ export default function GridEditor({
     },
     [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
-     traceImageRef, cells, onEyedropperSample,
+     traceImageRef, cells, onEyedropperSample, onFillCell,
      textFontSize, textFontFamily, textBold, textItalic, textOutline]
   )
 
@@ -1803,7 +1816,7 @@ export default function GridEditor({
               type="button"
               onClick={() => setDisplayMode('flat')}
               style={{
-                padding: '4px 10px',
+                padding: toolbarButtonPadding,
                 borderRadius: 999,
                 border: 'none',
                 fontFamily: 'inherit',
@@ -1819,7 +1832,7 @@ export default function GridEditor({
               type="button"
               onClick={() => setDisplayMode('stitched')}
               style={{
-                padding: '4px 10px',
+                padding: toolbarButtonPadding,
                 borderRadius: 999,
                 border: 'none',
                 fontFamily: 'inherit',
@@ -1846,7 +1859,7 @@ export default function GridEditor({
               type="button"
               onClick={() => scheduleZoom(Math.ceil((zoomPercentRef.current - ZOOM_BUTTON_STEP) / 10) * 10)}
               disabled={zoomPercentRef.current <= 100}
-              style={{ padding: '4px 10px', border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+              style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
             >
               −
             </button>
@@ -1857,7 +1870,7 @@ export default function GridEditor({
               type="button"
               onClick={() => scheduleZoom(Math.floor((zoomPercentRef.current + ZOOM_BUTTON_STEP) / 10) * 10)}
               disabled={zoomPercentRef.current >= 400}
-              style={{ padding: '4px 10px', border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+              style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
             >
               +
             </button>
@@ -1866,7 +1879,7 @@ export default function GridEditor({
             type="button"
             onClick={() => scheduleZoom(100)}
             disabled={zoomPercentRef.current === 100}
-            style={{ padding: '4px 10px', border: '1px solid #d7d7d7', borderRadius: 999, background: '#ffffff', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', color: '#555', whiteSpace: 'nowrap' }}
+            style={{ padding: toolbarButtonPadding, border: '1px solid #d7d7d7', borderRadius: 999, background: '#ffffff', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', color: '#555', whiteSpace: 'nowrap' }}
           >
             Reset
           </button>
@@ -2038,7 +2051,7 @@ export default function GridEditor({
               minWidth: 0,
               overflowX: 'auto',
               overflowY: 'auto',
-              touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || highlightSelection) ? 'none' : 'pan-x pan-y',
+              touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || toolMode === 'erase' || toolMode === 'fill' || highlightSelection) ? 'none' : 'pan-x pan-y',
               overscrollBehavior: 'contain',
               WebkitOverflowScrolling: 'touch',
             }}
@@ -2066,8 +2079,8 @@ export default function GridEditor({
                   onPointerMove={handleCanvasPointerMove}
                   style={{
                     display: 'block',
-                    cursor: toolMode === 'text' ? 'text' : toolMode === 'eyedropper' ? 'crosshair' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
-                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || highlightSelection) ? 'none' : 'pan-x pan-y',
+                    cursor: toolMode === 'text' ? 'text' : (toolMode === 'eyedropper' || toolMode === 'fill') ? 'crosshair' : (toolMode === 'merge' || toolMode === 'erase' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || toolMode === 'erase' || toolMode === 'fill' || highlightSelection) ? 'none' : 'pan-x pan-y',
                   }}
                 />
                 <canvas

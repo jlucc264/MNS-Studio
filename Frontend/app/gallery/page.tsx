@@ -11,12 +11,12 @@ import { NavAccountControls } from '../../components/NavAccountControls'
 import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
+import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
-const MOBILE_BREAKPOINT = 768
 
 const ORIGIN_TAGS = new Set(['remix', 'from photo', 'graphic art'])
 
@@ -185,7 +185,7 @@ function GalleryPage() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
-  const [viewportWidth, setViewportWidth] = useState(1200)
+  const isMobile = useIsMobile(BREAKPOINTS.tablet)
   const [checkoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [showCartDrawer, setShowCartDrawer] = useState(false)
@@ -230,12 +230,6 @@ function GalleryPage() {
     } catch {}
   }, [session])
 
-  useEffect(() => {
-    const update = () => setViewportWidth(window.innerWidth)
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
 
   useEffect(() => {
     router.prefetch('/drafts')
@@ -267,7 +261,6 @@ function GalleryPage() {
     }
   }, [searchParams, router])
 
-  const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
   async function handleUseTemplate(item: GalleryItem) {
     const palette = (item.palette ?? []).map((c) => ({

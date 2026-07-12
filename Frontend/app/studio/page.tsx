@@ -21,6 +21,7 @@ import { ColorBrowserModal } from '../../components/ColorBrowserModal'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
+import MobileSheet from '../../components/MobileSheet'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
@@ -29,6 +30,7 @@ import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
+import { BREAKPOINTS, useIsMobile, useIsTouch } from '../../lib/useViewport'
 import {
   assetUrl,
   CanvasContext,
@@ -52,6 +54,9 @@ import {
   updateGalleryItem,
   updateProject,
   uploadImage,
+  importPatternImage,
+  ImportPatternError,
+  type ImportPatternResponse,
 } from '../../lib/api'
 
 type ColorEditSnapshot = {
@@ -92,7 +97,6 @@ function colorSaturation(hex: string) {
 
 const DISPLAY_GROUP_DISTANCE = 12
 const MIN_PALETTE_STATE_OVERLAP_RATIO = 0.6
-const MOBILE_BREAKPOINT = 980
 const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
 
@@ -402,7 +406,7 @@ function StudioPage() {
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [gridKey, setGridKey] = useState(0)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill'>('paint')
   const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
   const [textFontFamily, setTextFontFamily] = useState<'sans' | 'serif'>('sans')
   const [textBold, setTextBold] = useState(false)
@@ -435,7 +439,8 @@ function StudioPage() {
   const [finishShape, setFinishShape] = useState<'circle' | 'square'>('circle')
   const [finishSizeInches, setFinishSizeInches] = useState(4)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
-  const [viewportWidth, setViewportWidth] = useState(1280)
+  const isMobile = useIsMobile(BREAKPOINTS.studio)
+  const isTouchDevice = useIsTouch()
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
   const [showChatPanel, setShowChatPanel] = useState(false)
   const [stagedUploadDragActive, setStagedUploadDragActive] = useState(false)
@@ -476,6 +481,7 @@ function StudioPage() {
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
   const stagedUploadInputRef = useRef<HTMLInputElement | null>(null)
+  const patternImportInputRef = useRef<HTMLInputElement | null>(null)
   const projectLoadedRef = useRef(false)
   const toolModeRef = useRef(toolMode)
   useEffect(() => { toolModeRef.current = toolMode }, [toolMode])
@@ -625,16 +631,6 @@ function StudioPage() {
     }
   }, [toolMode, hasGeneratedPreview])
 
-  useEffect(() => {
-    const updateViewportWidth = () => {
-      setViewportWidth(window.innerWidth || 1280)
-    }
-
-    updateViewportWidth()
-    window.addEventListener('resize', updateViewportWidth)
-    return () => window.removeEventListener('resize', updateViewportWidth)
-  }, [])
-
   const [showPortraitWarning, setShowPortraitWarning] = useState(false)
   useEffect(() => {
     const check = () => {
@@ -764,7 +760,6 @@ function StudioPage() {
     }
   }, [searchParams, router])
 
-  const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
   useEffect(() => {
     if (isMobile) setShowMobilePanel(activeWorkflowStep !== 2)
@@ -1456,8 +1451,7 @@ function StudioPage() {
     }
   }
 
-  function handlePaintCells(coords: Array<[number, number]>) {
-    if (!activePaintColor) return
+  function paintCellsWithColor(coords: Array<[number, number]>, paintColor: string) {
     if (!coords.length) return
 
     let nextCells: string[][] | null = null
@@ -1467,8 +1461,8 @@ function StudioPage() {
       const updatedCells = current.map((row) => [...row])
       coords.forEach(([row, col]) => {
         if (row < 0 || row >= updatedCells.length || col < 0 || col >= updatedCells[row].length) return
-        if (updatedCells[row][col] === activePaintColor) return
-        updatedCells[row][col] = activePaintColor
+        if (updatedCells[row][col] === paintColor) return
+        updatedCells[row][col] = paintColor
         changed = true
       })
 
@@ -1486,7 +1480,7 @@ function StudioPage() {
         const nextOverrides = { ...current }
         coords.forEach(([row, col]) => {
           if (row < 0 || row >= nextCells!.length || col < 0 || col >= nextCells![row].length) return
-          nextOverrides[makeCellKey(row, col)] = activePaintColor
+          nextOverrides[makeCellKey(row, col)] = paintColor
         })
         return nextOverrides
       })
@@ -1494,6 +1488,43 @@ function StudioPage() {
 
     setFinalPdfPath(null)
     setFinalPreviewImagePath(null)
+  }
+
+  function handlePaintCells(coords: Array<[number, number]>) {
+    if (!activePaintColor) return
+    paintCellsWithColor(coords, activePaintColor)
+  }
+
+  function handleEraseCells(coords: Array<[number, number]>) {
+    paintCellsWithColor(coords, BLANK_CELL)
+  }
+
+  function handleFillCell({ row, col }: { row: number; col: number }) {
+    if (!activePaintColor) return
+    const targetColor = cells[row]?.[col]
+    if (targetColor === undefined || targetColor === activePaintColor) return
+
+    const totalRows = cells.length
+    const totalCols = cells[0]?.length ?? 0
+    const visited = new Set<string>()
+    const region: Array<[number, number]> = []
+    const queue: Array<[number, number]> = [[row, col]]
+    visited.add(`${row}-${col}`)
+
+    while (queue.length) {
+      const [r, c] = queue.pop()!
+      region.push([r, c])
+      for (const [nr, nc] of [[r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]] as Array<[number, number]>) {
+        if (nr < 0 || nr >= totalRows || nc < 0 || nc >= totalCols) continue
+        const key = `${nr}-${nc}`
+        if (visited.has(key) || cells[nr][nc] !== targetColor) continue
+        visited.add(key)
+        queue.push([nr, nc])
+      }
+    }
+
+    pushUndoSnapshot()
+    paintCellsWithColor(region, activePaintColor)
   }
 
   function handleMergeCells(coords: Array<[number, number]>) {
@@ -2357,6 +2388,70 @@ function StudioPage() {
     }
   }
 
+  function applyImportedPattern(imageUrl: string, result: ImportPatternResponse) {
+    const settings: PreviewSettings = {
+      ...DEFAULT_SETTINGS,
+      width_inches: result.stitch_width / DEFAULT_SETTINGS.mesh_count,
+      height_inches: result.stitch_height / DEFAULT_SETTINGS.mesh_count,
+      color_count: result.palette.length,
+    }
+    setActiveImagePath(imageUrl)
+    setPreviewImagePath(imageUrl)
+    setOriginalPreviewImagePath(imageUrl)
+    setLastVisibleImageUrl(imageUrl)
+    setAllPalette(result.palette)
+    setPreviewPalette(result.palette)
+    setEnabledColorHexes(result.palette.map((c) => c.hex))
+    setActivePaintColor(result.palette[0]?.hex ?? null)
+    setCells(result.cells)
+    setOriginalCells(result.cells)
+    setManualCellOverrides({})
+    setUndoStack([])
+    setRedoStack([])
+    setDraftSettings(settings)
+    setLastSettings(settings)
+    setImportedAspectRatio(settings.width_inches / settings.height_inches)
+    setHasGeneratedPreview(true)
+    setViewMode('stitch')
+    setActiveWorkflowStep(2)
+  }
+
+  async function handlePatternImportFile(file: File) {
+    setUploadError(null)
+    setLoading(true)
+    try {
+      const uploaded = await uploadImage(file)
+      let result: ImportPatternResponse
+      try {
+        result = await importPatternImage({ image_url: uploaded.active_image_url })
+      } catch (error) {
+        if (error instanceof ImportPatternError && error.code === 'needs_dimensions') {
+          const answer = window.prompt(
+            'This image has more than one pixel per stitch.\nEnter the pattern size in stitches as WIDTH x HEIGHT (e.g. 120 x 90):'
+          )
+          if (!answer) return
+          const match = answer.match(/(\d+)\s*[x×,\s]\s*(\d+)/i)
+          if (!match) {
+            setUploadError('Could not read those stitch dimensions — expected something like "120 x 90".')
+            return
+          }
+          result = await importPatternImage({
+            image_url: uploaded.active_image_url,
+            stitch_width: parseInt(match[1], 10),
+            stitch_height: parseInt(match[2], 10),
+          })
+        } else {
+          throw error
+        }
+      }
+      applyImportedPattern(uploaded.active_image_url, result)
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Pattern import failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleStagedUploadDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setStagedUploadDragActive(false)
@@ -3024,6 +3119,25 @@ function StudioPage() {
           >
             Start with a blank canvas
           </button>
+          <input
+            ref={patternImportInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) void handlePatternImportFile(file)
+              event.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => patternImportInputRef.current?.click()}
+            disabled={loading}
+            style={btnSecondary}
+          >
+            Import a chart (Stitchly / pixel pattern)
+          </button>
           {statusBlock}
           {activeImagePath && (
             <button
@@ -3589,42 +3703,9 @@ function StudioPage() {
 
           if (mobileDrawer) {
             return (
-              <>
-                {showMobilePanel && (
-                  <div
-                    onClick={() => setShowMobilePanel(false)}
-                    style={{ position: 'fixed', inset: 0, zIndex: 199, background: 'rgba(0,0,0,0.4)' }}
-                  />
-                )}
-                <aside
-                  style={{
-                    position: 'fixed',
-                    bottom: 0, left: 0, right: 0,
-                    height: '78vh',
-                    zIndex: 200,
-                    background: '#fffdf8',
-                    borderRadius: '16px 16px 0 0',
-                    borderTop: '2px solid #e0d9cf',
-                    display: 'grid',
-                    gridTemplateRows: 'auto auto minmax(0, 1fr) auto',
-                    transform: showMobilePanel ? 'translateY(0)' : 'translateY(100%)',
-                    transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
-                    overflow: 'hidden',
-                    pointerEvents: showMobilePanel ? 'auto' : 'none',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px 4px' }}>
-                    <div style={{ width: 40, height: 4, borderRadius: 999, background: '#d5cec6' }} />
-                    <button
-                      type="button"
-                      onClick={() => setShowMobilePanel(false)}
-                      aria-label="Close panel"
-                      style={{ border: 0, background: 'none', fontSize: 18, color: '#9a9287', cursor: 'pointer', padding: 4, lineHeight: 1 }}
-                    >✕</button>
-                  </div>
-                  {asideContent}
-                </aside>
-              </>
+              <MobileSheet open={showMobilePanel} onClose={() => setShowMobilePanel(false)}>
+                {asideContent}
+              </MobileSheet>
             )
           }
 
@@ -3676,6 +3757,46 @@ function StudioPage() {
               zIndex: 0,
             }}
           >
+            {isTouchDevice && shouldAllowCanvasEditing && cells.length > 0 && shouldShowStitchGrid && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 16,
+                  bottom: 'calc(16px + env(safe-area-inset-bottom))',
+                  zIndex: 6,
+                  display: 'inline-flex',
+                  gap: 2,
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 999,
+                  background: '#fffdf8',
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
+                  overflow: 'hidden',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleUndoColorChange}
+                  disabled={undoStack.length === 0}
+                  aria-label="Undo"
+                  style={{
+                    width: 48, height: 44, border: 'none', background: 'transparent',
+                    fontSize: 20, fontFamily: 'inherit', cursor: 'pointer',
+                    color: undoStack.length === 0 ? '#c8c0b4' : '#3f382f',
+                  }}
+                >↺</button>
+                <button
+                  type="button"
+                  onClick={handleRedoColorChange}
+                  disabled={redoStack.length === 0}
+                  aria-label="Redo"
+                  style={{
+                    width: 48, height: 44, border: 'none', background: 'transparent',
+                    fontSize: 20, fontFamily: 'inherit', cursor: 'pointer',
+                    color: redoStack.length === 0 ? '#c8c0b4' : '#3f382f',
+                  }}
+                >↻</button>
+              </div>
+            )}
             {cells.length > 0 && (
               <div
                 style={{
@@ -3730,7 +3851,8 @@ function StudioPage() {
                   textItalic={textItalic}
                   textOutline={textOutline}
                   onPaintStart={pushUndoSnapshot}
-                  onPaintCells={toolMode === 'merge' ? handleMergeCells : handlePaintCells}
+                  onPaintCells={toolMode === 'merge' ? handleMergeCells : toolMode === 'erase' ? handleEraseCells : handlePaintCells}
+                  onFillCell={handleFillCell}
                   onApplyShapeCells={handleApplyShapeCells}
                   onEyedropperSample={handleEyedropperSample}
                 />
@@ -3915,7 +4037,7 @@ function StudioPage() {
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
-                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper')
+                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill')
                 if (mode !== 'select') setSelectedRegions([])
                 if (mode === 'select') setActivePaintColor(null)
               }}

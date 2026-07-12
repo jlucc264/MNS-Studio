@@ -28,6 +28,8 @@ from app.models import (
     RecolorResponse,
     GridRenderRequest,
     GridRenderResponse,
+    ImportPatternRequest,
+    ImportPatternResponse,
     NearestDmcRequest,
     SamplePixelRequest,
     PaletteColor,
@@ -77,6 +79,7 @@ from app.services.supabase_db import (
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
 from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
+from app.services.stitch_visualizer import import_pattern_image, PatternImportError
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -348,6 +351,30 @@ def recolor(request: RecolorRequest):
         stitch_preview_url=preview_url,
         palette=[p for p in palette],
         cells=cells,
+    )
+
+
+@app.post("/import-pattern-image", response_model=ImportPatternResponse)
+def import_pattern(request: ImportPatternRequest):
+    try:
+        cells, palette, stitch_width, stitch_height, snapped_color_count = import_pattern_image(
+            image_url=request.image_url,
+            stitch_width=request.stitch_width,
+            stitch_height=request.stitch_height,
+            snap_to_dmc=request.snap_to_dmc,
+        )
+    except PatternImportError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found.")
+
+    return ImportPatternResponse(
+        message="Pattern imported.",
+        cells=cells,
+        palette=[PaletteColor(**c) for c in palette],
+        stitch_width=stitch_width,
+        stitch_height=stitch_height,
+        snapped_color_count=snapped_color_count,
     )
 
 

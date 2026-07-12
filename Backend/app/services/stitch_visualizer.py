@@ -2138,6 +2138,129 @@ def grid_first_render(
     return preview_url, cells, used_palette
 
 
+PATTERN_IMPORT_MAX_STITCHES = 400
+PATTERN_IMPORT_MAX_COLORS = 120
+PATTERN_IMPORT_PITCH_TOLERANCE = 0.05
+PATTERN_IMPORT_ALPHA_THRESHOLD = 128
+
+
+class PatternImportError(ValueError):
+    """Raised with a machine-readable code when a chart import can't proceed."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _open_image_with_alpha(src_path: Path | str) -> Image.Image:
+    if isinstance(src_path, str) and src_path.startswith(("http://", "https://")):
+        request = Request(src_path, headers={"User-Agent": "MNS/1.0"})
+        with urlopen(request, timeout=30) as response:
+            image_bytes = BytesIO(response.read())
+        with Image.open(image_bytes) as img:
+            return ImageOps.exif_transpose(img).convert("RGBA")
+
+    with Image.open(src_path) as img:
+        return ImageOps.exif_transpose(img).convert("RGBA")
+
+
+def import_pattern_image(
+    image_url: str,
+    stitch_width: int | None = None,
+    stitch_height: int | None = None,
+    snap_to_dmc: bool = True,
+) -> tuple[list[list[str]], list[dict], int, int, int]:
+    """Import an already-charted pattern image (e.g. a Stitchly 1:1 PNG export).
+
+    Unlike the photo pipeline, this path is lossless: no resize filtering, no
+    despeckle, no palette budgeting. One block of pixels (or one pixel, for
+    1:1 exports) becomes exactly one stitch, sampled at block centers so
+    gridlines or antialiased block edges never bleed into the cell color.
+    """
+    rgba = _open_image_with_alpha(_resolve_asset_path(image_url))
+    width, height = rgba.size
+
+    if stitch_width and stitch_height:
+        grid_w, grid_h = stitch_width, stitch_height
+    elif width <= PATTERN_IMPORT_MAX_STITCHES and height <= PATTERN_IMPORT_MAX_STITCHES:
+        grid_w, grid_h = width, height
+    else:
+        raise PatternImportError(
+            "needs_dimensions",
+            "Image is larger than one pixel per stitch — provide the pattern's stitch width and height.",
+        )
+
+    if grid_w > PATTERN_IMPORT_MAX_STITCHES or grid_h > PATTERN_IMPORT_MAX_STITCHES:
+        raise PatternImportError(
+            "too_large",
+            f"Patterns are limited to {PATTERN_IMPORT_MAX_STITCHES} stitches per side.",
+        )
+    if grid_w < 1 or grid_h < 1 or grid_w > width or grid_h > height:
+        raise PatternImportError("invalid_dimensions", "Stitch dimensions don't fit the image.")
+
+    pitch_x = width / grid_w
+    pitch_y = height / grid_h
+    if (
+        abs(pitch_x - round(pitch_x)) > PATTERN_IMPORT_PITCH_TOLERANCE
+        or abs(pitch_y - round(pitch_y)) > PATTERN_IMPORT_PITCH_TOLERANCE
+    ):
+        raise PatternImportError(
+            "non_integer_pitch",
+            "Image size isn't a whole multiple of the stitch dimensions.",
+        )
+
+    pixels = rgba.load()
+    sampled_rows: list[list[tuple[int, int, int] | None]] = []
+    distinct_colors: set[tuple[int, int, int]] = set()
+    for row in range(grid_h):
+        y = min(height - 1, int((row + 0.5) * pitch_y))
+        row_colors: list[tuple[int, int, int] | None] = []
+        for col in range(grid_w):
+            x = min(width - 1, int((col + 0.5) * pitch_x))
+            r, g, b, a = pixels[x, y]
+            if a < PATTERN_IMPORT_ALPHA_THRESHOLD:
+                row_colors.append(None)
+            else:
+                color = (r, g, b)
+                row_colors.append(color)
+                distinct_colors.add(color)
+        sampled_rows.append(row_colors)
+
+    if len(distinct_colors) > PATTERN_IMPORT_MAX_COLORS:
+        raise PatternImportError(
+            "too_many_colors",
+            "This looks like a photo rather than a charted pattern — use the photo import instead.",
+        )
+    if not distinct_colors:
+        raise PatternImportError("empty_pattern", "No stitched cells found in the image.")
+
+    if snap_to_dmc:
+        color_map = {color: tuple(nearest_dmc(color)["rgb"]) for color in distinct_colors}
+    else:
+        color_map = {color: color for color in distinct_colors}
+    snapped_color_count = len(set(color_map.values()))
+
+    counts: dict[tuple[int, int, int], int] = {}
+    cells: list[list[str]] = []
+    for row_colors in sampled_rows:
+        row_cells = []
+        for color in row_colors:
+            if color is None:
+                row_cells.append(BLANK_CELL)
+                continue
+            mapped = color_map[color]
+            counts[mapped] = counts.get(mapped, 0) + 1
+            row_cells.append(rgb_to_hex(mapped))
+        cells.append(row_cells)
+
+    palette = []
+    for rgb, _count in sorted(counts.items(), key=lambda item: -item[1]):
+        dmc = nearest_dmc(rgb)
+        palette.append({"hex": rgb_to_hex(rgb), "dmc_code": dmc["code"], "dmc_name": dmc["name"]})
+
+    return cells, palette, grid_w, grid_h, snapped_color_count
+
+
 def image_to_cells(img: Image.Image) -> list[list[str]]:
     width, height = img.size
     pixels = list(img.getdata())

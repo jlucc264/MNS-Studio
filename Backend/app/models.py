@@ -38,6 +38,22 @@ class PaletteColor(BaseModel):
     dmc_name: str
 
 
+class ImportPatternRequest(BaseModel):
+    image_url: str
+    stitch_width: int | None = None
+    stitch_height: int | None = None
+    snap_to_dmc: bool = True
+
+
+class ImportPatternResponse(BaseModel):
+    message: str
+    cells: list[list[str]]
+    palette: list[PaletteColor]
+    stitch_width: int
+    stitch_height: int
+    snapped_color_count: int
+
+
 class GridRenderRequest(BaseModel):
     image_url: str
     stitch_width: int

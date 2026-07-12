@@ -337,6 +337,45 @@ export async function gridRender(payload: GridRenderPayload): Promise<GridRender
   return res.json()
 }
 
+export type ImportPatternPayload = {
+  image_url: string
+  stitch_width?: number
+  stitch_height?: number
+  snap_to_dmc?: boolean
+}
+
+export type ImportPatternResponse = {
+  message: string
+  cells: string[][]
+  palette: PaletteColor[]
+  stitch_width: number
+  stitch_height: number
+  snapped_color_count: number
+}
+
+export class ImportPatternError extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.code = code
+  }
+}
+
+export async function importPatternImage(payload: ImportPatternPayload): Promise<ImportPatternResponse> {
+  const res = await fetch(`${API_BASE}/import-pattern-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (res.status === 422) {
+    const body = await res.json().catch(() => null)
+    const detail = body?.detail
+    throw new ImportPatternError(detail?.code ?? 'invalid', detail?.message ?? 'Pattern import failed')
+  }
+  if (!res.ok) throw new Error('Pattern import failed')
+  return res.json()
+}
+
 export async function nearestDmc(hex: string): Promise<PaletteColor> {
   const res = await fetch(`${API_BASE}/nearest-dmc`, {
     method: 'POST',

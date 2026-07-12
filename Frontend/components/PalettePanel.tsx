@@ -14,8 +14,8 @@ type Props = {
   activeDesignColors: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper'
-  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper') => void
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill'
+  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill') => void
   textFontSize: FontSize
   onTextFontSizeChange: (size: FontSize) => void
   textFontFamily: FontFamily
@@ -181,6 +181,8 @@ export default function PalettePanel({
   const isShapeTab = toolMode === 'shape'
   const isMergeTab = toolMode === 'merge'
   const isTextTab = toolMode === 'text'
+  const isEraseTab = toolMode === 'erase'
+  const isFillTab = toolMode === 'fill'
 
   return (
     <div
@@ -207,7 +209,7 @@ export default function PalettePanel({
       >
         <button
           type="button"
-          onClick={() => onToolModeChange(isShapeTab ? 'shape' : isMergeTab ? 'merge' : isTextTab ? 'text' : 'paint')}
+          onClick={() => onToolModeChange(isShapeTab ? 'shape' : isMergeTab ? 'merge' : isTextTab ? 'text' : isEraseTab ? 'erase' : isFillTab ? 'fill' : 'paint')}
           style={{
             ...pill,
             background: isCreateTab ? '#3f382f' : 'transparent',
@@ -232,11 +234,11 @@ export default function PalettePanel({
       {/* Create tab content */}
       {isCreateTab && (
         <>
-          {/* Paint | Shape | Text sub-toggle */}
+          {/* Paint | Shape | Text | Fill | Erase sub-toggle */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr',
+              gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr',
               gap: 3,
               padding: 3,
               border: '1px solid #d7d0c8',
@@ -279,6 +281,30 @@ export default function PalettePanel({
               }}
             >
               Aa Text
+            </button>
+            <button
+              type="button"
+              onClick={() => onToolModeChange('fill')}
+              style={{
+                ...pill,
+                background: isFillTab ? '#6e8d67' : 'transparent',
+                color: isFillTab ? '#fff' : '#8a8177',
+                fontSize: 11,
+              }}
+            >
+              ◍ Fill
+            </button>
+            <button
+              type="button"
+              onClick={() => onToolModeChange('erase')}
+              style={{
+                ...pill,
+                background: isEraseTab ? '#6e8d67' : 'transparent',
+                color: isEraseTab ? '#fff' : '#8a8177',
+                fontSize: 11,
+              }}
+            >
+              ⌫ Erase
             </button>
           </div>
 
@@ -416,7 +442,7 @@ export default function PalettePanel({
           )}
 
           {/* Paint mode: active color + brush size */}
-          {toolMode === 'paint' && (
+          {(toolMode === 'paint' || toolMode === 'erase' || toolMode === 'fill') && (
             <div
               style={{
                 display: 'grid',
@@ -534,7 +560,7 @@ export default function PalettePanel({
           )}
 
           {/* Paint sub-tab: color grid */}
-          {(toolMode === 'paint' || toolMode === 'eyedropper') && (
+          {(toolMode === 'paint' || toolMode === 'eyedropper' || toolMode === 'fill') && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {/* Eraser row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, flexShrink: 0 }}>
