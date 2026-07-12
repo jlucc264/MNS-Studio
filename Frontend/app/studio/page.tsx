@@ -409,7 +409,7 @@ function StudioPage() {
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [gridKey, setGridKey] = useState(0)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'>('paint')
   const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
   const [textFontFamily, setTextFontFamily] = useState<'sans' | 'serif'>('sans')
   const [textBold, setTextBold] = useState(false)
@@ -1226,6 +1226,27 @@ function StudioPage() {
     const lastH = Math.max(1, Math.round(lastSettings.height_inches * lastSettings.mesh_count))
     if (newW === lastW && newH === lastH) return
 
+    // Mesh toggle on a canvas that has stitched content (imported pattern or
+    // hand-painted design): the stitch grid is the ground truth, so keep it
+    // and recompute the physical inches at the new mesh instead of wiping.
+    const meshChanged = draftSettings.mesh_count !== lastSettings.mesh_count
+    const hasContent = cells.some((row) => row.some((cell) => cell !== BLANK_CELL))
+    if (meshChanged && hasContent) {
+      const rows = cells.length
+      const cols = cells[0]?.length ?? 0
+      if (rows > 0 && cols > 0) {
+        const adjusted: PreviewSettings = {
+          ...draftSettings,
+          width_inches: Math.round((cols / draftSettings.mesh_count) * 100) / 100,
+          height_inches: Math.round((rows / draftSettings.mesh_count) * 100) / 100,
+        }
+        setDraftSettings(adjusted)
+        setLastSettings(adjusted)
+        setImportedAspectRatio(adjusted.width_inches / adjusted.height_inches)
+        return
+      }
+    }
+
     const timeoutId = window.setTimeout(() => {
       const blankGrid = Array.from({ length: newH }, () => Array(newW).fill(BLANK_CELL))
       setOriginalCells(blankGrid)
@@ -1238,7 +1259,7 @@ function StudioPage() {
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [activeImagePath, draftSettings, hasGeneratedPreview, lastSettings])
+  }, [activeImagePath, cells, draftSettings, hasGeneratedPreview, lastSettings])
 
   function updateSettings(patch: Partial<PreviewSettings>) {
     setDraftSettings((current) => {
@@ -1496,10 +1517,6 @@ function StudioPage() {
   function handlePaintCells(coords: Array<[number, number]>) {
     if (!activePaintColor) return
     paintCellsWithColor(coords, activePaintColor)
-  }
-
-  function handleEraseCells(coords: Array<[number, number]>) {
-    paintCellsWithColor(coords, BLANK_CELL)
   }
 
   function handleFillCell({ row, col }: { row: number; col: number }) {
@@ -2839,7 +2856,7 @@ function StudioPage() {
   const finishW = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designWidthInches)
   const finishH = finishShape === 'circle' ? resolvedFinishSize : Math.min(resolvedFinishSize, designHeightInches)
   const workflowSteps = [
-    { id: 1 as const, label: 'Upload Image', complete: Boolean(activeImagePath) },
+    { id: 1 as const, label: 'Upload', complete: Boolean(activeImagePath) || cells.length > 0 },
     { id: 2 as const, label: 'Design', complete: Boolean(hasGeneratedPreview) },
     { id: 3 as const, label: 'Finalize', complete: Boolean(finalPdfPath) },
   ]
@@ -3033,7 +3050,7 @@ function StudioPage() {
         <>
           <div>
             <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
-              Upload Image
+              Upload
             </h2>
             <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
               Start with a photo, screenshot, or artwork file.
@@ -3144,9 +3161,6 @@ function StudioPage() {
               <strong style={{ color: '#3f382f', fontSize: 18 }}>{isMobile ? 'Tap to choose a photo' : 'Drop image file here'}</strong>
               {!isMobile && <span>or click to choose a file</span>}
             </div>
-            <button type="button" disabled style={{ ...btnSecondary, opacity: 0.5, cursor: 'default' }}>
-              Import URL in chat (Coming Soon)
-            </button>
             {activeImagePath && <p style={{ margin: 0, color: '#5f7f5a' }}>Image loaded.</p>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -3894,7 +3908,7 @@ function StudioPage() {
                   textItalic={textItalic}
                   textOutline={textOutline}
                   onPaintStart={pushUndoSnapshot}
-                  onPaintCells={toolMode === 'merge' ? handleMergeCells : toolMode === 'erase' ? handleEraseCells : handlePaintCells}
+                  onPaintCells={toolMode === 'merge' ? handleMergeCells : handlePaintCells}
                   onFillCell={handleFillCell}
                   onApplyShapeCells={handleApplyShapeCells}
                   onEyedropperSample={handleEyedropperSample}
@@ -4080,7 +4094,7 @@ function StudioPage() {
               colorCountsByHex={displayColorCounts}
               toolMode={toolMode}
               onToolModeChange={(mode) => {
-                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'erase' | 'fill')
+                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill')
                 if (mode !== 'select') setSelectedRegions([])
                 if (mode === 'select') setActivePaintColor(null)
               }}
