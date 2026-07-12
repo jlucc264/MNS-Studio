@@ -14,6 +14,7 @@ import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
+import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
 const MOBILE_BREAKPOINT = 768
 
@@ -188,6 +189,7 @@ function GalleryPage() {
   const [checkoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [showCartDrawer, setShowCartDrawer] = useState(false)
+  const [showOrderConfirmation, setShowOrderConfirmation] = useState(false)
   const [addedToCartId, setAddedToCartId] = useState<string | null>(null)
   const [hasActiveDesign, setHasActiveDesign] = useState(false)
   const { count: cartCount } = useCart()
@@ -258,8 +260,12 @@ function GalleryPage() {
   }, [searchParams, items])
 
   useEffect(() => {
-    if (searchParams.get('order') === 'success') cartClear()
-  }, [searchParams])
+    if (searchParams.get('order') === 'success') {
+      cartClear()
+      setShowOrderConfirmation(true)
+      router.replace('/gallery', { scroll: false })
+    }
+  }, [searchParams, router])
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
@@ -1389,6 +1395,7 @@ function GalleryPage() {
         </div>
       )}
       <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
+      <OrderConfirmationModal open={showOrderConfirmation} onClose={() => setShowOrderConfirmation(false)} />
       {checkoutClientSecret && (
         <CheckoutModal
           clientSecret={checkoutClientSecret}

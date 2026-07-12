@@ -20,6 +20,7 @@ import PalettePanel from '../../components/PalettePanel'
 import { ColorBrowserModal } from '../../components/ColorBrowserModal'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
+import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
@@ -448,6 +449,7 @@ function StudioPage() {
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showPriceBreakdownModal, setShowPriceBreakdownModal] = useState(false)
   const [showCartDrawer, setShowCartDrawer] = useState(false)
+  const [showOrderConfirmation, setShowOrderConfirmation] = useState(false)
   const [showGalleryPublishModal, setShowGalleryPublishModal] = useState(false)
   const { count: cartCount } = useCart()
   const pendingCents = useCanvasCredit(session?.access_token)
@@ -755,8 +757,12 @@ function StudioPage() {
   }, [searchParams, session?.access_token])
 
   useEffect(() => {
-    if (searchParams.get('order') === 'success') cartClear()
-  }, [searchParams])
+    if (searchParams.get('order') === 'success') {
+      cartClear()
+      setShowOrderConfirmation(true)
+      router.replace('/studio', { scroll: false })
+    }
+  }, [searchParams, router])
 
   const isMobile = viewportWidth < MOBILE_BREAKPOINT
 
@@ -4621,6 +4627,7 @@ function StudioPage() {
           onClose={() => setCheckoutClientSecret(null)}
         />
       )}
+      <OrderConfirmationModal open={showOrderConfirmation} onClose={() => setShowOrderConfirmation(false)} />
       <CartDrawer
         open={showCartDrawer}
         onClose={() => setShowCartDrawer(false)}

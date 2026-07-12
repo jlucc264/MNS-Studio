@@ -8,3 +8,9 @@ services:
     envVars:
       - key: ALLOWED_ORIGINS
         value: https://mns.studio,https://www.mns.studio,https://app.mns.studio
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: MNS Studio <noreply@mns.studio>
+      - key: FINALIZED_REPORT_RECIPIENT
+        value: john@mns.studio

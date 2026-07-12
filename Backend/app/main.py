@@ -43,7 +43,11 @@ from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
 from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf
 from app.services.storage import delete_finalized_output
-from app.services.email_delivery import send_contact_email, send_order_notification
+from app.services.email_delivery import (
+    send_contact_email,
+    send_customer_order_confirmation,
+    send_order_notification,
+)
 from app.services.stripe_service import (
     create_print_own_checkout,
     create_template_checkout,
@@ -741,6 +745,23 @@ def _handle_completed_session(session: dict) -> None:
                                 extra_attachments=cart_attachments if cart_attachments else None)
     except Exception:
         logger.exception("Order notification email failed for session %s", session.get("id"))
+
+    if customer_email:
+        pattern_pdf: bytes | None = None
+        if order_type == "template" and metadata.get("pdf_url"):
+            try:
+                with _ur.urlopen(metadata["pdf_url"], timeout=20) as r:
+                    pattern_pdf = r.read()
+            except Exception:
+                logger.exception("Could not fetch pattern PDF for session %s", session.get("id"))
+        try:
+            send_customer_order_confirmation(
+                order_type, metadata, customer_email, shipping,
+                amount_total_cents=session.get("amount_total"),
+                pattern_pdf_bytes=pattern_pdf,
+            )
+        except Exception:
+            logger.exception("Customer confirmation email failed for session %s", session.get("id"))
 
     if order_type in {"template", "print_gallery"}:
         creator_user_id = metadata.get("creator_user_id", "")

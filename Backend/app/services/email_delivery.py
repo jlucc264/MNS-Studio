@@ -111,6 +111,119 @@ def send_order_notification(
     return True
 
 
+def _order_items_summary(order_type: str, metadata: dict) -> list[str]:
+    if order_type == "cart":
+        import json as _json
+
+        lines = []
+        for i in range(int(metadata.get("item_count", 0))):
+            try:
+                item = _json.loads(metadata.get(f"item_{i}", "{}"))
+            except Exception:
+                continue
+            qty = item.get("qty", 1)
+            qty_suffix = f" × {qty}" if qty and qty != 1 else ""
+            lines.append(f'{item.get("w", "?")}" × {item.get("h", "?")}" canvas print{qty_suffix}')
+        return lines
+
+    title = metadata.get("title", "your design")
+    if order_type == "template":
+        return [f"Needlepoint pattern: “{title}”"]
+    canvas = f' on a {metadata["canvas_size"]}" canvas' if metadata.get("canvas_size") else ""
+    if order_type == "print_gallery":
+        return [f"Canvas print: “{title}”{canvas}"]
+    return [f"Canvas print of your design{canvas}"]
+
+
+def send_customer_order_confirmation(
+    order_type: str,
+    metadata: dict,
+    customer_email: str,
+    shipping: dict | None,
+    amount_total_cents: int | None,
+    pattern_pdf_bytes: bytes | None = None,
+) -> bool:
+    if not _ready():
+        return False
+
+    is_template = order_type == "template"
+    items = _order_items_summary(order_type, metadata)
+    total = f"${amount_total_cents / 100:,.2f}" if amount_total_cents is not None else None
+
+    next_steps = (
+        "Your pattern PDF is attached to this email — happy stitching!"
+        if is_template
+        else "We're preparing your canvas now and will be in touch when it ships."
+    )
+
+    text_lines = ["Thank you for your order from MNS Studio!", ""]
+    text_lines += [f"  • {item}" for item in items]
+    if total:
+        text_lines += ["", f"Total paid: {total}"]
+    if shipping:
+        addr = shipping.get("address", {})
+        text_lines += ["", f"Shipping to: {shipping.get('name', '')}", f"  {addr.get('line1', '')}"]
+        if addr.get("line2"):
+            text_lines.append(f"  {addr['line2']}")
+        text_lines.append(f"  {addr.get('city', '')}, {addr.get('state', '')} {addr.get('postal_code', '')}")
+    text_lines += ["", next_steps, "", "Questions? Just reply to this email.", "— MNS Studio"]
+
+    item_rows = "".join(
+        f'<tr><td style="padding:6px 0;border-bottom:1px solid #eee6d8;">{item}</td></tr>'
+        for item in items
+    )
+    total_row = (
+        f'<tr><td style="padding:10px 0 0;font-weight:bold;">Total paid: {total}</td></tr>'
+        if total
+        else ""
+    )
+    shipping_html = ""
+    if shipping:
+        addr = shipping.get("address", {})
+        parts = [shipping.get("name", ""), addr.get("line1", "")]
+        if addr.get("line2"):
+            parts.append(addr["line2"])
+        parts.append(f"{addr.get('city', '')}, {addr.get('state', '')} {addr.get('postal_code', '')}")
+        shipping_html = (
+            '<p style="margin:18px 0 4px;font-weight:bold;">Shipping to</p>'
+            + "<p style=\"margin:0;color:#5b544a;\">" + "<br>".join(p for p in parts if p) + "</p>"
+        )
+
+    html = f"""
+<div style="background:#f9f5ee;padding:32px 16px;font-family:Georgia,'Times New Roman',serif;color:#2f2a24;">
+  <div style="max-width:520px;margin:0 auto;background:#fffdf9;border:1px solid #e8e0d0;border-radius:10px;padding:32px;">
+    <h1 style="margin:0 0 6px;font-size:22px;font-weight:normal;">Thank you for your order</h1>
+    <p style="margin:0 0 20px;color:#5b544a;">Your MNS Studio order is confirmed.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:15px;">{item_rows}{total_row}</table>
+    {shipping_html}
+    <p style="margin:22px 0 0;">{next_steps}</p>
+    <p style="margin:18px 0 0;color:#5b544a;font-size:14px;">Questions? Just reply to this email.</p>
+    <p style="margin:24px 0 0;font-size:14px;color:#8a8272;">— MNS Studio · <a href="https://mns.studio" style="color:#8a8272;">mns.studio</a></p>
+  </div>
+</div>
+"""
+
+    params: resend.Emails.SendParams = {
+        "from": FROM_EMAIL,
+        "to": [customer_email],
+        "reply_to": [RECIPIENT],
+        "subject": "Your MNS Studio order is confirmed",
+        "text": "\n".join(text_lines),
+        "html": html,
+    }
+    if pattern_pdf_bytes:
+        safe_title = "".join(
+            ch for ch in metadata.get("title", "pattern") if ch.isalnum() or ch in " -_"
+        ).strip() or "pattern"
+        params["attachments"] = [{
+            "filename": f"{safe_title}.pdf",
+            "content": list(pattern_pdf_bytes),
+        }]
+
+    resend.Emails.send(params)
+    return True
+
+
 def send_finalized_report(report_path: Path) -> bool:
     if not _ready():
         return False
