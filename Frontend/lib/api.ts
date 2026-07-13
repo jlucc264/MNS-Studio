@@ -799,6 +799,22 @@ export async function getMyCreatorProfile(accessToken: string): Promise<CreatorP
   return res.json()
 }
 
+export async function updateMyCreatorName(
+  submitterName: string,
+  accessToken: string,
+): Promise<CreatorProfile & { slug: string | null }> {
+  const res = await fetch(`${API_BASE}/gallery/creator/me`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ submitter_name: submitterName }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not update creator name')
+  }
+  return res.json()
+}
+
 export async function getCreatorProfile(slug: string, accessToken?: string | null): Promise<CreatorProfile> {
   const res = await fetch(`${API_BASE}/gallery/creator/${encodeURIComponent(slug)}`, {
     headers: authHeaders(accessToken),

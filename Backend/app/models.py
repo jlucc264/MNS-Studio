@@ -222,6 +222,10 @@ class CartCheckoutRequest(BaseModel):
     items: list[CartCheckoutItem]
 
 
+class UpdateCreatorRequest(BaseModel):
+    submitter_name: str
+
+
 class GalleryCreateRequest(BaseModel):
     title: str
     tags: list[str] = []

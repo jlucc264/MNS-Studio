@@ -1,8 +1,15 @@
+'use client'
+
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import type { CSSProperties, ReactNode } from 'react'
+import { NavAccountControls } from '../../components/NavAccountControls'
+import { useAuth } from '../../components/AuthProvider'
+import { getMyCreatorProfile } from '../../lib/api'
 
 const EFFECTIVE_DATE = 'June 2, 2026'
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section style={{ marginBottom: 40 }}>
       <h2 style={{ margin: '0 0 16px', fontSize: 20, color: '#3f382f', borderBottom: '1px solid #e4ddd5', paddingBottom: 10 }}>
@@ -13,7 +20,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Sub({ title, children }: { title: string; children: React.ReactNode }) {
+function Sub({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <h3 style={{ margin: '0 0 8px', fontSize: 15, color: '#3f382f' }}>{title}</h3>
@@ -22,35 +29,64 @@ function Sub({ title, children }: { title: string; children: React.ReactNode }) 
   )
 }
 
-const p: React.CSSProperties = { margin: '0 0 12px', fontSize: 14, color: '#5f574e', lineHeight: 1.75 }
-const li: React.CSSProperties = { fontSize: 14, color: '#5f574e', lineHeight: 1.75, marginBottom: 6 }
+const p: CSSProperties = { margin: '0 0 12px', fontSize: 14, color: '#5f574e', lineHeight: 1.75 }
+const li: CSSProperties = { fontSize: 14, color: '#5f574e', lineHeight: 1.75, marginBottom: 6 }
 
 export default function PrivacyPage() {
+  const router = useRouter()
+  const { session, user, signOut } = useAuth()
+
+  async function handleViewProfile() {
+    if (!session?.access_token) return
+    try {
+      const profile = await getMyCreatorProfile(session.access_token)
+      router.push(profile.slug ? `/gallery/${profile.slug}` : '/gallery')
+    } catch {
+      router.push('/gallery')
+    }
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#f5f1ea' }}>
       <nav
         style={{
-          height: 64,
+          height: 70,
           display: 'flex',
           alignItems: 'center',
-          padding: '0 24px',
-          borderBottom: '2px solid #6e8d67',
-          background: '#fffdf8',
+          padding: '0 28px',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid #5c7856',
+          background: '#6e8d67',
           boxSizing: 'border-box',
           gap: 16,
         }}
       >
-        <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
-          <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
-            {Array.from({ length: 9 }, (_, i) => (
-              <span key={i} style={{ width: 9, height: 9, border: '2px solid #111', borderRadius: 2, boxSizing: 'border-box' }} />
-            ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
+            <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
+              {Array.from({ length: 9 }, (_, i) => (
+                <span key={i} style={{ width: 9, height: 9, border: '2px solid #fffdf8', borderRadius: 2, boxSizing: 'border-box' }} />
+              ))}
+            </div>
+            <strong style={{ fontSize: 22, color: '#fffdf8' }}>MNS Studio</strong>
+          </Link>
+          <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
+          <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <Link href="/gallery" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Gallery</Link>
+            <Link href="/drafts" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Your Studio</Link>
           </div>
-          <strong style={{ fontSize: 20, color: '#111' }}>MNS Studio</strong>
-        </Link>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
-          <Link href="/terms" style={{ color: '#7f776d', textDecoration: 'none' }}>Terms</Link>
-          <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none' }}>Contact Us</Link>
+        </div>
+        <div style={{ display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+          <Link href="/terms" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Terms</Link>
+          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none' }}>Contact Us</Link>
+          {session && (
+            <NavAccountControls
+              user={user}
+              onProfile={() => void handleViewProfile()}
+              onLogout={() => { void signOut() }}
+              onStudio={() => router.push('/studio')}
+            />
+          )}
         </div>
       </nav>
 

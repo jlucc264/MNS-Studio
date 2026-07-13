@@ -33,6 +33,9 @@ type Props = {
   textBold?: boolean
   textItalic?: boolean
   textOutline?: boolean
+  floatingStamp?: { cells: (string | null)[][]; anchorRow: number; anchorCol: number } | null
+  onStampMove?: (anchor: { row: number; col: number }) => void
+  clearSelectionSignal?: number
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
@@ -506,6 +509,9 @@ export default function GridEditor({
   textBold = false,
   textItalic = false,
   textOutline = false,
+  floatingStamp = null,
+  onStampMove,
+  clearSelectionSignal = 0,
 }: Props) {
   if (!cells.length) return null
 
@@ -557,6 +563,12 @@ export default function GridEditor({
     initBoxEndRow: number; initBoxEndCol: number
     pointerRow: number; pointerCol: number
   } | null>(null)
+  const stampMoveStartRef = useRef<{
+    initAnchorRow: number; initAnchorCol: number
+    pointerRow: number; pointerCol: number
+  } | null>(null)
+  const onStampMoveRef = useRef(onStampMove)
+  useEffect(() => { onStampMoveRef.current = onStampMove })
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
@@ -694,6 +706,7 @@ export default function GridEditor({
     textBoxStartRef.current = null
     textIsMovingRef.current = false
     textMoveStartRef.current = null
+    stampMoveStartRef.current = null
   }, [])
 
   const focusTextInputForKeyboard = useCallback(() => {
@@ -720,6 +733,25 @@ export default function GridEditor({
     }
   }, [highlightSelection])
 
+  // Cut/Copy lifts the selection into a floating stamp — drop the marquee
+  useEffect(() => {
+    if (floatingStamp) {
+      setDragSelectionRect(null)
+      setSelectionRects([])
+      liveSelectionRectRef.current = null
+    }
+  }, [floatingStamp])
+
+  // Parent-driven "clear highlight": drop the internal marquee too
+  const lastClearSignalRef = useRef(clearSelectionSignal)
+  useEffect(() => {
+    if (clearSelectionSignal === lastClearSignalRef.current) return
+    lastClearSignalRef.current = clearSelectionSignal
+    setDragSelectionRect(null)
+    setSelectionRects([])
+    liveSelectionRectRef.current = null
+  }, [clearSelectionSignal])
+
   useEffect(() => {
     const stopPainting = (event: PointerEvent) => {
       if (event.pointerType === 'touch') {
@@ -740,7 +772,9 @@ export default function GridEditor({
         const anchorCol = Math.min(start.col, textBoxEnd.col)
         textBoxStartRef.current = null
         setTextAnchorCell({ row: anchorRow, col: anchorCol })
-        focusTextInputForKeyboard()
+        // On touch, don't summon the keyboard the moment a box is drawn (it
+        // wrecks the layout) — tapping inside the box opens it deliberately
+        if (event.pointerType !== 'touch') focusTextInputForKeyboard()
       }
 
       if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
@@ -794,6 +828,7 @@ export default function GridEditor({
       paintingPointerIdRef.current = null
       selectionPointerIdRef.current = null
       lastPaintedCellRef.current = null
+      stampMoveStartRef.current = null
     }
 
     window.addEventListener('pointerup', stopPainting)
@@ -1348,6 +1383,21 @@ export default function GridEditor({
       metaKey: boolean
       preventDefault: () => void
     }) => {
+      if (highlightSelection && floatingStamp) {
+        // A floating stamp captures all canvas drags: move it, don't select
+        input.preventDefault()
+        const hit = getCellFromClientPoint(input.clientX, input.clientY, 'stage')
+        if (!hit) return
+        stampMoveStartRef.current = {
+          initAnchorRow: floatingStamp.anchorRow,
+          initAnchorCol: floatingStamp.anchorCol,
+          pointerRow: hit.row,
+          pointerCol: hit.col,
+        }
+        selectionPointerIdRef.current = input.pointerId
+        return
+      }
+
       if (highlightSelection) {
         input.preventDefault()
         selectionPointerIdRef.current = input.pointerId
@@ -1442,7 +1492,7 @@ export default function GridEditor({
     [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
-     textFontSize, textFontFamily, textBold, textItalic, textOutline]
+     textFontSize, textFontFamily, textBold, textItalic, textOutline, floatingStamp]
   )
 
   const flushPendingTouchEdit = useCallback(() => {
@@ -1518,6 +1568,16 @@ export default function GridEditor({
   const handleCanvasPointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (event.pointerType === 'touch' && touchActivePointersRef.current.size > 1) return
+      if (highlightSelection && stampMoveStartRef.current && selectionPointerIdRef.current === event.pointerId) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        if (!hit) return
+        const start = stampMoveStartRef.current
+        onStampMoveRef.current?.({
+          row: start.initAnchorRow + (hit.row - start.pointerRow),
+          col: start.initAnchorCol + (hit.col - start.pointerCol),
+        })
+        return
+      }
       if (highlightSelection && isSelecting && selectionPointerIdRef.current === event.pointerId) {
         const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
         if (!hit) return
@@ -1730,12 +1790,14 @@ export default function GridEditor({
 
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0)
     const activeFocusRegions = activeRenderSelections
+    // While a stamp floats, mute the active-color highlight so the canvas reads normally
+    const cellHighlightColor = floatingStamp ? null : activeColor
     const renderSignature = [
       wrapperWidth,
       wrapperHeight,
       cellSize,
       effectiveDisplayMode,
-      activeColor ?? '',
+      cellHighlightColor ?? '',
       highlightSelection,
       activeFocusRegions
         .map((selection) =>
@@ -1784,7 +1846,7 @@ export default function GridEditor({
 
           drawCanvasCell({
             context,
-            activeColor,
+            activeColor: cellHighlightColor,
             color,
             cellSize: cellSize,
             displayMode: effectiveDisplayMode,
@@ -1808,7 +1870,7 @@ export default function GridEditor({
 
           drawCanvasCell({
             context,
-            activeColor,
+            activeColor: cellHighlightColor,
             color: cells[row][col],
             cellSize: cellSize,
             displayMode: effectiveDisplayMode,
@@ -1832,6 +1894,7 @@ export default function GridEditor({
     cols,
     effectiveDisplayMode,
     activeColor,
+    floatingStamp,
     highlightSelection,
     activeRenderSelections,
     gridOriginX,
@@ -1989,6 +2052,37 @@ export default function GridEditor({
       cellSize,
     })
 
+    // Floating stamp (cut/copy/paste) preview
+    if (highlightSelection && floatingStamp) {
+      const stampRows = floatingStamp.cells.length
+      const stampCols = floatingStamp.cells[0]?.length ?? 0
+      context.globalAlpha = 0.9
+      for (let r = 0; r < stampRows; r += 1) {
+        for (let c = 0; c < stampCols; c += 1) {
+          const color = floatingStamp.cells[r][c]
+          if (color === null) continue
+          const stageRow = floatingStamp.anchorRow + r + contentOriginRow + borderStitches
+          const stageCol = floatingStamp.anchorCol + c + contentOriginCol + borderStitches
+          if (stageRow < 0 || stageRow >= stageRows || stageCol < 0 || stageCol >= stageCols) continue
+          const x = gridOriginX + stageCol * cellSize
+          const y = gridOriginY + stageRow * cellSize
+          context.fillStyle = color
+          context.fillRect(x, y, cellSize, cellSize)
+          context.strokeStyle = 'rgba(0,0,0,0.15)'
+          context.lineWidth = 0.5
+          context.strokeRect(x, y, cellSize, cellSize)
+        }
+      }
+      context.globalAlpha = 1
+      const bx = gridOriginX + (floatingStamp.anchorCol + contentOriginCol + borderStitches) * cellSize
+      const by = gridOriginY + (floatingStamp.anchorRow + contentOriginRow + borderStitches) * cellSize
+      context.strokeStyle = 'rgba(74, 124, 89, 0.95)'
+      context.lineWidth = Math.max(1.5, cellSize * 0.1)
+      context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
+      context.strokeRect(bx, by, stampCols * cellSize, stampRows * cellSize)
+      context.setLineDash([])
+    }
+
     if (!renderSelections.length) return
 
     renderSelections.forEach((overlaySelection) => {
@@ -2041,6 +2135,10 @@ export default function GridEditor({
     textOutline,
     textCursorVisible,
     activeColor,
+    highlightSelection,
+    floatingStamp,
+    stageRows,
+    stageCols,
   ])
 
   return (

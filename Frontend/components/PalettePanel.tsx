@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { type FontSize, type FontFamily } from '../lib/bitmapFonts'
 
 type PaletteColor = {
@@ -33,7 +33,16 @@ type Props = {
   selectionMergeSuggestions: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
-  onMoveSelection: (direction: 'up' | 'down' | 'left' | 'right') => void
+  hasClipboard: boolean
+  hasFloatingStamp: boolean
+  onCutSelection: () => void
+  onCopySelection: () => void
+  onPasteClipboard: () => void
+  onStampNudge: (direction: 'up' | 'down' | 'left' | 'right') => void
+  onRotateStamp: () => void
+  onFlipStamp: (axis: 'horizontal' | 'vertical') => void
+  onPlaceStamp: () => void
+  onCancelStamp: () => void
   onSelect: (color: PaletteColor) => void
   onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
@@ -99,7 +108,16 @@ export default function PalettePanel({
   selectionMergeSuggestions,
   onApplyColorToSelection,
   onClearSelection,
-  onMoveSelection,
+  hasClipboard,
+  hasFloatingStamp,
+  onCutSelection,
+  onCopySelection,
+  onPasteClipboard,
+  onStampNudge,
+  onRotateStamp,
+  onFlipStamp,
+  onPlaceStamp,
+  onCancelStamp,
   onSelect,
   onSelectBlankCanvas,
   moreColors,
@@ -124,7 +142,11 @@ export default function PalettePanel({
   onShapeBorderSizeChange,
 }: Props) {
   const [hoveredSwatchHex, setHoveredSwatchHex] = useState<string | null>(null)
-  const [selectSubMode, setSelectSubMode] = useState<'color' | 'move'>('color')
+  const [selectSubMode, setSelectSubMode] = useState<'color' | 'stamp'>('color')
+
+  useEffect(() => {
+    if (hasFloatingStamp) setSelectSubMode('stamp')
+  }, [hasFloatingStamp])
 
 
 
@@ -973,7 +995,7 @@ export default function PalettePanel({
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Sub-tab toggle */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5', flexShrink: 0 }}>
-            {(['color', 'move'] as const).map((mode) => (
+            {(['color', 'stamp'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -986,7 +1008,7 @@ export default function PalettePanel({
                   textTransform: 'capitalize',
                 }}
               >
-                {mode === 'color' ? '◉ Color' : '✥ Move'}
+                {mode === 'color' ? '◉ Color' : '✂ Cut / Paste'}
               </button>
             ))}
           </div>
@@ -1007,9 +1029,11 @@ export default function PalettePanel({
           >
             {selectSubMode === 'color'
               ? <span>Choose a color to highlight all active cells, or select a region first. Can select multiple regions by holding down CTRL.</span>
-              : <span>Select a region, then use the arrows to shift it one cell at a time. Cells moved off the edge are discarded.</span>
+              : hasFloatingStamp
+                ? <span>Drag the floating stamp on the canvas (or use the arrows), rotate or flip it, then Place to commit.</span>
+                : <span>Select a region, then Cut or Copy it. Paste drops the last cut/copied stitches back onto the canvas.</span>
             }
-            {hasSelectedRegion && (
+            {(hasSelectedRegion || activeColor) && (
               <button
                 type="button"
                 onClick={onClearSelection}
@@ -1024,45 +1048,140 @@ export default function PalettePanel({
                   cursor: 'pointer',
                 }}
               >
-                Clear selection ({selectedRegionCount} stitches)
+                {hasSelectedRegion
+                  ? `✕ Clear selection (${selectedRegionCount} stitches)`
+                  : '✕ Clear highlight'}
               </button>
             )}
           </div>
 
-          {/* Move controls */}
-          {selectSubMode === 'move' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 36px)', gridTemplateRows: 'repeat(3, 36px)', gap: 4, justifyContent: 'center', flexShrink: 0, paddingTop: 4 }}>
+          {/* Cut / Copy / Paste controls */}
+          {selectSubMode === 'stamp' && !hasFloatingStamp && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 5, flexShrink: 0 }}>
               {[
-                { dir: 'up' as const, label: '↑', col: 2, row: 1 },
-                { dir: 'left' as const, label: '←', col: 1, row: 2 },
-                { dir: 'right' as const, label: '→', col: 3, row: 2 },
-                { dir: 'down' as const, label: '↓', col: 2, row: 3 },
-              ].map(({ dir, label, col, row }) => (
+                { label: '✂ Cut', onClick: onCutSelection, disabled: !hasSelectedRegion },
+                { label: '⧉ Copy', onClick: onCopySelection, disabled: !hasSelectedRegion },
+                { label: '⇩ Paste', onClick: onPasteClipboard, disabled: !hasClipboard },
+              ].map(({ label, onClick, disabled }) => (
                 <button
-                  key={dir}
+                  key={label}
                   type="button"
-                  onClick={() => onMoveSelection(dir)}
-                  disabled={!hasSelectedRegion}
+                  onClick={onClick}
+                  disabled={disabled}
                   style={{
-                    gridColumn: col,
-                    gridRow: row,
-                    width: 36,
-                    height: 36,
                     border: '1px solid #d5cec6',
                     borderRadius: 8,
-                    background: hasSelectedRegion ? '#fff' : '#f5f2ee',
-                    color: hasSelectedRegion ? '#3f382f' : '#b0a89e',
-                    fontSize: 16,
-                    cursor: hasSelectedRegion ? 'pointer' : 'not-allowed',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    background: disabled ? '#f5f2ee' : '#fff',
+                    color: disabled ? '#b0a89e' : '#3f382f',
+                    padding: '9px 8px',
                     fontFamily: 'inherit',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
                   }}
                 >
                   {label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Floating stamp controls */}
+          {selectSubMode === 'stamp' && hasFloatingStamp && (
+            <div style={{ display: 'grid', gap: 8, flexShrink: 0 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 5 }}>
+                {[
+                  { label: '↻ Rotate', onClick: onRotateStamp },
+                  { label: '⇋ Flip H', onClick: () => onFlipStamp('horizontal') },
+                  { label: '⇵ Flip V', onClick: () => onFlipStamp('vertical') },
+                ].map(({ label, onClick }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={onClick}
+                    style={{
+                      border: '1px solid #d5cec6',
+                      borderRadius: 8,
+                      background: '#fff',
+                      color: '#3f382f',
+                      padding: '9px 6px',
+                      fontFamily: 'inherit',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 36px)', gridTemplateRows: 'repeat(3, 36px)', gap: 4, justifyContent: 'center' }}>
+                {[
+                  { dir: 'up' as const, label: '↑', col: 2, row: 1 },
+                  { dir: 'left' as const, label: '←', col: 1, row: 2 },
+                  { dir: 'right' as const, label: '→', col: 3, row: 2 },
+                  { dir: 'down' as const, label: '↓', col: 2, row: 3 },
+                ].map(({ dir, label, col, row }) => (
+                  <button
+                    key={dir}
+                    type="button"
+                    onClick={() => onStampNudge(dir)}
+                    style={{
+                      gridColumn: col,
+                      gridRow: row,
+                      width: 36,
+                      height: 36,
+                      border: '1px solid #d5cec6',
+                      borderRadius: 8,
+                      background: '#fff',
+                      color: '#3f382f',
+                      fontSize: 16,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 5 }}>
+                <button
+                  type="button"
+                  onClick={onPlaceStamp}
+                  style={{
+                    border: '1px solid #5c7856',
+                    borderRadius: 8,
+                    background: '#6e8d67',
+                    color: '#fff',
+                    padding: '10px 8px',
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✓ Place
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelStamp}
+                  style={{
+                    border: '1px solid #d5cec6',
+                    borderRadius: 8,
+                    background: '#fff',
+                    color: '#6f665b',
+                    padding: '10px 8px',
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕ Cancel
+                </button>
+              </div>
             </div>
           )}
 

@@ -7,6 +7,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { assetUrl, deleteProject, getCanvasForDesign, getMyCreatorProfile, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { useIsTouch } from '../../lib/useViewport'
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -79,6 +80,7 @@ function isFinalizedProject(project: Project) {
 
 export default function DraftsPage() {
   const router = useRouter()
+  const isTouch = useIsTouch()
   const { loading: authLoading, session, user, signOut } = useAuth()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -310,13 +312,13 @@ export default function DraftsPage() {
       {/* Nav */}
       <nav
         style={{
-          height: 72,
+          height: 70,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0 28px',
-          borderBottom: '2px solid #6e8d67',
-          background: '#fffdf8',
+          borderBottom: '1px solid #5c7856',
+          background: '#6e8d67',
           boxSizing: 'border-box',
           position: 'sticky',
           top: 0,
@@ -338,24 +340,26 @@ export default function DraftsPage() {
                   style={{
                     width: 9,
                     height: 9,
-                    border: '2px solid #111',
+                    border: '2px solid #fffdf8',
                     borderRadius: 2,
                     boxSizing: 'border-box',
                   }}
                 />
               ))}
             </div>
-            <strong style={{ fontSize: 22, color: '#111' }}>MNS Studio</strong>
+            <strong style={{ fontSize: 22, color: '#fffdf8' }}>MNS Studio</strong>
           </Link>
-          <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-          <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
-            <span style={{ color: '#3f382f', fontWeight: 700 }}>Your Studio</span>
-            <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none' }}>Contact Us</Link>
+          <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
+          <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <Link href="/gallery" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Gallery</Link>
+            <span style={{ color: '#fffdf8', fontWeight: 700 }}>Your Studio</span>
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+            Contact Us
+          </Link>
           {session && (
             <NavAccountControls
               user={user}
@@ -539,7 +543,7 @@ export default function DraftsPage() {
               onChange={(e) => setActiveDraftName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && activeDraftName.trim()) void confirmNaming() }}
               placeholder="Design name"
-              autoFocus
+              autoFocus={!isTouch}
               style={{ border: '1px solid #d7d0c8', borderRadius: 8, padding: '10px 12px', font: 'inherit', fontSize: 14, width: '100%', boxSizing: 'border-box' }}
             />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

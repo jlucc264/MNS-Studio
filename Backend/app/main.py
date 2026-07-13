@@ -37,6 +37,7 @@ from app.models import (
     ProjectSaveRequest,
     ProjectResponse,
     GalleryCreateRequest,
+    UpdateCreatorRequest,
     GalleryItemResponse,
     PrintOwnCheckoutRequest,
     CartCheckoutRequest,
@@ -75,6 +76,7 @@ from app.services.supabase_db import (
     get_creator_earnings,
     get_creator_profile,
     get_my_creator_profile,
+    update_creator_name,
     increment_gallery_share,
     log_chat,
 )
@@ -588,6 +590,19 @@ def get_my_gallery_creator(user_id: str = Depends(get_current_user_id)):
     result = get_my_creator_profile(user_id)
     if result is None:
         return {"user_id": user_id, "submitter_name": "", "slug": None, "items": []}
+    return result
+
+
+@app.patch("/gallery/creator/me")
+def update_my_gallery_creator(request: UpdateCreatorRequest, user_id: str = Depends(get_current_user_id)):
+    name = request.submitter_name.strip()[:80]
+    if not name:
+        raise HTTPException(status_code=422, detail="Creator name is required.")
+    if not update_creator_name(user_id, name):
+        raise HTTPException(status_code=502, detail="Could not update creator name.")
+    result = get_my_creator_profile(user_id)
+    if result is None:
+        return {"user_id": user_id, "submitter_name": name, "slug": None, "items": []}
     return result
 
 

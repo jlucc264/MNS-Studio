@@ -5,7 +5,8 @@ import { useParams, useRouter } from 'next/navigation'
 import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
-import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, isDesignPrintable, toggleGalleryLike, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { NavAccountControls } from '../../../components/NavAccountControls'
+import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, isDesignPrintable, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -96,7 +97,7 @@ export default function CreatorProfilePage() {
   const params = useParams()
   const slug = typeof params.slug === 'string' ? params.slug : ''
   const router = useRouter()
-  const { session, user, updateProfile } = useAuth()
+  const { session, user, updateProfile, signOut } = useAuth()
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -224,13 +225,38 @@ export default function CreatorProfilePage() {
     setSaving(true)
     setSaveError('')
     try {
-      await updateProfile({ full_name: editName.trim() || undefined, bio: editBio.trim() || undefined })
+      const trimmedName = editName.trim()
+      await updateProfile({ full_name: trimmedName || undefined, bio: editBio.trim() || undefined })
+      // Creator name shown in the gallery lives on the gallery items — update it too
+      if (trimmedName && session?.access_token) {
+        const updated = await updateMyCreatorName(trimmedName, session.access_token)
+        setProfile((current) => current ? { ...current, submitter_name: updated.submitter_name } : current)
+        setSaved(true)
+        setTimeout(() => {
+          setEditing(false)
+          // The creator URL is derived from the name — follow it if it changed
+          if (updated.slug && updated.slug !== slug) {
+            router.replace(`/gallery/${updated.slug}`)
+          }
+        }, 600)
+        return
+      }
       setSaved(true)
       setTimeout(() => setEditing(false), 600)
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not save profile.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleViewProfile() {
+    if (!session?.access_token) return
+    try {
+      const ownProfile = await getMyCreatorProfile(session.access_token)
+      router.push(ownProfile.slug ? `/gallery/${ownProfile.slug}` : '/gallery')
+    } catch {
+      router.push('/gallery')
     }
   }
 
@@ -244,13 +270,21 @@ export default function CreatorProfilePage() {
 
   return (
     <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>
-      <nav style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', borderBottom: '2px solid #6e8d67', background: '#fffdf8', boxSizing: 'border-box' }}>
-        <Link href="/gallery" style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, color: '#3f382f', textDecoration: 'none' }}>
+      <nav style={{ height: 70, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', borderBottom: '1px solid #5c7856', background: '#6e8d67', boxSizing: 'border-box' }}>
+        <Link href="/gallery" style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, color: '#fffdf8', textDecoration: 'none' }}>
           ← Gallery
         </Link>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13 }}>Contact Us</Link>
+          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13 }}>Contact Us</Link>
           <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
+          {session && (
+            <NavAccountControls
+              user={user}
+              onProfile={() => void handleViewProfile()}
+              onLogout={() => { void signOut() }}
+              onStudio={() => router.push('/studio')}
+            />
+          )}
         </div>
       </nav>
 

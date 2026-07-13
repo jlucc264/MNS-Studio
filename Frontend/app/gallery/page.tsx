@@ -387,13 +387,13 @@ function GalleryPage() {
     <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>
       <nav
         style={{
-          height: 72,
+          height: 70,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: isMobile ? '0 14px' : '0 28px',
-          borderBottom: '2px solid #6e8d67',
-          background: '#fffdf8',
+          borderBottom: '1px solid #5c7856',
+          background: '#6e8d67',
           boxSizing: 'border-box',
           position: 'sticky',
           top: 0,
@@ -404,17 +404,17 @@ function GalleryPage() {
           <Link href="/gallery" onClick={() => setSearch('')} style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
             <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
               {Array.from({ length: 9 }, (_, i) => (
-                <span key={i} style={{ width: 9, height: 9, border: '2px solid #111', borderRadius: 2, boxSizing: 'border-box' }} />
+                <span key={i} style={{ width: 9, height: 9, border: '2px solid #fffdf8', borderRadius: 2, boxSizing: 'border-box' }} />
               ))}
             </div>
-            <strong style={{ fontSize: 22, color: '#111' }}>MNS Studio</strong>
+            <strong style={{ fontSize: 22, color: '#fffdf8' }}>MNS Studio</strong>
           </Link>
           {!isMobile && (
             <>
-              <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-              <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                <button type="button" onClick={() => setSearch('')} style={{ border: 0, background: 'none', font: 'inherit', fontWeight: 700, color: '#3f382f', cursor: 'pointer', padding: 0 }}>Gallery</button>
-                <Link href="/drafts" style={{ color: '#7f776d', textDecoration: 'none' }}>Your Studio</Link>
+              <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
+              <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <button type="button" onClick={() => setSearch('')} style={{ border: 0, background: 'none', font: 'inherit', fontWeight: 700, color: '#fffdf8', cursor: 'pointer', padding: 0 }}>Gallery</button>
+                <Link href="/drafts" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Your Studio</Link>
               </div>
             </>
           )}
@@ -442,7 +442,7 @@ function GalleryPage() {
           </button>
           {session ? (
             <>
-              <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+              <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                 Contact Us
               </Link>
               <NavAccountControls
@@ -458,7 +458,7 @@ function GalleryPage() {
             </>
           ) : (
             <>
-              <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+              <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                 Contact Us
               </Link>
               <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>

@@ -325,6 +325,17 @@ def get_creator_earnings(user_id: str) -> dict:
     }
 
 
+def update_creator_name(user_id: str, submitter_name: str) -> bool:
+    encoded = quote(user_id, safe="")
+    result = _request(
+        "PATCH",
+        "/gallery_items",
+        params=f"user_id=eq.{encoded}",
+        body={"submitter_name": submitter_name},
+    )
+    return result is not None
+
+
 def get_my_creator_profile(user_id: str) -> dict | None:
     all_items = list_gallery_items()
     slug_map = _build_creator_slug_map(all_items)

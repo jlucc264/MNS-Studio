@@ -2,6 +2,8 @@
 
 import { type FormEvent, useState } from 'react'
 import { useAuth } from './AuthProvider'
+import { updateMyCreatorName } from '../lib/api'
+import { useIsTouch } from '../lib/useViewport'
 
 const inputStyle = {
   width: '100%',
@@ -40,7 +42,8 @@ const btnSecondary = {
 } as const
 
 export function ProfileModal({ onClose }: { onClose: () => void }) {
-  const { user, updateProfile } = useAuth()
+  const { user, session, updateProfile } = useAuth()
+  const isTouch = useIsTouch()
   const currentName = (user?.user_metadata?.full_name as string | undefined) ?? ''
   const [name, setName] = useState(currentName)
   const [saving, setSaving] = useState(false)
@@ -52,7 +55,12 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
     setSaving(true)
     setError('')
     try {
-      await updateProfile({ full_name: name.trim() || undefined })
+      const trimmedName = name.trim()
+      await updateProfile({ full_name: trimmedName || undefined })
+      // Keep the gallery creator name in sync (no-op if nothing published yet)
+      if (trimmedName && session?.access_token) {
+        await updateMyCreatorName(trimmedName, session.access_token).catch(() => {})
+      }
       setSaved(true)
       setTimeout(onClose, 800)
     } catch (err) {
@@ -105,7 +113,7 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => { setName(e.target.value); setSaved(false) }}
             placeholder="Your name"
             autoComplete="name"
-            autoFocus
+            autoFocus={!isTouch}
             style={inputStyle}
           />
         </div>

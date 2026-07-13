@@ -200,6 +200,20 @@ function applyManualOverrides(sourceCells: string[][], manualCellOverrides: Reco
   return nextCells
 }
 
+function derivePaletteFromCells(
+  cells: string[][],
+  knownColors: PaletteColor[],
+): PaletteColor[] {
+  const usedHexes = new Set(
+    cells.flat().filter((cell) => cell !== BLANK_CELL && cell !== FINISH_OUTLINE_CELL)
+  )
+  const byHex = new Map<string, PaletteColor>()
+  knownColors.forEach((color) => byHex.set(color.hex, color))
+  return Array.from(usedHexes)
+    .map((hex) => byHex.get(hex))
+    .filter((color): color is PaletteColor => Boolean(color))
+}
+
 function getClampedSelectionBounds(
   selection: DesignSelectionRect,
   rowCount: number,
@@ -423,6 +437,15 @@ function StudioPage() {
   const [shapeBorderSize, setShapeBorderSize] = useState(1)
   const [brushDensity, setBrushDensity] = useState(1)
   const [selectedRegions, setSelectedRegions] = useState<DesignSelectionRect[]>([])
+  const [clearSelectionSignal, setClearSelectionSignal] = useState(0)
+  const [settingsGuardAccepted, setSettingsGuardAccepted] = useState(false)
+  const [showSettingsGuardModal, setShowSettingsGuardModal] = useState(false)
+  const [stampClipboard, setStampClipboard] = useState<(string | null)[][] | null>(null)
+  const [floatingStamp, setFloatingStamp] = useState<{
+    cells: (string | null)[][]
+    anchorRow: number
+    anchorCol: number
+  } | null>(null)
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
   const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
   const [finishApplied, setFinishApplied] = useState(false)
@@ -454,6 +477,7 @@ function StudioPage() {
   const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [showMobilePanel, setShowMobilePanel] = useState(true)
+  const [mobileSheetTab, setMobileSheetTab] = useState<'tools' | 'design'>('tools')
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
   const [showPriceBreakdownModal, setShowPriceBreakdownModal] = useState(false)
   const [showCartDrawer, setShowCartDrawer] = useState(false)
@@ -710,9 +734,16 @@ function StudioPage() {
         }
         if (d.allPalette?.length) {
           setAllPalette(d.allPalette)
-          setPreviewPalette(d.previewPalette ?? d.allPalette)
-          setEnabledColorHexes(d.enabledColorHexes ?? d.allPalette.map((c: PaletteColor) => c.hex))
-          setActivePaintColor(d.allPalette[0]?.hex ?? null)
+          // Reset the working palette to the colors actually stitched into the
+          // saved cells — not the original generated palette
+          const knownColors: PaletteColor[] = [...(d.previewPalette ?? []), ...d.allPalette]
+          const activePalette = d.cells?.length
+            ? derivePaletteFromCells(d.cells, knownColors)
+            : (d.previewPalette ?? d.allPalette)
+          const resolvedPalette = activePalette.length ? activePalette : (d.previewPalette ?? d.allPalette)
+          setPreviewPalette(resolvedPalette)
+          setEnabledColorHexes(d.enabledColorHexes ?? resolvedPalette.map((c: PaletteColor) => c.hex))
+          setActivePaintColor(resolvedPalette[0]?.hex ?? null)
         }
         if (d.cells?.length) {
           setCells(d.cells)
@@ -745,12 +776,18 @@ function StudioPage() {
       setDraftName(project.name)
 
       const loadedPalette = project.palette ?? []
-      setAllPalette(loadedPalette)
-      setPreviewPalette(loadedPalette)
-      setEnabledColorHexes(loadedPalette.map((c) => c.hex))
-      setActivePaintColor(loadedPalette[0]?.hex ?? null)
-
       const loadedCells = project.cells ?? []
+      // Reset the working palette to the colors actually stitched into the
+      // saved cells — not the original generated palette
+      const activePalette = loadedCells.length
+        ? derivePaletteFromCells(loadedCells, loadedPalette)
+        : loadedPalette
+      const resolvedPalette = activePalette.length ? activePalette : loadedPalette
+      setAllPalette(loadedPalette)
+      setPreviewPalette(resolvedPalette)
+      setEnabledColorHexes(resolvedPalette.map((c) => c.hex))
+      setActivePaintColor(resolvedPalette[0]?.hex ?? null)
+
       setCells(loadedCells)
       setOriginalCells(loadedCells)
 
@@ -1690,60 +1727,179 @@ function StudioPage() {
 
   function handleClearSelection() {
     setSelectedRegions([])
+    setActivePaintColor(null)
+    setClearSelectionSignal((k) => k + 1)
   }
 
-  function handleMoveSelection(direction: 'up' | 'down' | 'left' | 'right') {
-    if (!cells.length || !selectedRegions.length) return
-    const dr = direction === 'up' ? -1 : direction === 'down' ? 1 : 0
-    const dc = direction === 'left' ? -1 : direction === 'right' ? 1 : 0
-    const gridH = cells.length
-    const gridW = cells[0].length
+  // ── Floating stamp (cut / copy / paste) ────────────────────────────────────
 
-    const toMove: Array<{ r: number; c: number; value: string }> = []
-    for (const rect of selectedRegions) {
-      const r0 = Math.min(rect.startRow, rect.endRow)
-      const r1 = Math.max(rect.startRow, rect.endRow)
-      const c0 = Math.min(rect.startCol, rect.endCol)
-      const c1 = Math.max(rect.startCol, rect.endCol)
-      for (let r = r0; r <= r1; r++) {
-        for (let c = c0; c <= c1; c++) {
-          if (cells[r]?.[c] === undefined) continue
-          if (cells[r][c] === FINISH_OUTLINE_CELL) continue
-          toMove.push({ r, c, value: cells[r][c] })
+  function captureSelectionStamp(): { cells: (string | null)[][]; top: number; left: number } | null {
+    if (!cells.length || !selectedRegionBounds.length) return null
+    const top = Math.min(...selectedRegionBounds.map((b) => b.top))
+    const bottom = Math.max(...selectedRegionBounds.map((b) => b.bottom))
+    const left = Math.min(...selectedRegionBounds.map((b) => b.left))
+    const right = Math.max(...selectedRegionBounds.map((b) => b.right))
+    const stamp: (string | null)[][] = []
+    let hasContent = false
+    for (let r = top; r <= bottom; r += 1) {
+      const row: (string | null)[] = []
+      for (let c = left; c <= right; c += 1) {
+        const insideRegion = selectedRegionBounds.some(
+          (b) => r >= b.top && r <= b.bottom && c >= b.left && c <= b.right
+        )
+        const value = insideRegion ? cells[r]?.[c] : undefined
+        if (value === undefined || value === BLANK_CELL || value === FINISH_OUTLINE_CELL) {
+          row.push(null)
+        } else {
+          row.push(value)
+          hasContent = true
+        }
+      }
+      stamp.push(row)
+    }
+    if (!hasContent) return null
+    return { cells: stamp, top, left }
+  }
+
+  function clampStampAnchor(anchorRow: number, anchorCol: number, stampCells: (string | null)[][]) {
+    const gridH = cells.length
+    const gridW = cells[0]?.length ?? 0
+    const stampH = stampCells.length
+    const stampW = stampCells[0]?.length ?? 0
+    return {
+      anchorRow: Math.max(1 - stampH, Math.min(gridH - 1, anchorRow)),
+      anchorCol: Math.max(1 - stampW, Math.min(gridW - 1, anchorCol)),
+    }
+  }
+
+  function handleCopySelection() {
+    const captured = captureSelectionStamp()
+    if (!captured) return
+    setStampClipboard(captured.cells)
+    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
+    setSelectedRegions([])
+  }
+
+  function handleCutSelection() {
+    const captured = captureSelectionStamp()
+    if (!captured) return
+    const nextCells = cloneCells(cells)
+    const nextOverrides = { ...manualCellOverrides }
+    for (const { top, bottom, left, right } of selectedRegionBounds) {
+      for (let r = top; r <= bottom; r += 1) {
+        for (let c = left; c <= right; c += 1) {
+          if (nextCells[r]?.[c] === undefined) continue
+          if (nextCells[r][c] === FINISH_OUTLINE_CELL) continue
+          nextCells[r][c] = BLANK_CELL
+          nextOverrides[makeCellKey(r, c)] = BLANK_CELL
         }
       }
     }
-
-    const nextCells = cloneCells(cells)
-    const nextOverrides = { ...manualCellOverrides }
-
-    for (const { r, c } of toMove) {
-      nextCells[r][c] = BLANK_CELL
-      nextOverrides[makeCellKey(r, c)] = BLANK_CELL
-    }
-    for (const { r, c, value } of toMove) {
-      const nr = r + dr
-      const nc = c + dc
-      if (nr < 0 || nr >= gridH || nc < 0 || nc >= gridW) continue
-      nextCells[nr][nc] = value
-      nextOverrides[makeCellKey(nr, nc)] = value
-    }
-
-    const nextRegions = selectedRegions.map((rect) => ({
-      startRow: Math.max(0, Math.min(gridH - 1, rect.startRow + dr)),
-      endRow: Math.max(0, Math.min(gridH - 1, rect.endRow + dr)),
-      startCol: Math.max(0, Math.min(gridW - 1, rect.startCol + dc)),
-      endCol: Math.max(0, Math.min(gridW - 1, rect.endCol + dc)),
-    }))
-
     pushUndoSnapshot()
     setCells(nextCells)
     setManualCellOverrides(nextOverrides)
-    setSelectedRegions(nextRegions)
     refreshPreviewPalette(nextCells)
+    setStampClipboard(captured.cells)
+    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
+    setSelectedRegions([])
     setFinalPdfPath(null)
     setFinalPreviewImagePath(null)
     setViewMode('stitch')
+  }
+
+  function handlePasteClipboard() {
+    if (!stampClipboard || !cells.length) return
+    const stampH = stampClipboard.length
+    const stampW = stampClipboard[0]?.length ?? 0
+    const anchorRow = Math.max(0, Math.round((cells.length - stampH) / 2))
+    const anchorCol = Math.max(0, Math.round(((cells[0]?.length ?? 0) - stampW) / 2))
+    setFloatingStamp({ cells: stampClipboard, anchorRow, anchorCol })
+    setSelectedRegions([])
+    setViewMode('stitch')
+  }
+
+  const handleStampMove = useCallback((anchor: { row: number; col: number }) => {
+    setFloatingStamp((current) => {
+      if (!current) return current
+      const gridH = cells.length
+      const gridW = cells[0]?.length ?? 0
+      const stampH = current.cells.length
+      const stampW = current.cells[0]?.length ?? 0
+      return {
+        ...current,
+        anchorRow: Math.max(1 - stampH, Math.min(gridH - 1, anchor.row)),
+        anchorCol: Math.max(1 - stampW, Math.min(gridW - 1, anchor.col)),
+      }
+    })
+  }, [cells])
+
+  function handleStampNudge(direction: 'up' | 'down' | 'left' | 'right') {
+    if (!floatingStamp) return
+    const dr = direction === 'up' ? -1 : direction === 'down' ? 1 : 0
+    const dc = direction === 'left' ? -1 : direction === 'right' ? 1 : 0
+    const next = clampStampAnchor(floatingStamp.anchorRow + dr, floatingStamp.anchorCol + dc, floatingStamp.cells)
+    setFloatingStamp({ ...floatingStamp, ...next })
+  }
+
+  function handleRotateStamp() {
+    if (!floatingStamp) return
+    const source = floatingStamp.cells
+    const srcH = source.length
+    const srcW = source[0]?.length ?? 0
+    const rotated: (string | null)[][] = Array.from({ length: srcW }, (_, r) =>
+      Array.from({ length: srcH }, (_, c) => source[srcH - 1 - c][r])
+    )
+    // Keep the stamp centered on the same spot as it rotates
+    const anchorRow = Math.round(floatingStamp.anchorRow + srcH / 2 - srcW / 2)
+    const anchorCol = Math.round(floatingStamp.anchorCol + srcW / 2 - srcH / 2)
+    const next = clampStampAnchor(anchorRow, anchorCol, rotated)
+    setFloatingStamp({ cells: rotated, ...next })
+  }
+
+  function handleFlipStamp(axis: 'horizontal' | 'vertical') {
+    if (!floatingStamp) return
+    const flipped = axis === 'horizontal'
+      ? floatingStamp.cells.map((row) => [...row].reverse())
+      : [...floatingStamp.cells].reverse().map((row) => [...row])
+    setFloatingStamp({ ...floatingStamp, cells: flipped })
+  }
+
+  function handlePlaceStamp() {
+    if (!floatingStamp || !cells.length) return
+    const gridH = cells.length
+    const gridW = cells[0].length
+    const nextCells = cloneCells(cells)
+    const nextOverrides = { ...manualCellOverrides }
+    const placedHexes = new Set<string>()
+    let changed = 0
+    floatingStamp.cells.forEach((row, r) => {
+      row.forEach((value, c) => {
+        if (value === null) return
+        const gr = floatingStamp.anchorRow + r
+        const gc = floatingStamp.anchorCol + c
+        if (gr < 0 || gr >= gridH || gc < 0 || gc >= gridW) return
+        if (nextCells[gr][gc] === value) return
+        nextCells[gr][gc] = value
+        nextOverrides[makeCellKey(gr, gc)] = value
+        placedHexes.add(value)
+        changed += 1
+      })
+    })
+    if (changed) {
+      pushUndoSnapshot()
+      setCells(nextCells)
+      setManualCellOverrides(nextOverrides)
+      refreshPreviewPalette(nextCells)
+      setEnabledColorHexes((current) => Array.from(new Set([...current, ...Array.from(placedHexes)])))
+      setFinalPdfPath(null)
+      setFinalPreviewImagePath(null)
+      setViewMode('stitch')
+    }
+    setFloatingStamp(null)
+  }
+
+  function handleCancelStamp() {
+    setFloatingStamp(null)
   }
 
   const handleEyedropperSample = useCallback(async ({ row, col }: { row: number; col: number }) => {
@@ -1988,7 +2144,10 @@ function StudioPage() {
       )
 
       if (event.key === 'Escape') {
-        if (selectedRegions.length > 0) {
+        if (floatingStamp) {
+          event.preventDefault()
+          handleCancelStamp()
+        } else if (selectedRegions.length > 0) {
           event.preventDefault()
           setSelectedRegions([])
         }
@@ -1997,8 +2156,43 @@ function StudioPage() {
 
       if (isTypingTarget) return
 
+      if (floatingStamp) {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          handlePlaceStamp()
+          return
+        }
+        const nudge = ({
+          ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+        } as const)[event.key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight']
+        if (nudge) {
+          event.preventDefault()
+          handleStampNudge(nudge)
+          return
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') {
+          event.preventDefault()
+          handleRotateStamp()
+          return
+        }
+      }
+
       if (!event.ctrlKey && !event.metaKey) return
-      if (event.key.toLowerCase() !== 'z') return
+
+      const key = event.key.toLowerCase()
+      if (toolMode === 'select' && !floatingStamp && (key === 'x' || key === 'c') && selectedRegions.length > 0) {
+        event.preventDefault()
+        if (key === 'x') handleCutSelection()
+        else handleCopySelection()
+        return
+      }
+      if (toolMode === 'select' && key === 'v' && stampClipboard && !floatingStamp) {
+        event.preventDefault()
+        handlePasteClipboard()
+        return
+      }
+
+      if (key !== 'z') return
 
       event.preventDefault()
 
@@ -2016,7 +2210,11 @@ function StudioPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [redoStack.length, undoStack.length, selectedRegions.length])
+  }, [redoStack.length, undoStack.length, selectedRegions.length, floatingStamp, stampClipboard, toolMode, cells, manualCellOverrides, selectedRegionBounds])
+
+  useEffect(() => {
+    if (toolMode !== 'select') setFloatingStamp(null)
+  }, [toolMode])
 
   function handleRemovalModeChange(nextRemovalMode: 'fill' | 'blank') {
     if (nextRemovalMode === removalMode) return
@@ -2496,6 +2694,7 @@ function StudioPage() {
     setManualCellOverrides({})
     setUndoStack([])
     setRedoStack([])
+    setSettingsGuardAccepted(false)
     setDraftSettings(settings)
     setLastSettings(settings)
     setImportedAspectRatio(settings.width_inches / settings.height_inches)
@@ -2795,6 +2994,9 @@ function StudioPage() {
     />
   )
 
+  const hasCanvasEdits = undoStack.length > 0 || Object.keys(manualCellOverrides).length > 0
+  const settingsGuardActive = hasCanvasEdits && !settingsGuardAccepted
+
   const settingsPanel = (
     <div
       data-tutorial="design-settings"
@@ -2812,8 +3014,16 @@ function StudioPage() {
         borderRadius: 8,
         background: '#fbfbfb',
         boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
+        position: 'relative',
       }}
     >
+      {settingsGuardActive && (
+        <div
+          onClick={() => setShowSettingsGuardModal(true)}
+          title="This canvas has edits — click for details"
+          style={{ position: 'absolute', inset: 0, zIndex: 5, cursor: 'pointer', borderRadius: 8 }}
+        />
+      )}
       <div style={{ display: 'grid', gap: 2 }}>
         <h2 style={{ margin: 0, fontSize: 13 }}>Size and Settings</h2>
       </div>
@@ -3553,6 +3763,116 @@ function StudioPage() {
     )
   })()
 
+  const palettePanelElement = (
+    <PalettePanel
+      colors={displayPalette}
+      activeDesignColors={currentDesignPalette}
+      activeColor={activePaintColor}
+      colorCountsByHex={displayColorCounts}
+      toolMode={toolMode}
+      onToolModeChange={(mode) => {
+        setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill')
+        if (mode !== 'select') setSelectedRegions([])
+        if (mode === 'select') setActivePaintColor(null)
+      }}
+      textFontSize={textFontSize}
+      onTextFontSizeChange={setTextFontSize}
+      textFontFamily={textFontFamily}
+      onTextFontFamilyChange={setTextFontFamily}
+      textBold={textBold}
+      onTextBoldChange={setTextBold}
+      textItalic={textItalic}
+      onTextItalicChange={setTextItalic}
+      textOutline={textOutline}
+      onTextOutlineChange={setTextOutline}
+      shapeType={shapeType}
+      onShapeTypeChange={setShapeType}
+      arcFlipped={arcFlipped}
+      onArcFlippedChange={setArcFlipped}
+      arcFullCircle={arcFullCircle}
+      onArcFullCircleChange={setArcFullCircle}
+      shapeFillColor={shapeFillColor}
+      onShapeFillColorChange={setShapeFillColor}
+      shapeBorderColor={shapeBorderColor}
+      onShapeBorderColorChange={setShapeBorderColor}
+      shapeBorderSize={shapeBorderSize}
+      onShapeBorderSizeChange={setShapeBorderSize}
+      brushDensity={brushDensity}
+      onBrushDensityChange={setBrushDensity}
+      hasSelectedRegion={selectedRegions.length > 0}
+      selectedRegionCount={selectedRegionCount}
+      selectionMergeSuggestions={selectionMergeSuggestions}
+      onApplyColorToSelection={handleApplyColorToSelection}
+      onClearSelection={handleClearSelection}
+      hasClipboard={Boolean(stampClipboard)}
+      hasFloatingStamp={Boolean(floatingStamp)}
+      onCutSelection={handleCutSelection}
+      onCopySelection={handleCopySelection}
+      onPasteClipboard={handlePasteClipboard}
+      onStampNudge={handleStampNudge}
+      onRotateStamp={handleRotateStamp}
+      onFlipStamp={handleFlipStamp}
+      onPlaceStamp={handlePlaceStamp}
+      onCancelStamp={handleCancelStamp}
+      onSelect={(color) => {
+        setActivePaintColor(color.hex)
+        if (toolMode !== 'select') {
+          setPreviewPalette((prev) =>
+            prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
+          )
+        }
+      }}
+      onSelectBlankCanvas={() => setActivePaintColor(BLANK_CELL)}
+      moreColors={allDmcColors.filter(
+        (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
+      )}
+      onOpenAddBrowser={() => { setColorBrowserTarget('add'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+      onOpenSwapBrowser={(color) => { setColorBrowserTarget('swap'); setColorBrowserSwapFrom(color); setShowColorBrowser(true) }}
+      onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+      onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+      onResetPalette={() => {
+        const originalPalette = buildPaletteForCells(originalCells)
+        setAllPalette(originalPalette)
+        setPreviewPalette(originalPalette)
+        setActivePaintColor(originalPalette[0]?.hex ?? null)
+      }}
+      onMergeColor={(color) => {
+        const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
+        const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
+        const nearest = displayPalette
+          .filter((c) => c.hex !== color.hex)
+          .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
+        if (nearest) {
+          mergeColorsIntoTarget([color.hex], nearest.hex)
+          setAllPalette((prev) => prev.filter((c) => c.hex !== color.hex))
+          setActivePaintColor((current) => current === color.hex ? nearest.hex : current)
+        }
+      }}
+      onMergeColorInSelection={(color) => {
+        if (!selectedRegionBounds.length) return
+        const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
+        const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
+        const nearest = displayPalette
+          .filter((c) => c.hex !== color.hex)
+          .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
+        if (!nearest) return
+        pushUndoSnapshot()
+        setCells((current) => {
+          const updated = current.map((row) => [...row])
+          selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
+            for (let r = top; r <= bottom; r++) {
+              for (let c = left; c <= right; c++) {
+                if (updated[r]?.[c] === color.hex) updated[r][c] = nearest.hex
+              }
+            }
+          })
+          refreshPreviewPalette(updated)
+          return updated
+        })
+      }}
+    />
+  )
+
   return (
     <main
       style={{
@@ -3560,7 +3880,7 @@ function StudioPage() {
         gridTemplateRows: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) auto',
         minHeight: '100dvh',
         height: '100dvh',
-        paddingTop: 72,
+        paddingTop: 70,
         overflow: 'hidden',
         boxSizing: 'border-box',
         width: '100%',
@@ -3576,13 +3896,13 @@ function StudioPage() {
           justifyContent: 'space-between',
           gap: 18,
           padding: isMobile ? '0 14px' : '0 28px',
-          borderBottom: '2px solid #6e8d67',
-          background: '#fffdf8',
+          borderBottom: '1px solid #5c7856',
+          background: '#6e8d67',
           position: 'fixed',
           top: 0,
           left: 0,
           right: 0,
-          height: 72,
+          height: 70,
           boxSizing: 'border-box',
           zIndex: 10000,
           pointerEvents: 'auto',
@@ -3611,34 +3931,34 @@ function StudioPage() {
                   style={{
                     width: 9,
                     height: 9,
-                    border: '2px solid #111',
+                    border: '2px solid #fffdf8',
                     borderRadius: 2,
                     boxSizing: 'border-box',
                   }}
                 />
               ))}
             </div>
-            <strong style={{ fontSize: 22, color: '#111', whiteSpace: 'nowrap' }}>MNS Studio</strong>
+            <strong style={{ fontSize: 22, color: '#fffdf8', whiteSpace: 'nowrap' }}>MNS Studio</strong>
           </button>
           {!isMobile && (
             <>
-              <span style={{ color: '#d8d0c4', margin: '0 6px' }}>|</span>
-              <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
+              <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
                 <button
                   type="button"
                   onClick={() => navigateAwayFromStudio('/gallery')}
-                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                  style={{ border: 0, background: 'transparent', font: 'inherit', color: 'rgba(255,255,255,0.86)', padding: 0, cursor: 'pointer', fontWeight: 600 }}
                 >
                   Gallery
                 </button>
                 <button
                   type="button"
                   onClick={() => navigateAwayFromStudio('/drafts')}
-                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                  style={{ border: 0, background: 'transparent', font: 'inherit', color: 'rgba(255,255,255,0.86)', padding: 0, cursor: 'pointer', fontWeight: 600 }}
                 >
                   Your Studio
                 </button>
-                <span style={{ color: '#3f382f', fontWeight: 700 }}>Active Canvas</span>
+                <span style={{ color: '#fffdf8', fontWeight: 700 }}>Active Canvas</span>
               </div>
             </>
           )}
@@ -3676,7 +3996,7 @@ function StudioPage() {
             <button
               type="button"
               onClick={() => navigateAwayFromStudio('/contact')}
-              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600, fontSize: isMobile ? 12 : 13, whiteSpace: 'nowrap' }}
+              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#fffdf8', padding: 0, cursor: 'pointer', fontWeight: 600, fontSize: isMobile ? 12 : 13, whiteSpace: 'nowrap' }}
             >
               Contact Us
             </button>
@@ -3822,9 +4142,41 @@ function StudioPage() {
           )
 
           if (mobileDrawer) {
+            const showToolsTab = shouldShowStitchGrid
+            const activeSheetTab = showToolsTab ? mobileSheetTab : 'design'
             return (
               <MobileSheet open={showMobilePanel} onClose={() => setShowMobilePanel(false)}>
-                {asideContent}
+                {showToolsTab && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, padding: '2px 14px 10px', position: 'sticky', top: 0, background: '#fffdf8', zIndex: 2 }}>
+                    {(['tools', 'design'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setMobileSheetTab(tab)}
+                        style={{
+                          padding: '10px 0',
+                          borderRadius: 999,
+                          border: '1px solid #d7d0c8',
+                          background: activeSheetTab === tab ? '#3f382f' : '#fff',
+                          color: activeSheetTab === tab ? '#fff' : '#6f665b',
+                          fontFamily: 'inherit',
+                          fontSize: 13,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {tab === 'tools' ? 'Tools & Colors' : 'Size & Design'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {activeSheetTab === 'tools' && showToolsTab ? (
+                  <div style={{ height: '64vh', minHeight: 320, display: 'grid', padding: '0 12px 12px', boxSizing: 'border-box' }}>
+                    {palettePanelElement}
+                  </div>
+                ) : (
+                  asideContent
+                )}
               </MobileSheet>
             )
           }
@@ -3935,6 +4287,9 @@ function StudioPage() {
                   onFillCell={handleFillCell}
                   onApplyShapeCells={handleApplyShapeCells}
                   onEyedropperSample={handleEyedropperSample}
+                  floatingStamp={floatingStamp}
+                  onStampMove={handleStampMove}
+                  clearSelectionSignal={clearSelectionSignal}
                 />
               </div>
             )}
@@ -3986,7 +4341,7 @@ function StudioPage() {
                     <circle cx="10" cy="10" r="8" fill="none" stroke="#d9d0c5" strokeWidth="2.5" />
                     <path d="M10 2 A8 8 0 0 1 18 10" fill="none" stroke="#7a6e63" strokeWidth="2.5" strokeLinecap="round" />
                   </svg>
-                  <span style={{ fontSize: 12, color: '#7a6e63', fontWeight: 500 }}>Regenerating…</span>
+                  <span style={{ fontSize: 12, color: '#7a6e63', fontWeight: 500 }}>Rendering…</span>
                 </div>
               </div>
             )}
@@ -4110,105 +4465,7 @@ function StudioPage() {
               pointerEvents: 'auto',
             }}
           >
-            <PalettePanel
-              colors={displayPalette}
-              activeDesignColors={currentDesignPalette}
-              activeColor={activePaintColor}
-              colorCountsByHex={displayColorCounts}
-              toolMode={toolMode}
-              onToolModeChange={(mode) => {
-                setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill')
-                if (mode !== 'select') setSelectedRegions([])
-                if (mode === 'select') setActivePaintColor(null)
-              }}
-              textFontSize={textFontSize}
-              onTextFontSizeChange={setTextFontSize}
-              textFontFamily={textFontFamily}
-              onTextFontFamilyChange={setTextFontFamily}
-              textBold={textBold}
-              onTextBoldChange={setTextBold}
-              textItalic={textItalic}
-              onTextItalicChange={setTextItalic}
-              textOutline={textOutline}
-              onTextOutlineChange={setTextOutline}
-              shapeType={shapeType}
-              onShapeTypeChange={setShapeType}
-              arcFlipped={arcFlipped}
-              onArcFlippedChange={setArcFlipped}
-              arcFullCircle={arcFullCircle}
-              onArcFullCircleChange={setArcFullCircle}
-              shapeFillColor={shapeFillColor}
-              onShapeFillColorChange={setShapeFillColor}
-              shapeBorderColor={shapeBorderColor}
-              onShapeBorderColorChange={setShapeBorderColor}
-              shapeBorderSize={shapeBorderSize}
-              onShapeBorderSizeChange={setShapeBorderSize}
-              brushDensity={brushDensity}
-              onBrushDensityChange={setBrushDensity}
-              hasSelectedRegion={selectedRegions.length > 0}
-              selectedRegionCount={selectedRegionCount}
-              selectionMergeSuggestions={selectionMergeSuggestions}
-
-              onApplyColorToSelection={handleApplyColorToSelection}
-              onClearSelection={handleClearSelection}
-              onMoveSelection={handleMoveSelection}
-              onSelect={(color) => {
-                setActivePaintColor(color.hex)
-                if (toolMode !== 'select') {
-                  setPreviewPalette((prev) =>
-                    prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
-                  )
-                }
-              }}
-              onSelectBlankCanvas={() => setActivePaintColor(BLANK_CELL)}
-              moreColors={allDmcColors.filter(
-                (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
-              )}
-              onOpenAddBrowser={() => { setColorBrowserTarget('add'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
-              onOpenSwapBrowser={(color) => { setColorBrowserTarget('swap'); setColorBrowserSwapFrom(color); setShowColorBrowser(true) }}
-              onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
-              onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
-              onResetPalette={() => {
-                const originalPalette = buildPaletteForCells(originalCells)
-                setAllPalette(originalPalette)
-                setPreviewPalette(originalPalette)
-                setActivePaintColor(originalPalette[0]?.hex ?? null)
-              }}
-              onMergeColor={(color) => {
-                const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
-                const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
-                const nearest = displayPalette
-                  .filter((c) => c.hex !== color.hex)
-                  .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
-                if (nearest) {
-                  mergeColorsIntoTarget([color.hex], nearest.hex)
-                  setAllPalette((prev) => prev.filter((c) => c.hex !== color.hex))
-                  setActivePaintColor((current) => current === color.hex ? nearest.hex : current)
-                }
-              }}
-              onMergeColorInSelection={(color) => {
-                if (!selectedRegionBounds.length) return
-                const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
-                const dist = (a: string, b: string) => { const [r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b); return (r1-r2)**2+(g1-g2)**2+(b1-b2)**2 }
-                const nearest = displayPalette
-                  .filter((c) => c.hex !== color.hex)
-                  .sort((a, b) => dist(color.hex, a.hex) - dist(color.hex, b.hex))[0]
-                if (!nearest) return
-                pushUndoSnapshot()
-                setCells((current) => {
-                  const updated = current.map((row) => [...row])
-                  selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
-                    for (let r = top; r <= bottom; r++) {
-                      for (let c = left; c <= right; c++) {
-                        if (updated[r]?.[c] === color.hex) updated[r][c] = nearest.hex
-                      }
-                    }
-                  })
-                  refreshPreviewPalette(updated)
-                  return updated
-                })
-              }}
-            />
+            {palettePanelElement}
           </aside>
         )}
       </div>
@@ -4449,7 +4706,7 @@ function StudioPage() {
                     value={galleryTitle}
                     onChange={(event) => { setGalleryTitle(event.target.value); setGalleryStatus('idle'); setGalleryError('') }}
                     placeholder="Canvas name"
-                    autoFocus
+                    autoFocus={!isTouchDevice}
                     style={{ border: '1px solid #d7d0c8', borderRadius: 8, padding: '10px 12px', font: 'inherit', fontWeight: 400 }}
                   />
                 </label>
@@ -4574,7 +4831,7 @@ function StudioPage() {
                 if (event.key === 'Enter') void handleSaveDraft()
               }}
               placeholder="Draft name"
-              autoFocus
+              autoFocus={!isTouchDevice}
               style={{
                 width: '100%',
                 boxSizing: 'border-box',
@@ -4883,6 +5140,43 @@ function StudioPage() {
       )}
 
       {tutorial.show && <StudioTutorial onClose={tutorial.close} />}
+
+      {showSettingsGuardModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowSettingsGuardModal(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 11000, padding: 18 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fffdf8', borderRadius: 12, padding: 24, width: 'min(430px, 100%)', display: 'grid', gap: 14, boxSizing: 'border-box', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}
+          >
+            <h2 style={{ margin: 0, fontSize: 19, color: '#3f382f' }}>Careful — this canvas has edits</h2>
+            <p style={{ margin: 0, fontSize: 14, color: '#5f574e', lineHeight: 1.6 }}>
+              Changing the size and settings re-renders the design from the source image.
+              Hand-painted stitches, fills, text, and other edits you&rsquo;ve made on this canvas
+              may be lost or changed. Save a draft first if you want a safe copy.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowSettingsGuardModal(false)}
+                style={{ padding: '9px 18px', border: '1px solid #d7d0c8', borderRadius: 8, fontFamily: 'inherit', fontSize: 14, fontWeight: 600, cursor: 'pointer', background: '#fff', color: '#3f382f' }}
+              >
+                Keep my edits
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSettingsGuardAccepted(true); setShowSettingsGuardModal(false) }}
+                style={{ padding: '9px 18px', border: '1px solid #a8503f', borderRadius: 8, fontFamily: 'inherit', fontSize: 14, fontWeight: 700, cursor: 'pointer', background: '#c05b47', color: '#fff' }}
+              >
+                I understand, unlock settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isUnauthenticatedWithCanvas && (
         <div
