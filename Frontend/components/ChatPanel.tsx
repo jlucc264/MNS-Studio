@@ -166,10 +166,18 @@ export default function ChatPanel({
       {/* Header */}
       <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid #ececec', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <strong style={{ fontSize: 13.5, color: '#3f382f' }}>MNS Pro</strong>
-        <button
-          type="button"
-          onClick={openFilePicker}
-          disabled={busy}
+        {/* Native <label> activation: JS input.click() is silently ignored
+            in installed-PWA WebKit, so the input lives inside the label. */}
+        <label
+          role="button"
+          tabIndex={busy ? -1 : 0}
+          aria-disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              openFilePicker()
+            }
+          }}
           style={{
             border: '1px solid #d8d2ca',
             background: '#fafaf8',
@@ -179,10 +187,19 @@ export default function ChatPanel({
             fontSize: 12,
             color: '#4a4440',
             cursor: busy ? 'default' : 'pointer',
+            pointerEvents: busy ? 'none' : 'auto',
           }}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/*"
+            onChange={handleFileChange}
+            disabled={busy}
+            style={{ display: 'none' }}
+          />
           Upload image
-        </button>
+        </label>
       </div>
 
       {/* Chat log */}
@@ -306,13 +323,6 @@ export default function ChatPanel({
         </div>
       )}
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/*"
-        onChange={handleFileChange}
-        style={{ display: 'none' }}
-      />
     </div>
   )
 }

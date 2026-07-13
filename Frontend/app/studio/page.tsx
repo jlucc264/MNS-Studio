@@ -3388,21 +3388,11 @@ function StudioPage() {
               boxShadow: '0 10px 24px rgba(44, 37, 30, 0.06)',
             }}
           >
-            <input
-              ref={stagedUploadInputRef}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) void handleChatUpload(file)
-                event.target.value = ''
-              }}
-            />
-            <div
+            {/* Native <label> activation: JS input.click() is silently ignored
+                in installed-PWA WebKit, so the input lives inside the label. */}
+            <label
               role="button"
               tabIndex={0}
-              onClick={() => stagedUploadInputRef.current?.click()}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
@@ -3422,9 +3412,20 @@ function StudioPage() {
                 cursor: loading ? 'default' : 'pointer',
               }}
             >
+              <input
+                ref={stagedUploadInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) void handleChatUpload(file)
+                  event.target.value = ''
+                }}
+              />
               <strong style={{ color: '#3f382f', fontSize: 18 }}>{isMobile ? 'Tap to choose a photo' : 'Drop image file here'}</strong>
               {!isMobile && <span>or click to choose a file</span>}
-            </div>
+            </label>
             {activeImagePath && <p style={{ margin: 0, color: '#5f7f5a' }}>Image loaded.</p>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -3440,25 +3441,40 @@ function StudioPage() {
           >
             Start with a blank canvas
           </button>
-          <input
-            ref={patternImportInputRef}
-            type="file"
-            accept="image/*,.stitchly"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file) void handlePatternImportFile(file)
-              event.target.value = ''
+          {/* Native <label> activation: JS input.click() is silently ignored
+              in installed-PWA WebKit, so the input lives inside the label. */}
+          <label
+            role="button"
+            tabIndex={loading ? -1 : 0}
+            aria-disabled={loading}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                patternImportInputRef.current?.click()
+              }
             }}
-          />
-          <button
-            type="button"
-            onClick={() => patternImportInputRef.current?.click()}
-            disabled={loading}
-            style={btnSecondary}
+            style={{
+              ...btnSecondary,
+              display: 'block',
+              textAlign: 'center',
+              opacity: loading ? 0.6 : 1,
+              pointerEvents: loading ? 'none' : 'auto',
+            }}
           >
+            <input
+              ref={patternImportInputRef}
+              type="file"
+              accept="image/*,.stitchly"
+              hidden
+              disabled={loading}
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void handlePatternImportFile(file)
+                event.target.value = ''
+              }}
+            />
             Import from Stitchly (.stitchly or chart image)
-          </button>
+          </label>
           {statusBlock}
           {activeImagePath && (
             <button
