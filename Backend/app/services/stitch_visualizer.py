@@ -427,6 +427,35 @@ def resize_linear_light(
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
+def _verify_numeric_environment() -> None:
+    """Refuse to serve previews if numpy/Pillow compute wrong colors.
+
+    A production build once shipped with a numpy install whose ufunc results
+    were wrong: every photo import quantized to a single near-black color
+    (the linear-light round trip came back gamma-decoded instead of
+    re-encoded). The scalar Python paths were unaffected, so the service
+    stayed "healthy" while silently ruining every pattern. Fail startup
+    loudly instead — a crashed deploy gets noticed, black previews did not.
+    """
+    probe_rgb = (200, 30, 40)
+    probe = Image.new("RGB", (8, 8), probe_rgb)
+    resized = resize_linear_light(probe, (4, 4), Image.Resampling.BILINEAR)
+    if any(abs(got - want) > 2 for got, want in zip(resized.getpixel((1, 1)), probe_rgb)):
+        raise RuntimeError(
+            f"resize_linear_light corrupted a solid color: {resized.getpixel((1, 1))} != {probe_rgb}. "
+            "The numpy/Pillow install is broken — rebuild the environment (clear the build cache)."
+        )
+    roundtrip = _oklab_to_srgb_array(_srgb_to_oklab_array(np.array([list(probe_rgb)], dtype=np.float64)))
+    if np.abs(roundtrip - np.array(probe_rgb)).max() > 2:
+        raise RuntimeError(
+            f"OKLab round trip corrupted a color: {roundtrip.tolist()} != {probe_rgb}. "
+            "The numpy install is broken — rebuild the environment (clear the build cache)."
+        )
+
+
+_verify_numeric_environment()
+
+
 def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dither) -> Image.Image:
     """Reduce an image to `colors` colors via weighted k-means in OKLab space.
 

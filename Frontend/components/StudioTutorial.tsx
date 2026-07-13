@@ -168,6 +168,24 @@ export function StudioTutorial({ onClose }: { onClose: () => void }) {
     onClose()
   }
 
+  // If the user acts on the spotlighted element (now click-through), they're
+  // done touring — close so the tour doesn't linger over the next step.
+  useEffect(() => {
+    if (!targetRect) return
+    const onDocClick = (e: MouseEvent) => {
+      if (popoverRef.current?.contains(e.target as Node)) return
+      const inHole =
+        e.clientX >= targetRect.left - PAD &&
+        e.clientX <= targetRect.left + targetRect.width + PAD &&
+        e.clientY >= targetRect.top - PAD &&
+        e.clientY <= targetRect.top + targetRect.height + PAD
+      if (inHole) finish()
+    }
+    document.addEventListener('click', onDocClick, true)
+    return () => document.removeEventListener('click', onDocClick, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetRect])
+
   const popoverStyle = getPopoverStyle(targetRect, step.position, Boolean(step.image))
 
   return (
@@ -175,10 +193,21 @@ export function StudioTutorial({ onClose }: { onClose: () => void }) {
       {/* Backdrop */}
       {targetRect ? (
         <>
-          <div
-            style={{ position: 'fixed', inset: 0, zIndex: 10000, pointerEvents: 'auto' }}
-            onClick={finish}
-          />
+          {/* Four strips around the spotlight hole, so the highlighted target
+              stays genuinely clickable — a full-viewport backdrop was eating
+              the tap that should open the file picker. */}
+          {[
+            { top: 0, left: 0, right: 0, height: Math.max(0, targetRect.top - PAD) },
+            { top: targetRect.top + targetRect.height + PAD, left: 0, right: 0, bottom: 0 },
+            { top: targetRect.top - PAD, left: 0, width: Math.max(0, targetRect.left - PAD), height: targetRect.height + PAD * 2 },
+            { top: targetRect.top - PAD, left: targetRect.left + targetRect.width + PAD, right: 0, height: targetRect.height + PAD * 2 },
+          ].map((rect, i) => (
+            <div
+              key={i}
+              style={{ position: 'fixed', zIndex: 10000, pointerEvents: 'auto', ...rect }}
+              onClick={finish}
+            />
+          ))}
           {/* Spotlight hole via box-shadow */}
           <div style={{
             position: 'fixed',
