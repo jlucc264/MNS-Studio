@@ -267,6 +267,8 @@ function clampZoom(nextZoom: number) {
   return Math.max(100, Math.min(400, nextZoom))
 }
 
+const TOUCH_EDIT_GRACE_MS = 90
+
 function formatInches(value: number) {
   return Number.isInteger(value) ? `${value}` : value.toFixed(2).replace(/\.?0+$/, '')
 }
@@ -559,6 +561,15 @@ export default function GridEditor({
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
   const touchActivePointersRef = useRef<Set<number>>(new Set())
+  const pendingTouchEditRef = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    ctrlKey: boolean
+    metaKey: boolean
+  } | null>(null)
+  const pendingTouchEditTimeoutRef = useRef<number | null>(null)
+  const flushPendingTouchEditRef = useRef<(() => boolean) | null>(null)
   const pinchPointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchStartDistRef = useRef<number | null>(null)
   const pinchStartZoomRef = useRef<number>(100)
@@ -655,7 +666,34 @@ export default function GridEditor({
       if (zoomFrameRef.current !== null) {
         window.cancelAnimationFrame(zoomFrameRef.current)
       }
+      if (pendingTouchEditTimeoutRef.current !== null) {
+        window.clearTimeout(pendingTouchEditTimeoutRef.current)
+      }
     }
+  }, [])
+
+  const clearPendingTouchEdit = useCallback(() => {
+    if (pendingTouchEditTimeoutRef.current !== null) {
+      window.clearTimeout(pendingTouchEditTimeoutRef.current)
+      pendingTouchEditTimeoutRef.current = null
+    }
+    pendingTouchEditRef.current = null
+  }, [])
+
+  const cancelActiveTouchEdit = useCallback(() => {
+    setIsPainting(false)
+    setIsSelecting(false)
+    setIsAddingSelection(false)
+    setDragSelectionRect(null)
+    paintingPointerIdRef.current = null
+    selectionPointerIdRef.current = null
+    liveSelectionRectRef.current = null
+    shapeStartCellRef.current = null
+    setShapeStartCell(null)
+    setShapeEndCell(null)
+    textBoxStartRef.current = null
+    textIsMovingRef.current = false
+    textMoveStartRef.current = null
   }, [])
 
   const focusTextInputForKeyboard = useCallback(() => {
@@ -685,6 +723,11 @@ export default function GridEditor({
   useEffect(() => {
     const stopPainting = (event: PointerEvent) => {
       if (event.pointerType === 'touch') {
+        if (event.type === 'pointerup') {
+          flushPendingTouchEditRef.current?.()
+        } else {
+          clearPendingTouchEdit()
+        }
         touchActivePointersRef.current.delete(event.pointerId)
       }
       if (toolMode === 'text' && textIsMovingRef.current) {
@@ -764,7 +807,7 @@ export default function GridEditor({
     toolMode, shapeEndCell, shapeType, shapeFillColor, shapeBorderColor,
     onApplyShapeCells, cells,
     dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects,
-    onDesignAreaMiss, textBoxEnd, focusTextInputForKeyboard,
+    onDesignAreaMiss, textBoxEnd, focusTextInputForKeyboard, clearPendingTouchEdit,
   ])
 
   const borderStitches = Math.floor(1 * meshCount)
@@ -1059,12 +1102,20 @@ export default function GridEditor({
     if (!centerKey) return
     const viewport = viewportRef.current
     if (!viewport || containerSize.width === 0) return
+    centeredDimsRef.current = ''
+    pendingZoomAnchorRef.current = null
+
+    if (zoomPercentRef.current === 100) {
+      pendingResetViewRef.current = false
+      const centeredScroll = getDefaultCenteredScroll()
+      applyViewportScroll(centeredScroll.left, centeredScroll.top, 100)
+      return
+    }
+
     zoomPercentRef.current = 100
     setZoomPercent(100)
-    centeredDimsRef.current = ''
     pendingResetViewRef.current = true
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [centerKey])
+  }, [centerKey, containerSize.width, getDefaultCenteredScroll, applyViewportScroll])
 
   const getZoomMetrics = useCallback(
     (targetZoom: number) => {
@@ -1288,22 +1339,21 @@ export default function GridEditor({
     }
   }, [applyViewportScroll, getDefaultCenteredScroll])
 
-  const handleCanvasPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (event.pointerType === 'touch') {
-        touchActivePointersRef.current.add(event.pointerId)
-        if (touchActivePointersRef.current.size > 1) {
-          setIsPainting(false)
-          paintingPointerIdRef.current = null
-          return
-        }
-      }
+  const runCanvasPointerDown = useCallback(
+    (input: {
+      pointerId: number
+      clientX: number
+      clientY: number
+      ctrlKey: boolean
+      metaKey: boolean
+      preventDefault: () => void
+    }) => {
       if (highlightSelection) {
-        event.preventDefault()
-        selectionPointerIdRef.current = event.pointerId
-        setIsAddingSelection(event.ctrlKey || event.metaKey)
+        input.preventDefault()
+        selectionPointerIdRef.current = input.pointerId
+        setIsAddingSelection(input.ctrlKey || input.metaKey)
         setIsSelecting(true)
-        const startHit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        const startHit = getCellFromClientPoint(input.clientX, input.clientY, 'stage')
         if (!startHit) return
 
         const nextRect = {
@@ -1318,9 +1368,9 @@ export default function GridEditor({
       }
 
       if (toolMode === 'shape') {
-        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
-        event.preventDefault()
+        input.preventDefault()
         shapeStartCellRef.current = { row: hit.row, col: hit.col }
         setShapeStartCell({ row: hit.row, col: hit.col })
         setShapeEndCell({ row: hit.row, col: hit.col })
@@ -1328,9 +1378,9 @@ export default function GridEditor({
       }
 
       if (toolMode === 'text') {
-        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
-        event.preventDefault()
+        input.preventDefault()
         // If a box is already defined, check if click is inside it
         if (textAnchorCell && textBoxEnd) {
           const r1 = Math.min(textAnchorCell.row, textBoxEnd.row)
@@ -1362,30 +1412,30 @@ export default function GridEditor({
       }
 
       if (toolMode === 'eyedropper') {
-        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
-        event.preventDefault()
+        input.preventDefault()
         onEyedropperSample?.({ row: hit.row, col: hit.col })
         return
       }
 
       if (toolMode === 'fill') {
-        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
-        event.preventDefault()
+        input.preventDefault()
         onFillCell?.({ row: hit.row, col: hit.col })
         return
       }
 
       if (toolMode !== 'merge' && !activeColorRef.current) return
 
-      const hit = getCellFromClientPoint(event.clientX, event.clientY)
+      const hit = getCellFromClientPoint(input.clientX, input.clientY)
       if (!hit) return
 
-      event.preventDefault()
+      input.preventDefault()
 
       onPaintStart()
-      paintingPointerIdRef.current = event.pointerId
+      paintingPointerIdRef.current = input.pointerId
       setIsPainting(true)
       paintCell(hit.row, hit.col)
     },
@@ -1393,6 +1443,76 @@ export default function GridEditor({
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
      textFontSize, textFontFamily, textBold, textItalic, textOutline]
+  )
+
+  const flushPendingTouchEdit = useCallback(() => {
+    const pending = pendingTouchEditRef.current
+    if (!pending) return false
+    clearPendingTouchEdit()
+    if (touchActivePointersRef.current.size > 1) return false
+    if (!touchActivePointersRef.current.has(pending.pointerId)) return false
+
+    runCanvasPointerDown({
+      ...pending,
+      preventDefault: () => {},
+    })
+    return true
+  }, [clearPendingTouchEdit, runCanvasPointerDown])
+  flushPendingTouchEditRef.current = flushPendingTouchEdit
+
+  const handleCanvasPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (event.pointerType === 'touch') {
+        touchActivePointersRef.current.add(event.pointerId)
+        if (touchActivePointersRef.current.size > 1) {
+          clearPendingTouchEdit()
+          cancelActiveTouchEdit()
+          return
+        }
+
+        const hasTouchEditAction =
+          highlightSelection ||
+          toolMode === 'shape' ||
+          toolMode === 'text' ||
+          toolMode === 'eyedropper' ||
+          toolMode === 'fill' ||
+          toolMode === 'merge' ||
+          Boolean(activeColorRef.current)
+
+        if (hasTouchEditAction) {
+          event.preventDefault()
+          clearPendingTouchEdit()
+          pendingTouchEditRef.current = {
+            pointerId: event.pointerId,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+          }
+          pendingTouchEditTimeoutRef.current = window.setTimeout(() => {
+            pendingTouchEditTimeoutRef.current = null
+            flushPendingTouchEditRef.current?.()
+          }, TOUCH_EDIT_GRACE_MS)
+          return
+        }
+      }
+
+      runCanvasPointerDown({
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        preventDefault: () => event.preventDefault(),
+      })
+    },
+    [
+      cancelActiveTouchEdit,
+      clearPendingTouchEdit,
+      highlightSelection,
+      runCanvasPointerDown,
+      toolMode,
+    ]
   )
 
   const handleCanvasPointerMove = useCallback(
@@ -1478,6 +1598,8 @@ export default function GridEditor({
       pinchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
       if (pinchPointersRef.current.size === 2) {
+        clearPendingTouchEdit()
+        cancelActiveTouchEdit()
         const [p1, p2] = Array.from(pinchPointersRef.current.values())
         pinchStartDistRef.current = Math.hypot(p2.x - p1.x, p2.y - p1.y)
         pinchStartZoomRef.current = zoomPercentRef.current
@@ -1566,7 +1688,7 @@ export default function GridEditor({
       viewport.removeEventListener('pointerup', handleViewportPointerUp)
       viewport.removeEventListener('pointercancel', handleViewportPointerUp)
     }
-  }, [getZoomMetrics, scheduleZoom, setZoomWithStageAnchor])
+  }, [cancelActiveTouchEdit, clearPendingTouchEdit, getZoomMetrics, scheduleZoom, setZoomWithStageAnchor])
 
   const renderSelections = useMemo(
     () =>

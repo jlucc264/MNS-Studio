@@ -648,6 +648,45 @@ function StudioPage() {
   }, [])
 
   useEffect(() => {
+    const scrollY = window.scrollY
+    const body = document.body
+    const root = document.documentElement
+    const previousBody = {
+      overflow: body.style.overflow,
+      position: body.style.position,
+      top: body.style.top,
+      width: body.style.width,
+      height: body.style.height,
+      overscrollBehavior: body.style.overscrollBehavior,
+    }
+    const previousRoot = {
+      height: root.style.height,
+      overscrollBehavior: root.style.overscrollBehavior,
+    }
+
+    root.style.height = '100%'
+    root.style.overscrollBehavior = 'none'
+    body.style.height = '100%'
+    body.style.overflow = 'hidden'
+    body.style.overscrollBehavior = 'none'
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollY}px`
+    body.style.width = '100%'
+
+    return () => {
+      root.style.height = previousRoot.height
+      root.style.overscrollBehavior = previousRoot.overscrollBehavior
+      body.style.overflow = previousBody.overflow
+      body.style.position = previousBody.position
+      body.style.top = previousBody.top
+      body.style.width = previousBody.width
+      body.style.height = previousBody.height
+      body.style.overscrollBehavior = previousBody.overscrollBehavior
+      window.scrollTo(0, scrollY)
+    }
+  }, [])
+
+  useEffect(() => {
     if (session?.access_token && authPrompt !== 'login') {
       setAuthPrompt(null)
     }
@@ -691,6 +730,9 @@ function StudioPage() {
         if (d.viewMode) setViewMode(d.viewMode)
         if (d.activeWorkflowStep) setActiveWorkflowStep(d.activeWorkflowStep)
         if (d.parentGalleryItemId) setParentGalleryItemId(d.parentGalleryItemId)
+        if (d.cells?.length) {
+          window.requestAnimationFrame(() => setGridKey((k) => k + 1))
+        }
       } catch {}
       return
     }
@@ -749,6 +791,7 @@ function StudioPage() {
         setHasGeneratedPreview(true)
         setViewMode('stitch')
         setActiveWorkflowStep(project.pdf_url ? 3 : 2)
+        window.requestAnimationFrame(() => setGridKey((k) => k + 1))
       }
     }).catch(() => {
       // project load failed silently — user starts fresh
@@ -2792,21 +2835,23 @@ function StudioPage() {
         style={{
           display: 'flex',
           gap: 7,
-          alignItems: 'center',
+          alignItems: 'flex-start',
           paddingTop: 2,
           fontSize: isMobile ? 13 : 12,
           lineHeight: isMobile ? 1.2 : 1.1,
           color: '#3f382f',
           opacity: isBlankCanvas ? 0.4 : 1,
           pointerEvents: isBlankCanvas ? 'none' : undefined,
+          minWidth: 0,
         }}
       >
         <input
           type="checkbox"
           checked={draftSettings.clean_background}
           onChange={(event) => updateSettings({ clean_background: event.target.checked })}
+          style={{ flexShrink: 0, marginTop: 1 }}
         />
-        Exclude blank canvas
+        <span style={{ minWidth: 0, whiteSpace: 'normal' }}>Exclude blank canvas</span>
       </label>
     </div>
   )
@@ -3593,13 +3638,6 @@ function StudioPage() {
                 >
                   Your Studio
                 </button>
-                <button
-                  type="button"
-                  onClick={() => navigateAwayFromStudio('/contact')}
-                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
-                >
-                  Contact Us
-                </button>
                 <span style={{ color: '#3f382f', fontWeight: 700 }}>Active Canvas</span>
               </div>
             </>
@@ -3634,6 +3672,15 @@ function StudioPage() {
               <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
             )}
           </button>
+          {!showPortraitWarning && (
+            <button
+              type="button"
+              onClick={() => navigateAwayFromStudio('/contact')}
+              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600, fontSize: isMobile ? 12 : 13, whiteSpace: 'nowrap' }}
+            >
+              Contact Us
+            </button>
+          )}
           {session ? (
             <NavAccountControls
               user={user}
