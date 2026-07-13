@@ -220,6 +220,7 @@ class CartCheckoutItem(BaseModel):
 
 class CartCheckoutRequest(BaseModel):
     items: list[CartCheckoutItem]
+    use_credit: bool = True
 
 
 class UpdateCreatorRequest(BaseModel):

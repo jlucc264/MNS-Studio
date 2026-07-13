@@ -848,11 +848,12 @@ export async function createCartCheckout(
     parent_gallery_item_id: string | null
   }>,
   accessToken: string,
+  useCredit = true,
 ): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/cart`, {
     method: 'POST',
     headers: jsonHeaders(accessToken),
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items, use_credit: useCredit }),
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))

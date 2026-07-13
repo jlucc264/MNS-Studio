@@ -749,7 +749,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
         })
 
     try:
-        client_secret = create_cart_checkout(items_data, user_id)
+        client_secret = create_cart_checkout(items_data, user_id, use_credit=request.use_credit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return CheckoutResponse(client_secret=client_secret)

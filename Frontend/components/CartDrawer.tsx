@@ -17,6 +17,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
   const [items, setItems] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [useCredit, setUseCredit] = useState(true)
 
   useEffect(() => {
     if (open) setItems(cartRead())
@@ -45,6 +46,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
           parent_gallery_item_id: i.parent_gallery_item_id,
         })),
         accessToken,
+        useCredit,
       )
       onClose()
       onCheckoutReady(client_secret)
@@ -67,7 +69,10 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
 
   const subtotal = cartSubtotal(items)
   const total = cartTotal(items)
-  const credit = pendingCents && pendingCents > 0 ? Math.min(pendingCents, total) : 0
+  // Mirrors backend _apply_canvas_credit: credit covers prints only (not
+  // shipping) and leaves a 50¢ minimum charge on the line items.
+  const creditAvailable = pendingCents && pendingCents > 0 ? Math.min(pendingCents, Math.max(0, subtotal - 50)) : 0
+  const credit = useCredit ? creditAvailable : 0
   const totalAfterCredit = total - credit
   const itemCount = items.reduce((s, i) => s + i.quantity, 0)
 
@@ -152,10 +157,19 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#5f574f' }}>
               <span>Shipping (Standard, 5–7 days)</span><span>{formatCents(CART_SHIPPING_CENTS)}</span>
             </div>
-            {credit > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#4a7244' }}>
-                <span>Canvas credit</span><span>−{formatCents(credit)}</span>
-              </div>
+            {creditAvailable > 0 && (
+              <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 13, color: useCredit ? '#4a7244' : '#8a8177', cursor: 'pointer' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <input
+                    type="checkbox"
+                    checked={useCredit}
+                    onChange={e => setUseCredit(e.target.checked)}
+                    style={{ width: 15, height: 15, accentColor: '#4a7244', cursor: 'pointer', margin: 0 }}
+                  />
+                  Use canvas credit
+                </span>
+                <span>{useCredit ? `−${formatCents(credit)}` : `${formatCents(creditAvailable)} available`}</span>
+              </label>
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16, borderTop: '1px solid #e7e1d8', paddingTop: 10, marginTop: 2 }}>
               <span>Total</span><span>{formatCents(totalAfterCredit)}</span>

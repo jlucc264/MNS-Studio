@@ -209,7 +209,7 @@ def create_gallery_print_checkout(
     return session.client_secret
 
 
-def create_cart_checkout(items: list[dict], user_id: str) -> str:
+def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = True) -> str:
     line_items = []
     metadata: dict = {"type": "cart", "user_id": user_id, "item_count": str(len(items))}
     subtotal_for_credit = 0
@@ -252,7 +252,9 @@ def create_cart_checkout(items: list[dict], user_id: str) -> str:
 
         metadata[f"item_{i}"] = json.dumps(item_meta)
 
-    coupon_id, applied_cents = _apply_canvas_credit(user_id, subtotal_for_credit)
+    coupon_id, applied_cents = (
+        _apply_canvas_credit(user_id, subtotal_for_credit) if use_credit else (None, 0)
+    )
     if applied_cents:
         metadata["applied_credit_user_id"] = user_id
         metadata["applied_credit_cents"] = str(applied_cents)
