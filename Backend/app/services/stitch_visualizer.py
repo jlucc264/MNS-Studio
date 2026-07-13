@@ -1,5 +1,6 @@
 from pathlib import Path
 import colorsys
+from contextvars import ContextVar
 from io import BytesIO
 from urllib.request import Request, urlopen
 import numpy as np
@@ -400,6 +401,11 @@ def _drop_blend_clusters(
     return centers
 
 
+# Set per request when the serving-time numeric probe fails, so a transient
+# corruption episode only downgrades the requests it actually touches.
+_FORCE_FALLBACK: ContextVar[bool] = ContextVar("stitch_force_fallback", default=False)
+
+
 def resize_linear_light(
     img: Image.Image, size: tuple[int, int], resampling: Image.Resampling
 ) -> Image.Image:
@@ -412,7 +418,7 @@ def resize_linear_light(
     """
     # globals().get: the numeric self-check probes this function before the
     # flag exists; a broken numpy install gets gamma-space resize instead.
-    if not globals().get("_NUMPY_ENV_OK", True):
+    if not globals().get("_NUMPY_ENV_OK", True) or _FORCE_FALLBACK.get():
         return img.convert("RGB").resize(size, resampling)
     arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
     lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
@@ -476,7 +482,7 @@ def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dithe
     Seeding is deterministic so the same upload always previews identically.
     """
     rgb_img = img.convert("RGB")
-    if not _NUMPY_ENV_OK:
+    if not _NUMPY_ENV_OK or _FORCE_FALLBACK.get():
         return rgb_img.quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=dither).convert("RGB")
     pixels = np.asarray(rgb_img, dtype=np.float64).reshape(-1, 3)
     unique_colors, inverse, counts = np.unique(
@@ -2019,36 +2025,42 @@ def generate_stitch_preview(
     contrast_level: str,
     source_type: str = "photo",
 ) -> tuple[str, list[dict], list[list[str]]]:
-    global _NUMPY_ENV_OK
-    if _NUMPY_ENV_OK and not _numeric_env_ok_in_request():
-        import logging
-        logging.getLogger(__name__).critical(
-            "NUMERIC ENVIRONMENT BROKEN AT REQUEST TIME — switching photo "
-            "pipeline to gamma-space resize and MEDIANCUT quantization."
-        )
-        _NUMPY_ENV_OK = False
+    import logging
 
-    result = _generate_stitch_preview_impl(
-        image_url, stitch_width, stitch_height, color_count, show_grid,
-        clean_background, simplify_colors, strengthen_dark_detail,
-        preserve_accents, mesh_count, contrast_level, source_type,
-    )
-
-    # Last-resort net: if the output still shows the corruption signature,
-    # flip to the numpy-free fallbacks and regenerate once.
-    if _NUMPY_ENV_OK and _palette_looks_corrupted(result[1]):
-        import logging
+    # The corruption is intermittent (transient episodes on shared hosts), so
+    # the fallback decision is per request — quality returns automatically
+    # once the environment computes correctly again.
+    fallback = not _NUMPY_ENV_OK or not _numeric_env_ok_in_request()
+    if fallback and _NUMPY_ENV_OK:
         logging.getLogger(__name__).critical(
-            "Preview collapsed to a single dark color — regenerating with the "
-            "numpy-free fallback pipeline."
+            "NUMERIC ENVIRONMENT BROKEN AT REQUEST TIME — serving this import "
+            "via gamma-space resize and MEDIANCUT quantization."
         )
-        _NUMPY_ENV_OK = False
+    token = _FORCE_FALLBACK.set(fallback)
+    try:
         result = _generate_stitch_preview_impl(
             image_url, stitch_width, stitch_height, color_count, show_grid,
             clean_background, simplify_colors, strengthen_dark_detail,
             preserve_accents, mesh_count, contrast_level, source_type,
         )
-    return result
+
+        # Last-resort net: corruption that starts mid-request slips past the
+        # entry probe; if the output shows the signature, regenerate once on
+        # the numpy-free path.
+        if not fallback and _palette_looks_corrupted(result[1]):
+            logging.getLogger(__name__).critical(
+                "Preview collapsed to a single dark color — regenerating with "
+                "the numpy-free fallback pipeline."
+            )
+            _FORCE_FALLBACK.set(True)
+            result = _generate_stitch_preview_impl(
+                image_url, stitch_width, stitch_height, color_count, show_grid,
+                clean_background, simplify_colors, strengthen_dark_detail,
+                preserve_accents, mesh_count, contrast_level, source_type,
+            )
+        return result
+    finally:
+        _FORCE_FALLBACK.reset(token)
 
 
 def _generate_stitch_preview_impl(
