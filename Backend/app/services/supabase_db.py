@@ -312,7 +312,7 @@ def get_creator_earnings(user_id: str) -> dict:
     )
     rows = result if isinstance(result, list) else []
     template_sales = sum(1 for r in rows if r.get("order_type") == "template")
-    print_sales = sum(1 for r in rows if r.get("order_type") == "print_gallery")
+    print_sales = sum(1 for r in rows if r.get("order_type") in ("print_gallery", "cart"))
     total_cents = sum(int(r.get("amount_cents") or 0) for r in rows)
     paid_cents = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("paid_out"))
     pending_cents = total_cents - paid_cents
