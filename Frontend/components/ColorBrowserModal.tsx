@@ -65,7 +65,6 @@ export function ColorBrowserModal({ mode, allColors, paletteHexes, swapFromColor
           </div>
         )}
         <input
-          autoFocus
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search…"

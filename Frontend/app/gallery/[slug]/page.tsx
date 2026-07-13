@@ -244,11 +244,14 @@ export default function CreatorProfilePage() {
 
   return (
     <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>
-      <nav style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', borderBottom: '1px solid #e7e1d8', background: '#fffdf8', boxSizing: 'border-box' }}>
+      <nav style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', borderBottom: '2px solid #6e8d67', background: '#fffdf8', boxSizing: 'border-box' }}>
         <Link href="/gallery" style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, color: '#3f382f', textDecoration: 'none' }}>
           ← Gallery
         </Link>
-        <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13 }}>Contact Us</Link>
+          <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
+        </div>
       </nav>
 
       <main style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px' }}>

@@ -25,6 +25,7 @@ type Props = {
   settings: PreviewSettings
   lockAspectRatio: boolean
   isBlankCanvas?: boolean
+  compact?: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
   onDimensionClamped?: () => void
@@ -35,6 +36,7 @@ export default function PreviewControls({
   settings,
   lockAspectRatio,
   isBlankCanvas = false,
+  compact = false,
   onSettingsChange,
   onLockAspectRatioChange,
   onDimensionClamped,
@@ -62,8 +64,8 @@ export default function PreviewControls({
   }, [heightInches, importedAspectRatio, lockAspectRatio, onSettingsChange, settings, widthInches])
 
   const controlStyle = {
-    fontSize: 11.5,
-    padding: '4px 6px',
+    fontSize: compact ? 13 : 11.5,
+    padding: compact ? '7px 9px' : '4px 6px',
     minWidth: 0,
     width: '100%',
     boxSizing: 'border-box',
@@ -78,8 +80,8 @@ export default function PreviewControls({
     <div
       style={{
         display: 'grid',
-        gap: 10,
-        fontSize: 12,
+        gap: compact ? 12 : 10,
+        fontSize: compact ? 13 : 12,
         width: '100%',
         minWidth: 0,
         maxWidth: '100%',
@@ -113,9 +115,9 @@ export default function PreviewControls({
                 padding: '6px 4px',
                 border: 'none',
                 borderRadius: 7,
-                fontFamily: 'inherit',
-                fontSize: 12,
-                fontWeight: 600,
+            fontFamily: 'inherit',
+            fontSize: compact ? 13 : 12,
+            fontWeight: 600,
                 cursor: 'pointer',
                 background: sourceType === value ? '#fff' : 'transparent',
                 color: sourceType === value ? '#3f382f' : '#8a8177',
@@ -166,7 +168,7 @@ export default function PreviewControls({
                     border: 'none',
                     borderRadius: 7,
                     fontFamily: 'inherit',
-                    fontSize: 12,
+                    fontSize: compact ? 13 : 12,
                     fontWeight: 600,
                     cursor: isActive ? 'default' : 'pointer',
                     background: isActive ? '#fff' : 'transparent',
@@ -185,7 +187,7 @@ export default function PreviewControls({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gridTemplateColumns: compact ? '1fr' : 'repeat(2, minmax(0, 1fr))',
           gap: 8,
           alignItems: 'start',
           width: '100%',
@@ -281,12 +283,12 @@ export default function PreviewControls({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: 8,
+          gridTemplateColumns: compact ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+          gap: compact ? 9 : 8,
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
+        <label style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: compact ? 13 : 11.5, lineHeight: 1.2, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
             <input
               type="checkbox"
               checked={lockAspectRatio}
@@ -305,7 +307,7 @@ export default function PreviewControls({
             Lock ratio
         </label>
 
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5, lineHeight: 1.1, minWidth: 0 }}>
+        <label style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: compact ? 13 : 11.5, lineHeight: 1.2, minWidth: 0 }}>
             <input
               type="checkbox"
               checked={showGrid}

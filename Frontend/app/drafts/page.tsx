@@ -315,7 +315,7 @@ export default function DraftsPage() {
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0 28px',
-          borderBottom: '1px solid #e7e1d8',
+          borderBottom: '2px solid #6e8d67',
           background: '#fffdf8',
           boxSizing: 'border-box',
           position: 'sticky',
@@ -351,6 +351,7 @@ export default function DraftsPage() {
           <div style={{ display: 'flex', gap: 24, color: '#7f776d', fontWeight: 600, whiteSpace: 'nowrap' }}>
             <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
             <span style={{ color: '#3f382f', fontWeight: 700 }}>Your Studio</span>
+            <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none' }}>Contact Us</Link>
           </div>
         </div>
 

@@ -34,7 +34,7 @@ export default function PrivacyPage() {
           display: 'flex',
           alignItems: 'center',
           padding: '0 24px',
-          borderBottom: '1px solid #e7e1d8',
+          borderBottom: '2px solid #6e8d67',
           background: '#fffdf8',
           boxSizing: 'border-box',
           gap: 16,
@@ -48,6 +48,10 @@ export default function PrivacyPage() {
           </div>
           <strong style={{ fontSize: 20, color: '#111' }}>MNS Studio</strong>
         </Link>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+          <Link href="/terms" style={{ color: '#7f776d', textDecoration: 'none' }}>Terms</Link>
+          <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none' }}>Contact Us</Link>
+        </div>
       </nav>
 
       <main style={{ maxWidth: 720, margin: '0 auto', padding: '48px 24px 80px' }}>

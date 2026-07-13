@@ -558,11 +558,12 @@ export default function GridEditor({
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
-  const gestureStartZoomRef = useRef(100)
   const touchActivePointersRef = useRef<Set<number>>(new Set())
   const pinchPointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchStartDistRef = useRef<number | null>(null)
   const pinchStartZoomRef = useRef<number>(100)
+  const pinchStartMidpointRef = useRef<{ x: number; y: number } | null>(null)
+  const pinchStartScrollRef = useRef<{ left: number; top: number } | null>(null)
   const zoomPercentRef = useRef(100)
   const activeColorRef = useRef<string | null>(activeColor)
   const brushDensityRef = useRef(brushDensity)
@@ -584,6 +585,7 @@ export default function GridEditor({
     anchorX: number
     anchorY: number
   } | null>(null)
+  const pendingResetViewRef = useRef(false)
   const centeredDimsRef = useRef('')
 
   useLayoutEffect(() => {
@@ -656,6 +658,14 @@ export default function GridEditor({
     }
   }, [])
 
+  const focusTextInputForKeyboard = useCallback(() => {
+    const input = textInputRef.current
+    if (!input) return
+    input.focus({ preventScroll: true })
+    const cursorPosition = input.value.length
+    input.setSelectionRange(cursorPosition, cursorPosition)
+  }, [])
+
   useEffect(() => {
     if (toolMode !== 'text' || !textAnchorCell) { setTextCursorVisible(true); return }
     setTextCursorVisible(true)
@@ -680,14 +690,14 @@ export default function GridEditor({
       if (toolMode === 'text' && textIsMovingRef.current) {
         textIsMovingRef.current = false
         textMoveStartRef.current = null
-        setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
+        focusTextInputForKeyboard()
       } else if (toolMode === 'text' && textBoxStartRef.current && textBoxEnd) {
         const start = textBoxStartRef.current
         const anchorRow = Math.min(start.row, textBoxEnd.row)
         const anchorCol = Math.min(start.col, textBoxEnd.col)
         textBoxStartRef.current = null
         setTextAnchorCell({ row: anchorRow, col: anchorCol })
-        setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
+        focusTextInputForKeyboard()
       }
 
       if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
@@ -754,7 +764,7 @@ export default function GridEditor({
     toolMode, shapeEndCell, shapeType, shapeFillColor, shapeBorderColor,
     onApplyShapeCells, cells,
     dragSelectionRect, isAddingSelection, isSelecting, onSelectionChange, selectionRects,
-    onDesignAreaMiss, textBoxEnd,
+    onDesignAreaMiss, textBoxEnd, focusTextInputForKeyboard,
   ])
 
   const borderStitches = Math.floor(1 * meshCount)
@@ -834,6 +844,27 @@ export default function GridEditor({
       })),
     [previewViewportHeight, scrollPosition.top, verticalRulerTicks]
   )
+
+  const getDefaultCenteredScroll = useCallback(() => {
+    const centerX = Math.max(
+      0,
+      Math.round((contentOriginCol + totalCols / 2) * baseCellSize - availableStageWidth / 2)
+    )
+    const centerY = Math.max(
+      0,
+      Math.round((contentOriginRow + totalRows / 2) * baseCellSize - availableStageHeight / 2)
+    )
+
+    return { left: centerX, top: centerY }
+  }, [
+    availableStageHeight,
+    availableStageWidth,
+    baseCellSize,
+    contentOriginCol,
+    contentOriginRow,
+    totalCols,
+    totalRows,
+  ])
 
   const buildBrushCoords = useCallback(
     (row: number, col: number) => {
@@ -977,6 +1008,19 @@ export default function GridEditor({
     [baseCellSize, meshCount, previewViewportHeight, previewViewportWidth]
   )
 
+  const applyViewportScroll = useCallback(
+    (left: number, top: number, nextZoom = zoomPercentRef.current) => {
+      const viewport = viewportRef.current
+      if (!viewport) return
+
+      viewport.scrollLeft = Math.max(0, left)
+      viewport.scrollTop = Math.max(0, top)
+      setScrollPosition({ left: viewport.scrollLeft, top: viewport.scrollTop })
+      updateLiveRulers(nextZoom, viewport.scrollLeft, viewport.scrollTop)
+    },
+    [updateLiveRulers]
+  )
+
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
@@ -1005,14 +1049,10 @@ export default function GridEditor({
     // Skip if same dims and user has zoomed in (preserve their scroll position)
     if (centeredDimsRef.current === dimsKey && !atDefaultZoom) return
     centeredDimsRef.current = dimsKey
-    const centerX = Math.max(0, Math.round((contentOriginCol + totalCols / 2) * baseCellSize - availableStageWidth / 2))
-    const centerY = Math.max(0, Math.round((contentOriginRow + totalRows / 2) * baseCellSize - availableStageHeight / 2))
-    viewport.scrollLeft = centerX
-    viewport.scrollTop = centerY
-    setScrollPosition({ left: centerX, top: centerY })
-    updateLiveRulers(zoomPercentRef.current, centerX, centerY)
+    const centeredScroll = getDefaultCenteredScroll()
+    applyViewportScroll(centeredScroll.left, centeredScroll.top)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, cols, meshCount, baseCellSize, containerSize.width, containerSize.height])
+  }, [rows, cols, meshCount, baseCellSize, containerSize.width, containerSize.height, getDefaultCenteredScroll, applyViewportScroll])
 
   // Re-center when centerKey changes (e.g. "Start fresh") without remounting the component.
   useLayoutEffect(() => {
@@ -1022,14 +1062,110 @@ export default function GridEditor({
     zoomPercentRef.current = 100
     setZoomPercent(100)
     centeredDimsRef.current = ''
-    const centerX = Math.max(0, Math.round((contentOriginCol + totalCols / 2) * baseCellSize - availableStageWidth / 2))
-    const centerY = Math.max(0, Math.round((contentOriginRow + totalRows / 2) * baseCellSize - availableStageHeight / 2))
-    viewport.scrollLeft = centerX
-    viewport.scrollTop = centerY
-    setScrollPosition({ left: centerX, top: centerY })
-    updateLiveRulers(100, centerX, centerY)
+    pendingResetViewRef.current = true
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerKey])
+
+  const getZoomMetrics = useCallback(
+    (targetZoom: number) => {
+      const targetCellSize = Math.max(1, (baseCellSize * targetZoom) / 100)
+      const targetStageWidth = stageCols * targetCellSize
+      const targetStageHeight = stageRows * targetCellSize
+      const targetWrapperWidth = Math.max(previewViewportWidth, Math.round(targetStageWidth))
+      const targetWrapperHeight = Math.max(previewViewportHeight, Math.round(targetStageHeight))
+
+      return {
+        cellSize: targetCellSize,
+        gridOriginX: Math.max(0, (targetWrapperWidth - Math.round(targetStageWidth)) / 2),
+        gridOriginY: Math.max(0, (targetWrapperHeight - Math.round(targetStageHeight)) / 2),
+        wrapperWidth: targetWrapperWidth,
+        wrapperHeight: targetWrapperHeight,
+      }
+    },
+    [baseCellSize, previewViewportHeight, previewViewportWidth, stageCols, stageRows]
+  )
+
+  const applyStageAnchorScroll = useCallback(
+    (
+      targetZoom: number,
+      stageX: number,
+      stageY: number,
+      anchorX: number,
+      anchorY: number
+    ) => {
+      const viewport = viewportRef.current
+      if (!viewport) return
+
+      const metrics = getZoomMetrics(targetZoom)
+      const maxScrollLeft = Math.max(0, metrics.wrapperWidth - previewViewportWidth)
+      const maxScrollTop = Math.max(0, metrics.wrapperHeight - previewViewportHeight)
+      const nextScrollLeft = metrics.gridOriginX + stageX * metrics.cellSize - anchorX
+      const nextScrollTop = metrics.gridOriginY + stageY * metrics.cellSize - anchorY
+
+      viewport.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft))
+      viewport.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop))
+      updateLiveRulers(targetZoom, viewport.scrollLeft, viewport.scrollTop)
+      setScrollPosition({
+        left: viewport.scrollLeft,
+        top: viewport.scrollTop,
+      })
+    },
+    [getZoomMetrics, previewViewportHeight, previewViewportWidth, updateLiveRulers]
+  )
+
+  const setZoomWithStageAnchor = useCallback(
+    (
+      nextZoom: number,
+      stageX: number,
+      stageY: number,
+      anchorX: number,
+      anchorY: number
+    ) => {
+      const viewport = viewportRef.current
+      const clampedZoom = clampZoom(nextZoom)
+      if (!viewport) {
+        zoomPercentRef.current = clampedZoom
+        setZoomPercent(clampedZoom)
+        return
+      }
+
+      if (zoomSettleTimeoutRef.current !== null) {
+        window.clearTimeout(zoomSettleTimeoutRef.current)
+      }
+
+      pendingResetViewRef.current = false
+      pendingZoomAnchorRef.current = {
+        zoom: clampedZoom,
+        stageX,
+        stageY,
+        anchorX,
+        anchorY,
+      }
+
+      viewport.style.overflowX = 'auto'
+      viewport.style.overflowY = 'auto'
+
+      if (zoomLabelRef.current) {
+        zoomLabelRef.current.textContent = `${Math.round(clampedZoom)}%`
+      }
+
+      if (clampedZoom === zoomPercentRef.current) {
+        applyStageAnchorScroll(clampedZoom, stageX, stageY, anchorX, anchorY)
+        pendingZoomAnchorRef.current = null
+        return
+      }
+
+      setIsZooming(true)
+      zoomPercentRef.current = clampedZoom
+      setZoomPercent(clampedZoom)
+
+      zoomSettleTimeoutRef.current = window.setTimeout(() => {
+        setIsZooming(false)
+        zoomSettleTimeoutRef.current = null
+      }, 160)
+    },
+    [applyStageAnchorScroll]
+  )
 
   const updateZoom = useCallback(
     (
@@ -1040,84 +1176,52 @@ export default function GridEditor({
       }
     ) => {
       const viewport = viewportRef.current
-      const currentZoom = zoomPercentRef.current
-      const clampedZoom = clampZoom(nextZoom)
-      if (!viewport || clampedZoom === currentZoom) {
-        zoomPercentRef.current = clampedZoom
-        setZoomPercent(clampedZoom)
-        return
-      }
+      if (!viewport) return
 
+      const currentZoom = zoomPercentRef.current
       const rect = viewport.getBoundingClientRect()
       const anchorX = origin ? origin.clientX - rect.left : viewport.clientWidth / 2
       const anchorY = origin ? origin.clientY - rect.top : viewport.clientHeight / 2
-      const currentCellSize = Math.max(1, (baseCellSize * currentZoom) / 100)
-      const currentStageWidth = stageCols * currentCellSize
-      const currentStageHeight = stageRows * currentCellSize
-      const currentWrapperWidth = Math.max(previewViewportWidth, Math.round(currentStageWidth))
-      const currentWrapperHeight = Math.max(previewViewportHeight, Math.round(currentStageHeight))
-      const currentGridOriginX = Math.max(0, (currentWrapperWidth - Math.round(currentStageWidth)) / 2)
-      const currentGridOriginY = Math.max(0, (currentWrapperHeight - Math.round(currentStageHeight)) / 2)
-      const anchoredStageX = (viewport.scrollLeft + anchorX - currentGridOriginX) / currentCellSize
-      const anchoredStageY = (viewport.scrollTop + anchorY - currentGridOriginY) / currentCellSize
+      const currentMetrics = getZoomMetrics(currentZoom)
+      const anchoredStageX =
+        (viewport.scrollLeft + anchorX - currentMetrics.gridOriginX) / currentMetrics.cellSize
+      const anchoredStageY =
+        (viewport.scrollTop + anchorY - currentMetrics.gridOriginY) / currentMetrics.cellSize
 
-      if (zoomSettleTimeoutRef.current !== null) {
-        window.clearTimeout(zoomSettleTimeoutRef.current)
-      }
-
-      pendingZoomAnchorRef.current = {
-        zoom: clampedZoom,
-        stageX: anchoredStageX,
-        stageY: anchoredStageY,
-        anchorX,
-        anchorY,
-      }
-
-      setIsZooming(true)
-      zoomPercentRef.current = clampedZoom
-      setZoomPercent(clampedZoom)
-      viewport.style.overflowX = 'auto'
-      viewport.style.overflowY = 'auto'
-
-      if (zoomLabelRef.current) {
-        zoomLabelRef.current.textContent = `${Math.round(clampedZoom)}%`
-      }
-
-      zoomSettleTimeoutRef.current = window.setTimeout(() => {
-        setIsZooming(false)
-        zoomSettleTimeoutRef.current = null
-      }, 160)
+      setZoomWithStageAnchor(nextZoom, anchoredStageX, anchoredStageY, anchorX, anchorY)
     },
-    [baseCellSize, previewViewportHeight, previewViewportWidth, stageCols, stageRows]
+    [getZoomMetrics, setZoomWithStageAnchor]
   )
 
   useLayoutEffect(() => {
-    const pendingAnchor = pendingZoomAnchorRef.current
     const viewport = viewportRef.current
-    if (!pendingAnchor || !viewport || pendingAnchor.zoom !== zoomPercent) return
+    if (!viewport) return
 
-    const maxScrollLeft = Math.max(0, wrapperWidth - previewViewportWidth)
-    const maxScrollTop = Math.max(0, wrapperHeight - previewViewportHeight)
-    const nextScrollLeft =
-      gridOriginX + pendingAnchor.stageX * cellSize - pendingAnchor.anchorX
-    const nextScrollTop =
-      gridOriginY + pendingAnchor.stageY * cellSize - pendingAnchor.anchorY
+    if (pendingResetViewRef.current && zoomPercent === 100) {
+      pendingResetViewRef.current = false
+      pendingZoomAnchorRef.current = null
+      const centeredScroll = getDefaultCenteredScroll()
+      applyViewportScroll(centeredScroll.left, centeredScroll.top, 100)
+      return
+    }
 
-    viewport.scrollLeft = Math.max(0, Math.min(maxScrollLeft, nextScrollLeft))
-    viewport.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop))
-    updateLiveRulers(zoomPercent, viewport.scrollLeft, viewport.scrollTop)
-    setScrollPosition({
-      left: viewport.scrollLeft,
-      top: viewport.scrollTop,
-    })
+    const pendingAnchor = pendingZoomAnchorRef.current
+    if (!pendingAnchor || pendingAnchor.zoom !== zoomPercent) return
+
+    applyStageAnchorScroll(
+      zoomPercent,
+      pendingAnchor.stageX,
+      pendingAnchor.stageY,
+      pendingAnchor.anchorX,
+      pendingAnchor.anchorY
+    )
     pendingZoomAnchorRef.current = null
   }, [
-    cellSize,
-    gridOriginX,
-    gridOriginY,
+    applyStageAnchorScroll,
+    applyViewportScroll,
+    getDefaultCenteredScroll,
     previewViewportHeight,
     previewViewportWidth,
-    updateLiveRulers,
     wrapperHeight,
     wrapperWidth,
     zoomPercent,
@@ -1149,6 +1253,40 @@ export default function GridEditor({
     },
     [updateZoom]
   )
+
+  const resetView = useCallback(() => {
+    const wasDefaultZoom = zoomPercentRef.current === 100
+
+    if (zoomFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomFrameRef.current)
+      zoomFrameRef.current = null
+    }
+    if (zoomSettleTimeoutRef.current !== null) {
+      window.clearTimeout(zoomSettleTimeoutRef.current)
+      zoomSettleTimeoutRef.current = null
+    }
+
+    pendingZoomRef.current = null
+    pendingZoomAnchorRef.current = null
+    pendingResetViewRef.current = true
+    pinchPointersRef.current.clear()
+    pinchStartDistRef.current = null
+    pinchStartMidpointRef.current = null
+    pinchStartScrollRef.current = null
+    setIsZooming(false)
+    zoomPercentRef.current = 100
+    setZoomPercent(100)
+
+    if (zoomLabelRef.current) {
+      zoomLabelRef.current.textContent = '100%'
+    }
+
+    if (wasDefaultZoom) {
+      pendingResetViewRef.current = false
+      const centeredScroll = getDefaultCenteredScroll()
+      applyViewportScroll(centeredScroll.left, centeredScroll.top, 100)
+    }
+  }, [applyViewportScroll, getDefaultCenteredScroll])
 
   const handleCanvasPointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1207,7 +1345,6 @@ export default function GridEditor({
               initBoxEndRow: textBoxEnd.row, initBoxEndCol: textBoxEnd.col,
               pointerRow: hit.row, pointerCol: hit.col,
             }
-            setTimeout(() => textInputRef.current?.focus({ preventScroll: true }), 0)
             return
           }
           // Click outside: stamp current text then start new box
@@ -1336,29 +1473,23 @@ export default function GridEditor({
       })
     }
 
-    const handleGestureStart = (event: Event) => {
-      event.preventDefault()
-      gestureStartZoomRef.current = zoomPercentRef.current
-    }
-
-    const handleGestureChange = (event: Event) => {
-      event.preventDefault()
-
-      const gestureEvent = event as Event & {
-        clientX?: number
-        clientY?: number
-        scale?: number
-      }
-      const scale = gestureEvent.scale ?? 1
-      scheduleZoom(gestureStartZoomRef.current * scale, {
-        clientX: gestureEvent.clientX ?? viewport.getBoundingClientRect().left + viewport.clientWidth / 2,
-        clientY: gestureEvent.clientY ?? viewport.getBoundingClientRect().top + viewport.clientHeight / 2,
-      })
-    }
-
     const handleViewportPointerDown = (event: PointerEvent) => {
       if (event.pointerType !== 'touch') return
       pinchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+      if (pinchPointersRef.current.size === 2) {
+        const [p1, p2] = Array.from(pinchPointersRef.current.values())
+        pinchStartDistRef.current = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+        pinchStartZoomRef.current = zoomPercentRef.current
+        pinchStartMidpointRef.current = {
+          x: (p1.x + p2.x) / 2,
+          y: (p1.y + p2.y) / 2,
+        }
+        pinchStartScrollRef.current = {
+          left: viewport.scrollLeft,
+          top: viewport.scrollTop,
+        }
+      }
     }
 
     const handleViewportPointerMove = (event: PointerEvent) => {
@@ -1369,16 +1500,47 @@ export default function GridEditor({
       event.preventDefault()
       const [p1, p2] = Array.from(pinchPointersRef.current.values())
       const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
-      if (pinchStartDistRef.current === null) {
+      const currentMidpoint = {
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2,
+      }
+
+      if (
+        pinchStartDistRef.current === null ||
+        pinchStartMidpointRef.current === null ||
+        pinchStartScrollRef.current === null
+      ) {
         pinchStartDistRef.current = currentDist
         pinchStartZoomRef.current = zoomPercentRef.current
+        pinchStartMidpointRef.current = currentMidpoint
+        pinchStartScrollRef.current = {
+          left: viewport.scrollLeft,
+          top: viewport.scrollTop,
+        }
         return
       }
+
       const scale = currentDist / pinchStartDistRef.current
-      scheduleZoom(pinchStartZoomRef.current * scale, {
-        clientX: (p1.x + p2.x) / 2,
-        clientY: (p1.y + p2.y) / 2,
-      })
+      const rect = viewport.getBoundingClientRect()
+      const startMetrics = getZoomMetrics(pinchStartZoomRef.current)
+      const startAnchorX = pinchStartMidpointRef.current.x - rect.left
+      const startAnchorY = pinchStartMidpointRef.current.y - rect.top
+      const currentAnchorX = currentMidpoint.x - rect.left
+      const currentAnchorY = currentMidpoint.y - rect.top
+      const anchoredStageX =
+        (pinchStartScrollRef.current.left + startAnchorX - startMetrics.gridOriginX) /
+        startMetrics.cellSize
+      const anchoredStageY =
+        (pinchStartScrollRef.current.top + startAnchorY - startMetrics.gridOriginY) /
+        startMetrics.cellSize
+
+      setZoomWithStageAnchor(
+        pinchStartZoomRef.current * scale,
+        anchoredStageX,
+        anchoredStageY,
+        currentAnchorX,
+        currentAnchorY
+      )
     }
 
     const handleViewportPointerUp = (event: PointerEvent) => {
@@ -1386,16 +1548,12 @@ export default function GridEditor({
       pinchPointersRef.current.delete(event.pointerId)
       if (pinchPointersRef.current.size < 2) {
         pinchStartDistRef.current = null
+        pinchStartMidpointRef.current = null
+        pinchStartScrollRef.current = null
       }
     }
 
     viewport.addEventListener('wheel', handleWheel, { passive: false })
-    viewport.addEventListener('gesturestart', handleGestureStart as EventListener, {
-      passive: false,
-    })
-    viewport.addEventListener('gesturechange', handleGestureChange as EventListener, {
-      passive: false,
-    })
     viewport.addEventListener('pointerdown', handleViewportPointerDown)
     viewport.addEventListener('pointermove', handleViewportPointerMove, { passive: false })
     viewport.addEventListener('pointerup', handleViewportPointerUp)
@@ -1403,14 +1561,12 @@ export default function GridEditor({
 
     return () => {
       viewport.removeEventListener('wheel', handleWheel)
-      viewport.removeEventListener('gesturestart', handleGestureStart as EventListener)
-      viewport.removeEventListener('gesturechange', handleGestureChange as EventListener)
       viewport.removeEventListener('pointerdown', handleViewportPointerDown)
       viewport.removeEventListener('pointermove', handleViewportPointerMove)
       viewport.removeEventListener('pointerup', handleViewportPointerUp)
       viewport.removeEventListener('pointercancel', handleViewportPointerUp)
     }
-  }, [scheduleZoom])
+  }, [getZoomMetrics, scheduleZoom, setZoomWithStageAnchor])
 
   const renderSelections = useMemo(
     () =>
@@ -1877,8 +2033,7 @@ export default function GridEditor({
           </div>
           <button
             type="button"
-            onClick={() => scheduleZoom(100)}
-            disabled={zoomPercentRef.current === 100}
+            onClick={resetView}
             style={{ padding: toolbarButtonPadding, border: '1px solid #d7d7d7', borderRadius: 999, background: '#ffffff', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', color: '#555', whiteSpace: 'nowrap' }}
           >
             Reset

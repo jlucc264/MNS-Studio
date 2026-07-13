@@ -585,7 +585,7 @@ function StudioPage() {
     router.push('/gallery')
   }, [clearActiveCanvas, router, signOut])
 
-  const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts') => {
+  const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts' | '/contact') => {
     if (previewImagePath || cells.length > 0) {
       try {
         localStorage.setItem('mns_active_design', JSON.stringify({
@@ -2757,16 +2757,16 @@ function StudioPage() {
       data-tutorial="design-settings"
       style={{
         display: 'grid',
-        gap: 9,
+        gap: isMobile ? 11 : 9,
         width: '100%',
         minWidth: 0,
-        minHeight: 286,
+        minHeight: isMobile ? 'auto' : 286,
         alignContent: 'start',
-        padding: '14px 12px 16px',
+        padding: isMobile ? '14px 14px 16px' : '14px 12px 16px',
         boxSizing: 'border-box',
         overflow: 'visible',
         border: '1px solid #d9d9d9',
-        borderRadius: 12,
+        borderRadius: 8,
         background: '#fbfbfb',
         boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
       }}
@@ -2780,6 +2780,7 @@ function StudioPage() {
         settings={draftSettings}
         lockAspectRatio={lockAspectRatio}
         isBlankCanvas={isBlankCanvas}
+        compact={isMobile}
         onSettingsChange={setDraftSettings}
         onLockAspectRatioChange={setLockAspectRatio}
         onDimensionClamped={() => {
@@ -2793,8 +2794,8 @@ function StudioPage() {
           gap: 7,
           alignItems: 'center',
           paddingTop: 2,
-          fontSize: 12,
-          lineHeight: 1.1,
+          fontSize: isMobile ? 13 : 12,
+          lineHeight: isMobile ? 1.2 : 1.1,
           color: '#3f382f',
           opacity: isBlankCanvas ? 0.4 : 1,
           pointerEvents: isBlankCanvas ? 'none' : undefined,
@@ -3038,7 +3039,15 @@ function StudioPage() {
         )}
       </div>
 
-      <button type="button" onClick={() => setIsPreviewExpanded((current) => !current)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 14px' }}>
+      <button
+        type="button"
+        onClick={() => setIsPreviewExpanded((current) => !current)}
+        style={{
+          ...(isPreviewExpanded ? btnSecondary : btnPrimary),
+          fontSize: isMobile ? 12 : 13,
+          padding: isMobile ? '6px 10px' : '8px 14px',
+        }}
+      >
         {isPreviewExpanded ? 'Collapse' : 'Expand'}
       </button>
     </div>
@@ -3522,7 +3531,7 @@ function StudioPage() {
           justifyContent: 'space-between',
           gap: 18,
           padding: isMobile ? '0 14px' : '0 28px',
-          borderBottom: '1px solid #e7e1d8',
+          borderBottom: '2px solid #6e8d67',
           background: '#fffdf8',
           position: 'fixed',
           top: 0,
@@ -3583,6 +3592,13 @@ function StudioPage() {
                   style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
                 >
                   Your Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateAwayFromStudio('/contact')}
+                  style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Contact Us
                 </button>
                 <span style={{ color: '#3f382f', fontWeight: 700 }}>Active Canvas</span>
               </div>
@@ -3814,46 +3830,6 @@ function StudioPage() {
               zIndex: 0,
             }}
           >
-            {isTouchDevice && shouldAllowCanvasEditing && cells.length > 0 && shouldShowStitchGrid && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 16,
-                  bottom: 'calc(16px + env(safe-area-inset-bottom))',
-                  zIndex: 6,
-                  display: 'inline-flex',
-                  gap: 2,
-                  border: '1px solid #d7d0c8',
-                  borderRadius: 999,
-                  background: '#fffdf8',
-                  boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
-                  overflow: 'hidden',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={handleUndoColorChange}
-                  disabled={undoStack.length === 0}
-                  aria-label="Undo"
-                  style={{
-                    width: 48, height: 44, border: 'none', background: 'transparent',
-                    fontSize: 20, fontFamily: 'inherit', cursor: 'pointer',
-                    color: undoStack.length === 0 ? '#c8c0b4' : '#3f382f',
-                  }}
-                >↺</button>
-                <button
-                  type="button"
-                  onClick={handleRedoColorChange}
-                  disabled={redoStack.length === 0}
-                  aria-label="Redo"
-                  style={{
-                    width: 48, height: 44, border: 'none', background: 'transparent',
-                    fontSize: 20, fontFamily: 'inherit', cursor: 'pointer',
-                    color: redoStack.length === 0 ? '#c8c0b4' : '#3f382f',
-                  }}
-                >↻</button>
-              </div>
-            )}
             {cells.length > 0 && (
               <div
                 style={{

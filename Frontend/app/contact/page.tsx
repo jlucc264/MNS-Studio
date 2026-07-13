@@ -83,7 +83,7 @@ export default function ContactPage() {
           display: 'flex',
           alignItems: 'center',
           padding: '0 24px',
-          borderBottom: '1px solid #e7e1d8',
+          borderBottom: '2px solid #6e8d67',
           background: '#fffdf8',
           boxSizing: 'border-box',
           gap: 16,
@@ -97,6 +97,10 @@ export default function ContactPage() {
           </div>
           <strong style={{ fontSize: 20, color: '#111' }}>MNS Studio</strong>
         </Link>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+          <Link href="/gallery" style={{ color: '#7f776d', textDecoration: 'none' }}>Gallery</Link>
+          <span style={{ color: '#3f382f' }}>Contact Us</span>
+        </div>
       </nav>
 
       <main style={{ maxWidth: 560, margin: '0 auto', padding: '48px 24px 80px' }}>

@@ -12,7 +12,6 @@ import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, ge
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
-import GuideDialog from '../../components/GuideDialog'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
@@ -183,7 +182,6 @@ function GalleryPage() {
   const [error, setError] = useState('')
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
-  const [showGuideDialog, setShowGuideDialog] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
   const isMobile = useIsMobile(BREAKPOINTS.tablet)
   const [checkoutError] = useState('')
@@ -394,7 +392,7 @@ function GalleryPage() {
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: isMobile ? '0 14px' : '0 28px',
-          borderBottom: '1px solid #e7e1d8',
+          borderBottom: '2px solid #6e8d67',
           background: '#fffdf8',
           boxSizing: 'border-box',
           position: 'sticky',
@@ -444,11 +442,6 @@ function GalleryPage() {
           </button>
           {session ? (
             <>
-              {!isMobile && (
-                <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
-                  Mission
-                </button>
-              )}
               <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                 Contact Us
               </Link>
@@ -465,11 +458,6 @@ function GalleryPage() {
             </>
           ) : (
             <>
-              {!isMobile && (
-                <button type="button" onClick={() => setShowGuideDialog(true)} style={{ border: 0, background: 'transparent', font: 'inherit', color: '#7f776d', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
-                  Mission
-                </button>
-              )}
               <Link href="/contact" style={{ color: '#7f776d', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                 Contact Us
               </Link>
@@ -1387,7 +1375,6 @@ function GalleryPage() {
           </div>
         </div>
       )}
-      <GuideDialog open={showGuideDialog} onClose={() => setShowGuideDialog(false)} />
       <OrderConfirmationModal open={showOrderConfirmation} onClose={() => setShowOrderConfirmation(false)} />
       {checkoutClientSecret && (
         <CheckoutModal
