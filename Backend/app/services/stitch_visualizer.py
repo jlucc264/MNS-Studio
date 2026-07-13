@@ -410,6 +410,10 @@ def resize_linear_light(
     light keeps light details (e.g. white lettering on a dark field)
     measurably brighter and closer to their true color.
     """
+    # globals().get: the numeric self-check probes this function before the
+    # flag exists; a broken numpy install gets gamma-space resize instead.
+    if not globals().get("_NUMPY_ENV_OK", True):
+        return img.convert("RGB").resize(size, resampling)
     arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
     lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
     channels = [
@@ -427,33 +431,40 @@ def resize_linear_light(
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
-def _verify_numeric_environment() -> None:
-    """Refuse to serve previews if numpy/Pillow compute wrong colors.
+def _verify_numeric_environment() -> bool:
+    """Detect a numpy/Pillow install that computes wrong colors.
 
     A production build once shipped with a numpy install whose ufunc results
     were wrong: every photo import quantized to a single near-black color
     (the linear-light round trip came back gamma-decoded instead of
     re-encoded). The scalar Python paths were unaffected, so the service
-    stayed "healthy" while silently ruining every pattern. Fail startup
-    loudly instead — a crashed deploy gets noticed, black previews did not.
+    stayed "healthy" while silently ruining every pattern. When this check
+    fails, the photo pipeline drops to numpy-free fallbacks (gamma-space
+    resize + MEDIANCUT quantization): slightly muddier previews, but correct
+    colors, and the service stays up.
     """
     probe_rgb = (200, 30, 40)
-    probe = Image.new("RGB", (8, 8), probe_rgb)
-    resized = resize_linear_light(probe, (4, 4), Image.Resampling.BILINEAR)
-    if any(abs(got - want) > 2 for got, want in zip(resized.getpixel((1, 1)), probe_rgb)):
-        raise RuntimeError(
-            f"resize_linear_light corrupted a solid color: {resized.getpixel((1, 1))} != {probe_rgb}. "
-            "The numpy/Pillow install is broken — rebuild the environment (clear the build cache)."
+    try:
+        probe = Image.new("RGB", (8, 8), probe_rgb)
+        resized = resize_linear_light(probe, (4, 4), Image.Resampling.BILINEAR)
+        if any(abs(got - want) > 2 for got, want in zip(resized.getpixel((1, 1)), probe_rgb)):
+            raise RuntimeError(f"resize_linear_light corrupted a solid color: {resized.getpixel((1, 1))} != {probe_rgb}")
+        roundtrip = _oklab_to_srgb_array(_srgb_to_oklab_array(np.array([list(probe_rgb)], dtype=np.float64)))
+        if np.abs(roundtrip - np.array(probe_rgb)).max() > 2:
+            raise RuntimeError(f"OKLab round trip corrupted a color: {roundtrip.tolist()} != {probe_rgb}")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).critical(
+            "NUMERIC ENVIRONMENT BROKEN — numpy/Pillow compute wrong colors; "
+            "falling back to gamma-space resize and MEDIANCUT quantization. "
+            "Rebuild the environment (clear the build cache) to restore the OKLab pipeline.",
+            exc_info=True,
         )
-    roundtrip = _oklab_to_srgb_array(_srgb_to_oklab_array(np.array([list(probe_rgb)], dtype=np.float64)))
-    if np.abs(roundtrip - np.array(probe_rgb)).max() > 2:
-        raise RuntimeError(
-            f"OKLab round trip corrupted a color: {roundtrip.tolist()} != {probe_rgb}. "
-            "The numpy install is broken — rebuild the environment (clear the build cache)."
-        )
+        return False
+    return True
 
 
-_verify_numeric_environment()
+_NUMPY_ENV_OK = _verify_numeric_environment()
 
 
 def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dither) -> Image.Image:
@@ -465,6 +476,8 @@ def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dithe
     Seeding is deterministic so the same upload always previews identically.
     """
     rgb_img = img.convert("RGB")
+    if not _NUMPY_ENV_OK:
+        return rgb_img.quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=dither).convert("RGB")
     pixels = np.asarray(rgb_img, dtype=np.float64).reshape(-1, 3)
     unique_colors, inverse, counts = np.unique(
         pixels, axis=0, return_inverse=True, return_counts=True
