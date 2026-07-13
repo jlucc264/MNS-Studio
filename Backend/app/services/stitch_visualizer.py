@@ -1975,7 +1975,83 @@ def render_preview_image_from_cells(
     return out_url
 
 
+def _numeric_env_ok_in_request() -> bool:
+    """Re-probe the numeric environment at serving time with realistic sizes.
+
+    The import-time check once passed while real requests still produced
+    corrupted colors — the failure only shows up in the serving context
+    (worker thread / production-sized images). Probing a 200x200 solid color
+    through the same pipeline entry points costs a few ms per import request.
+    """
+    probe_rgb = (200, 30, 40)
+    try:
+        probe = Image.new("RGB", (200, 200), probe_rgb)
+        resized = resize_linear_light(probe, (30, 30), Image.Resampling.BILINEAR)
+        if any(abs(got - want) > 4 for got, want in zip(resized.getpixel((15, 15)), probe_rgb)):
+            return False
+        roundtrip = _oklab_to_srgb_array(_srgb_to_oklab_array(np.array([list(probe_rgb)], dtype=np.float64)))
+        if np.abs(roundtrip - np.array(probe_rgb)).max() > 4:
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _palette_looks_corrupted(palette: list[dict]) -> bool:
+    """A whole photo collapsing to a single very dark color is the corruption
+    signature (any real photo keeps several palette entries)."""
+    return len(palette) <= 1 and all(
+        max(hex_to_rgb(color["hex"])) < 70 for color in palette
+    )
+
+
 def generate_stitch_preview(
+    image_url: str,
+    stitch_width: int,
+    stitch_height: int,
+    color_count: int,
+    show_grid: bool,
+    clean_background: bool,
+    simplify_colors: bool,
+    strengthen_dark_detail: bool,
+    preserve_accents: bool,
+    mesh_count: int,
+    contrast_level: str,
+    source_type: str = "photo",
+) -> tuple[str, list[dict], list[list[str]]]:
+    global _NUMPY_ENV_OK
+    if _NUMPY_ENV_OK and not _numeric_env_ok_in_request():
+        import logging
+        logging.getLogger(__name__).critical(
+            "NUMERIC ENVIRONMENT BROKEN AT REQUEST TIME — switching photo "
+            "pipeline to gamma-space resize and MEDIANCUT quantization."
+        )
+        _NUMPY_ENV_OK = False
+
+    result = _generate_stitch_preview_impl(
+        image_url, stitch_width, stitch_height, color_count, show_grid,
+        clean_background, simplify_colors, strengthen_dark_detail,
+        preserve_accents, mesh_count, contrast_level, source_type,
+    )
+
+    # Last-resort net: if the output still shows the corruption signature,
+    # flip to the numpy-free fallbacks and regenerate once.
+    if _NUMPY_ENV_OK and _palette_looks_corrupted(result[1]):
+        import logging
+        logging.getLogger(__name__).critical(
+            "Preview collapsed to a single dark color — regenerating with the "
+            "numpy-free fallback pipeline."
+        )
+        _NUMPY_ENV_OK = False
+        result = _generate_stitch_preview_impl(
+            image_url, stitch_width, stitch_height, color_count, show_grid,
+            clean_background, simplify_colors, strengthen_dark_detail,
+            preserve_accents, mesh_count, contrast_level, source_type,
+        )
+    return result
+
+
+def _generate_stitch_preview_impl(
     image_url: str,
     stitch_width: int,
     stitch_height: int,

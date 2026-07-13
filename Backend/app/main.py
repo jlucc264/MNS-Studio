@@ -142,6 +142,42 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/numeric")
+def debug_numeric():
+    """Granular numeric probes, run in the serving thread — used to pinpoint
+    which operation the production environment corrupts (import-time checks
+    passed while request-time output was still wrong)."""
+    import threading
+    import numpy as np
+    from PIL import Image as PILImage
+    from app.services import stitch_visualizer as sv
+
+    out: dict = {
+        "thread": threading.current_thread().name,
+        "numpy_version": np.__version__,
+        "pillow_version": __import__("PIL").__version__,
+        "numpy_env_ok_flag": sv._NUMPY_ENV_OK,
+    }
+    u = np.array([0.784313725, 0.117647059, 0.156862745])
+    out["decode_where"] = np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4).round(6).tolist()
+    out["power_1_over_2_4"] = (u ** (1 / 2.4)).round(6).tolist()
+    out["cbrt"] = np.cbrt(u).round(6).tolist()
+    out["matmul_identity"] = (np.eye(3) @ u).round(6).tolist()
+
+    arr = np.full((200, 200), 0.5779, dtype=np.float32)
+    fimg = PILImage.fromarray(arr, mode="F").resize((30, 30), PILImage.Resampling.BILINEAR)
+    out["fmode_const_after_resize"] = float(np.asarray(fimg)[15, 15])
+
+    solid = PILImage.new("RGB", (200, 200), (200, 30, 40))
+    out["resize_200_to_30"] = sv.resize_linear_light(solid, (30, 30), PILImage.Resampling.BILINEAR).getpixel((15, 15))
+    small = PILImage.new("RGB", (8, 8), (200, 30, 40))
+    out["resize_8_to_4"] = sv.resize_linear_light(small, (4, 4), PILImage.Resampling.BILINEAR).getpixel((1, 1))
+
+    rt = sv._oklab_to_srgb_array(sv._srgb_to_oklab_array(np.array([[200.0, 30.0, 40.0]])))
+    out["oklab_roundtrip"] = rt.round(3).tolist()
+    return out
+
+
 @app.post("/contact")
 def contact(req: ContactRequest):
     try:
