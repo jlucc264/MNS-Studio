@@ -179,7 +179,7 @@ export default function CreatorProfilePage() {
       settings.width_inches = cells[0].length / meshCount
       settings.height_inches = cells.length / meshCount
     }
-    localStorage.setItem('mns_active_design', JSON.stringify({
+    localStorage.setItem('mns_pending_template', JSON.stringify({
       previewImagePath: item.preview_image_url,
       originalPreviewImagePath: item.preview_image_url,
       lastVisibleImageUrl: item.preview_image_url,

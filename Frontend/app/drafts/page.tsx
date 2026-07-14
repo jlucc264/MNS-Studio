@@ -179,7 +179,7 @@ export default function DraftsPage() {
       strengthen_dark_detail: false,
       preserve_accents: false,
     }
-    localStorage.setItem('mns_active_design', JSON.stringify({
+    localStorage.setItem('mns_pending_template', JSON.stringify({
       previewImagePath: project.preview_image_url,
       originalPreviewImagePath: project.preview_image_url,
       lastVisibleImageUrl: project.preview_image_url,

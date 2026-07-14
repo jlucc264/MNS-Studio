@@ -26,6 +26,7 @@ import PreviewControls, { PreviewSettings } from '../../components/PreviewContro
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { CanvasCreditPill } from '../../components/CanvasCreditPill'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
@@ -467,6 +468,30 @@ function removeActiveDesignSnapshot() {
   } catch {}
 }
 
+// Separate from ACTIVE_DESIGN_STORAGE_KEY, which is reserved for recovering
+// work an interrupted session left behind. A gallery template the user just
+// chose to open is not "unsaved work to recover" — it must load silently,
+// without the recovery-prompt modal.
+const PENDING_TEMPLATE_STORAGE_KEY = 'mns_pending_template'
+
+function readPendingTemplateSnapshot(): ActiveDesignSnapshot | null {
+  try {
+    const raw = window.localStorage.getItem(PENDING_TEMPLATE_STORAGE_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed as ActiveDesignSnapshot
+  } catch {
+    return null
+  }
+}
+
+function removePendingTemplateSnapshot() {
+  try {
+    window.localStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY)
+  } catch {}
+}
+
 function applySourceTypeDefaults(
   current: PreviewSettings,
   sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
@@ -626,7 +651,8 @@ function StudioPage() {
   const latestApplyRequestIdRef = useRef(0)
   const stagedUploadInputRef = useRef<HTMLInputElement | null>(null)
   const patternImportInputRef = useRef<HTMLInputElement | null>(null)
-  const projectLoadedRef = useRef(false)
+  const recoveryCheckedRef = useRef(false)
+  const loadedProjectIdRef = useRef<string | null>(null)
   const toolModeRef = useRef(toolMode)
   const pendingStudioNavigationRef = useRef<PendingStudioNavigation | null>(null)
   const allowStudioNavigationRef = useRef(false)
@@ -1064,10 +1090,7 @@ function StudioPage() {
     return () => window.removeEventListener('popstate', handleHistoryNavigation)
   }, [persistRecoverySnapshot])
 
-  const restoreRecoveredDesign = useCallback(() => {
-    const snapshot = recoveryCandidate
-    if (!snapshot) return
-
+  const applyDesignSnapshot = useCallback((snapshot: ActiveDesignSnapshot) => {
     const recoveredCells = Array.isArray(snapshot.cells) ? snapshot.cells : []
     const recoveredAllPalette = snapshot.allPalette?.length
       ? snapshot.allPalette
@@ -1116,7 +1139,12 @@ function StudioPage() {
     if (recoveredCells.length) {
       window.requestAnimationFrame(() => setGridKey((current) => current + 1))
     }
-  }, [recoveryCandidate])
+  }, [])
+
+  const restoreRecoveredDesign = useCallback(() => {
+    if (!recoveryCandidate) return
+    applyDesignSnapshot(recoveryCandidate)
+  }, [recoveryCandidate, applyDesignSnapshot])
 
   const discardRecoveredDesign = useCallback(() => {
     removeActiveDesignSnapshot()
@@ -1134,8 +1162,17 @@ function StudioPage() {
     const projectId = searchParams.get('project')
 
     if (!projectId) {
-      if (projectLoadedRef.current) return
-      projectLoadedRef.current = true
+      if (recoveryCheckedRef.current) return
+      recoveryCheckedRef.current = true
+
+      const pendingTemplate = readPendingTemplateSnapshot()
+      if (pendingTemplate) {
+        removePendingTemplateSnapshot()
+        applyDesignSnapshot(pendingTemplate)
+        markCurrentDesignClean()
+        return
+      }
+
       const recoveredDesign = readActiveDesignSnapshot()
       if (recoveredDesign) {
         setRecoveryCandidate(recoveredDesign)
@@ -1145,8 +1182,8 @@ function StudioPage() {
       return
     }
 
-    if (!session?.access_token || projectLoadedRef.current) return
-    projectLoadedRef.current = true
+    if (!session?.access_token || loadedProjectIdRef.current === projectId) return
+    loadedProjectIdRef.current = projectId
 
     getProject(projectId, session.access_token).then((project) => {
       setSavedProjectId(project.id)
@@ -1212,7 +1249,7 @@ function StudioPage() {
       // project load failed silently — user starts fresh
       markCurrentDesignClean()
     })
-  }, [markCurrentDesignClean, searchParams, session?.access_token])
+  }, [applyDesignSnapshot, markCurrentDesignClean, searchParams, session?.access_token])
 
   useEffect(() => {
     if (searchParams.get('order') === 'success') {
@@ -4310,10 +4347,8 @@ function StudioPage() {
   )
 
   const NAV_HEIGHT = 70
-  const CREDIT_BAR_HEIGHT = 28
   const hideTopChrome = isPhoneCanvasLandscape
-  const showCreditBar = !hideTopChrome && pendingCents !== null && pendingCents > 0
-  const topOffset = hideTopChrome ? 0 : NAV_HEIGHT + (showCreditBar ? CREDIT_BAR_HEIGHT : 0)
+  const topOffset = hideTopChrome ? 0 : NAV_HEIGHT
 
   return (
     <main
@@ -4452,30 +4487,7 @@ function StudioPage() {
       </nav>
       )}
 
-      {showCreditBar && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            position: 'fixed',
-            top: NAV_HEIGHT,
-            left: 0,
-            right: 0,
-            height: CREDIT_BAR_HEIGHT,
-            background: '#e8f0e6',
-            borderBottom: '1px solid #c5d9c2',
-            color: '#4a7244',
-            fontSize: 12,
-            fontWeight: 600,
-            boxSizing: 'border-box',
-            zIndex: 9999,
-          }}
-        >
-          🌿 {formatCents(pendingCents ?? 0)} canvas credit available
-        </div>
-      )}
+      {!hideTopChrome && <CanvasCreditPill pendingCents={pendingCents} navHeight={NAV_HEIGHT} />}
 
       <div
         style={{
@@ -4705,8 +4717,9 @@ function StudioPage() {
               >
                 <GridEditor
                   centerKey={gridKey}
-                  traceImageUrl={traceOpacity > 0 ? assetUrl(activeImagePath) : null}
+                  traceImageUrl={activeImagePath ? assetUrl(activeImagePath) : null}
                   traceOpacity={traceOpacity}
+                  onTraceOpacityChange={setTraceOpacity}
                   cells={cells}
                   activeColor={shouldAllowCanvasEditing ? activePaintColor : null}
                   toolMode={toolMode}
@@ -4855,8 +4868,27 @@ function StudioPage() {
 
           </div>
 
-          {!isFinalizeReview && (
-            isMobile && !isPhoneCanvasLandscape ? (
+          {isPhoneCanvasLandscape && !isFinalizeReview && (
+            <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6, zIndex: 35, pointerEvents: 'auto' }}>
+              <button
+                type="button"
+                onClick={handleUndoColorChange}
+                disabled={!undoStack.length}
+                aria-label="Undo"
+                style={{ width: 34, height: 34, borderRadius: '50%', border: '1px solid #d7d0c8', background: 'rgba(255,253,248,0.92)', boxShadow: '0 2px 8px rgba(0,0,0,0.18)', fontSize: 16, cursor: 'pointer', display: 'grid', placeItems: 'center', opacity: undoStack.length ? 1 : 0.4 }}
+              >↺</button>
+              <button
+                type="button"
+                onClick={handleRedoColorChange}
+                disabled={!redoStack.length}
+                aria-label="Redo"
+                style={{ width: 34, height: 34, borderRadius: '50%', border: '1px solid #d7d0c8', background: 'rgba(255,253,248,0.92)', boxShadow: '0 2px 8px rgba(0,0,0,0.18)', fontSize: 16, cursor: 'pointer', display: 'grid', placeItems: 'center', opacity: redoStack.length ? 1 : 0.4 }}
+              >↻</button>
+            </div>
+          )}
+
+          {!isFinalizeReview && !isPhoneCanvasLandscape && (
+            isMobile ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))', borderTop: '1px solid #ded8cf', background: '#fffdf8', zIndex: 35, pointerEvents: 'auto' }}>
                 {activePaintColor && (
                   <div style={{
@@ -4888,20 +4920,6 @@ function StudioPage() {
                   pointerEvents: 'auto',
                 }}
               >
-                {shouldShowStitchGrid && activeImagePath && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8a8177', userSelect: 'none' }}>
-                    Trace
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={traceOpacity}
-                      onChange={(e) => setTraceOpacity(parseFloat(e.target.value))}
-                      style={{ width: 80, accentColor: '#6e8d67', cursor: 'pointer' }}
-                    />
-                  </label>
-                )}
                 <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>Undo</button>
                 <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>Redo</button>
                 <button type="button" onClick={handleResetColorChanges} disabled={!originalCells.length} style={btnSecondary}>Reset</button>
@@ -4920,7 +4938,9 @@ function StudioPage() {
               background: '#fffdf8',
               minWidth: 0,
               minHeight: 0,
-              overflow: 'hidden',
+              overflowX: 'hidden',
+              overflowY: 'auto',
+              WebkitOverflowScrolling: 'touch',
               padding: '14px 12px',
               boxSizing: 'border-box',
               position: 'relative',

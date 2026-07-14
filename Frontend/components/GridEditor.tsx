@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type FontSize, type FontFamily, type TextStyle, getFontMeta, getCharAdvance, getTextCells } from '../lib/bitmapFonts'
-import { useIsTouch } from '../lib/useViewport'
+import { useIsPhoneDevice, useIsTouch } from '../lib/useViewport'
 
 type ShapeCell = { row: number; col: number; color: string }
 
@@ -26,6 +26,7 @@ type Props = {
   onApplyShapeCells?: (cells: ShapeCell[]) => void
   traceImageUrl?: string | null
   traceOpacity?: number
+  onTraceOpacityChange?: (value: number) => void
   onEyedropperSample?: (cell: { row: number; col: number }) => void
   onFillCell?: (cell: { row: number; col: number }) => void
   textFontSize?: FontSize
@@ -502,6 +503,7 @@ export default function GridEditor({
   onApplyShapeCells,
   traceImageUrl,
   traceOpacity = 0,
+  onTraceOpacityChange,
   onEyedropperSample,
   onFillCell,
   textFontSize = 'medium',
@@ -518,7 +520,8 @@ export default function GridEditor({
   const highlightSelection = toolMode === 'select'
 
   const isTouch = useIsTouch()
-  const toolbarButtonPadding = isTouch ? '12px 14px' : '4px 10px'
+  const isMobile = useIsPhoneDevice()
+  const toolbarButtonPadding = isMobile ? '3px 8px' : isTouch ? '12px 14px' : '4px 10px'
   const onSelectionChangeRef = useRef(onSelectionChange)
   useEffect(() => { onSelectionChangeRef.current = onSelectionChange })
 
@@ -2156,9 +2159,9 @@ export default function GridEditor({
         height: '100%',
         boxSizing: 'border-box',
         background: '#f7f7f7',
-        padding: 8,
+        padding: isMobile ? 5 : 8,
         borderRadius: 12,
-        gap: 8,
+        gap: isMobile ? 4 : 8,
         userSelect: 'none',
         WebkitUserSelect: 'none',
         // @ts-ignore — non-standard but required for iOS Safari
@@ -2171,18 +2174,18 @@ export default function GridEditor({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
+          gap: isMobile ? 6 : 12,
           flexWrap: 'wrap',
         }}
       >
-        <strong style={{ fontSize: 14 }}>Stitch Preview</strong>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <strong style={{ fontSize: isMobile ? 11 : 14 }}>Stitch Preview</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 8, flexShrink: 0 }}>
           <div
             style={{
               display: 'inline-grid',
               gridTemplateColumns: 'repeat(2, auto)',
               gap: 4,
-              padding: 3,
+              padding: isMobile ? 2 : 3,
               border: '1px solid #d7d7d7',
               borderRadius: 999,
               background: '#ffffff',
@@ -2258,6 +2261,20 @@ export default function GridEditor({
           >
             Reset
           </button>
+          {traceImageUrl && onTraceOpacityChange && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 11 : 12, color: '#8a8177', userSelect: 'none', flexShrink: 0 }}>
+              Trace
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={traceOpacity}
+                onChange={(e) => onTraceOpacityChange(parseFloat(e.target.value))}
+                style={{ width: isMobile ? 60 : 80, accentColor: '#6e8d67', cursor: 'pointer' }}
+              />
+            </label>
+          )}
         </div>
       </div>
 
