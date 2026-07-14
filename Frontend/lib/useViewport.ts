@@ -42,3 +42,37 @@ export function useIsTouch(): boolean {
 
   return isTouch
 }
+
+// A device's shorter dimension stays constant across rotation, so this
+// reliably separates phones from tablets (iPad's shortest side is 744px+)
+// regardless of current orientation, unlike innerWidth alone.
+export function useIsPhoneDevice(): boolean {
+  const [isPhone, setIsPhone] = useState(false)
+
+  useEffect(() => {
+    const update = () => {
+      const touch = navigator.maxTouchPoints > 0
+      const shortSide = Math.min(window.innerWidth, window.innerHeight)
+      setIsPhone(touch && shortSide < BREAKPOINTS.phone)
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return isPhone
+}
+
+export function useIsLandscape(): boolean {
+  const [isLandscape, setIsLandscape] = useState(false)
+
+  useEffect(() => {
+    const query = window.matchMedia('(orientation: landscape)')
+    const update = () => setIsLandscape(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  return isLandscape
+}

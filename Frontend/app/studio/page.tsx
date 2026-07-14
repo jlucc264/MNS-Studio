@@ -30,7 +30,7 @@ import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
-import { BREAKPOINTS, useIsMobile, useIsTouch } from '../../lib/useViewport'
+import { BREAKPOINTS, useIsMobile, useIsTouch, useIsPhoneDevice, useIsLandscape } from '../../lib/useViewport'
 import {
   assetUrl,
   CanvasContext,
@@ -358,6 +358,115 @@ const DEFAULT_SETTINGS: PreviewSettings = {
   source_type: 'photo',
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizePreviewSettings(
+  settings: PreviewSettings,
+  fallback: PreviewSettings = DEFAULT_SETTINGS,
+): PreviewSettings {
+  const fallbackWidth = toFiniteNumber(fallback.width_inches)
+  const fallbackHeight = toFiniteNumber(fallback.height_inches)
+  const requestedWidth = toFiniteNumber(settings.width_inches)
+  const requestedHeight = toFiniteNumber(settings.height_inches)
+  const width = requestedWidth !== null && requestedWidth > 0
+    ? requestedWidth
+    : (fallbackWidth !== null && fallbackWidth > 0 ? fallbackWidth : DEFAULT_SETTINGS.width_inches)
+  const height = requestedHeight !== null && requestedHeight > 0
+    ? requestedHeight
+    : (fallbackHeight !== null && fallbackHeight > 0 ? fallbackHeight : DEFAULT_SETTINGS.height_inches)
+  const dimensions = clampPrintDimensions(width, height)
+
+  const requestedMesh = toFiniteNumber(settings.mesh_count)
+  const fallbackMesh = toFiniteNumber(fallback.mesh_count)
+  const meshCount = requestedMesh === 13 || requestedMesh === 18
+    ? requestedMesh
+    : (fallbackMesh === 13 || fallbackMesh === 18 ? fallbackMesh : DEFAULT_SETTINGS.mesh_count)
+
+  const requestedColorCount = toFiniteNumber(settings.color_count)
+  const fallbackColorCount = toFiniteNumber(fallback.color_count)
+  const colorCount = Math.max(
+    2,
+    Math.min(128, Math.round(requestedColorCount ?? fallbackColorCount ?? DEFAULT_SETTINGS.color_count)),
+  )
+
+  return {
+    ...settings,
+    ...dimensions,
+    mesh_count: meshCount,
+    color_count: colorCount,
+  }
+}
+
+const ACTIVE_DESIGN_STORAGE_KEY = 'mns_active_design'
+const ACTIVE_DESIGN_VERSION = 2
+
+type ActiveDesignSnapshot = {
+  version?: number
+  savedAt?: string
+  ownerId?: string | null
+  activeImagePath?: string | null
+  previewImagePath?: string | null
+  originalPreviewImagePath?: string | null
+  lastVisibleImageUrl?: string | null
+  allPalette?: PaletteColor[]
+  previewPalette?: PaletteColor[]
+  enabledColorHexes?: string[]
+  cells?: string[][]
+  originalCells?: string[][]
+  manualCellOverrides?: Record<string, string>
+  finishOutlineBackups?: Record<string, string>
+  draftSettings?: PreviewSettings
+  lastSettings?: PreviewSettings | null
+  savedProjectId?: string | null
+  draftName?: string
+  hasGeneratedPreview?: boolean
+  viewMode?: 'original' | 'stitch'
+  activeWorkflowStep?: 1 | 2 | 3
+  importedAspectRatio?: number | null
+  finalPdfPath?: string | null
+  finalPreviewImagePath?: string | null
+  parentGalleryItemId?: string | null
+  paletteReductionTarget?: number
+  manuallyDisabledHexes?: string[]
+  removalMode?: 'fill' | 'blank'
+  finishApplied?: boolean
+  finishShape?: 'circle' | 'square'
+  finishSizeInches?: number
+  lockAspectRatio?: boolean
+}
+
+type PendingStudioNavigation =
+  | { kind: 'route'; href: string }
+  | { kind: 'history-back' }
+
+function readActiveDesignSnapshot(): ActiveDesignSnapshot | null {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_DESIGN_STORAGE_KEY)
+    if (!raw) return null
+
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+
+    const snapshot = parsed as ActiveDesignSnapshot
+    const hasCells = Array.isArray(snapshot.cells) && snapshot.cells.length > 0
+    if (!snapshot.activeImagePath && !snapshot.previewImagePath && !hasCells) return null
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+function removeActiveDesignSnapshot() {
+  try {
+    window.localStorage.removeItem(ACTIVE_DESIGN_STORAGE_KEY)
+  } catch {}
+}
+
 function applySourceTypeDefaults(
   current: PreviewSettings,
   sourceType: 'photo' | 'stitched_photo' | 'graphic_art'
@@ -467,7 +576,10 @@ function StudioPage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const isMobile = useIsMobile(BREAKPOINTS.studio)
   const isTouchDevice = useIsTouch()
+  const isPhoneDevice = useIsPhoneDevice()
+  const isLandscapeOrientation = useIsLandscape()
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3>(1)
+  const isPhoneCanvasLandscape = isPhoneDevice && isLandscapeOrientation && activeWorkflowStep === 2
   const [showChatPanel, setShowChatPanel] = useState(false)
   const [stagedUploadDragActive, setStagedUploadDragActive] = useState(false)
   const [uploadTipsOpen, setUploadTipsOpen] = useState(false)
@@ -476,6 +588,11 @@ function StudioPage() {
   const [showDraftNameModal, setShowDraftNameModal] = useState(false)
   const [authPrompt, setAuthPrompt] = useState<'login' | 'save' | 'finalize' | 'gallery' | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [recoveryCandidate, setRecoveryCandidate] = useState<ActiveDesignSnapshot | null>(null)
+  const [showLeaveStudioConfirm, setShowLeaveStudioConfirm] = useState(false)
+  const [isDesignReady, setIsDesignReady] = useState(false)
+  const [cleanDesignFingerprint, setCleanDesignFingerprint] = useState<string | null>(null)
+  const [cleanCheckpoint, setCleanCheckpoint] = useState(0)
   const [showMobilePanel, setShowMobilePanel] = useState(true)
   const [mobileSheetTab, setMobileSheetTab] = useState<'tools' | 'design'>('tools')
   const [showPostFinalizeOptions, setShowPostFinalizeOptions] = useState(false)
@@ -511,11 +628,16 @@ function StudioPage() {
   const patternImportInputRef = useRef<HTMLInputElement | null>(null)
   const projectLoadedRef = useRef(false)
   const toolModeRef = useRef(toolMode)
+  const pendingStudioNavigationRef = useRef<PendingStudioNavigation | null>(null)
+  const allowStudioNavigationRef = useRef(false)
+  const hasUnsavedChangesRef = useRef(false)
+  const latestRecoverySnapshotRef = useRef<ActiveDesignSnapshot | null>(null)
+  const persistRecoverySnapshotRef = useRef<() => void>(() => {})
   useEffect(() => { toolModeRef.current = toolMode }, [toolMode])
   const searchParams = useSearchParams()
 
   const clearActiveCanvas = useCallback(() => {
-    localStorage.removeItem('mns_active_design')
+    removeActiveDesignSnapshot()
     latestApplyRequestIdRef.current += 1
     setActiveImagePath(null)
     setImportedAspectRatio(null)
@@ -565,9 +687,14 @@ function StudioPage() {
     setGalleryError('')
     setSaveStatus('idle')
     setDraftSaveError('')
+    setRecoveryCandidate(null)
+    setShowLeaveStudioConfirm(false)
+    setCleanDesignFingerprint(null)
+    setIsDesignReady(true)
   }, [])
 
   const finishFinalizeFlow = useCallback(() => {
+    allowStudioNavigationRef.current = true
     clearActiveCanvas()
     router.push('/gallery')
   }, [clearActiveCanvas, router])
@@ -577,20 +704,6 @@ function StudioPage() {
     setGalleryAcknowledged(false)
     finishFinalizeFlow()
   }, [finishFinalizeFlow, galleryStatus])
-
-  async function handleViewProfile() {
-    if (!session?.access_token) return
-    try {
-      const profile = await getMyCreatorProfile(session.access_token)
-      if (profile.slug) {
-        router.push(`/gallery/${profile.slug}`)
-      } else {
-        router.push('/gallery')
-      }
-    } catch {
-      router.push('/gallery')
-    }
-  }
 
   const openGalleryPublishModal = useCallback(() => {
     setGalleryStatus('idle')
@@ -604,43 +717,98 @@ function StudioPage() {
   const handleLogoutAndReturnToGallery = useCallback(async () => {
     setShowLogoutConfirm(false)
     setAuthPrompt(null)
+    allowStudioNavigationRef.current = true
     clearActiveCanvas()
     await signOut()
     router.push('/gallery')
   }, [clearActiveCanvas, router, signOut])
 
-  const navigateAwayFromStudio = useCallback((href: '/gallery' | '/drafts' | '/contact') => {
-    if (previewImagePath || cells.length > 0) {
-      try {
-        localStorage.setItem('mns_active_design', JSON.stringify({
-          activeImagePath,
-          previewImagePath,
-          originalPreviewImagePath,
-          lastVisibleImageUrl,
-          allPalette,
-          previewPalette,
-          enabledColorHexes,
-          cells,
-          originalCells,
-          manualCellOverrides,
-          draftSettings,
-          lastSettings,
-          savedProjectId,
-          draftName,
-          hasGeneratedPreview,
-          viewMode,
-          activeWorkflowStep,
-          importedAspectRatio,
-        }))
-      } catch {}
-    }
+  const closeStudioNavigationModals = useCallback(() => {
     setAuthPrompt(null)
     setShowLogoutConfirm(false)
     setShowDraftNameModal(false)
     setShowFinalizeModal(false)
     setShowGalleryPublishModal(false)
-    router.push(href)
-  }, [router, activeImagePath, previewImagePath, originalPreviewImagePath, lastVisibleImageUrl, allPalette, previewPalette, enabledColorHexes, cells, originalCells, manualCellOverrides, draftSettings, lastSettings, savedProjectId, draftName, hasGeneratedPreview, viewMode, activeWorkflowStep, importedAspectRatio])
+    setShowCartDrawer(false)
+  }, [])
+
+  const performStudioNavigation = useCallback((href: string) => {
+    const destination = new URL(href, window.location.href)
+    if (destination.origin !== window.location.origin || (destination.pathname === '/studio' && destination.search)) {
+      window.location.assign(destination.href)
+      return
+    }
+    router.push(`${destination.pathname}${destination.search}${destination.hash}`)
+  }, [router])
+
+  const navigateAwayFromStudio = useCallback((href: string) => {
+    if (hasUnsavedChangesRef.current) {
+      persistRecoverySnapshotRef.current()
+      pendingStudioNavigationRef.current = { kind: 'route', href }
+      setShowLeaveStudioConfirm(true)
+      return
+    }
+
+    allowStudioNavigationRef.current = true
+    closeStudioNavigationModals()
+    performStudioNavigation(href)
+  }, [closeStudioNavigationModals, performStudioNavigation])
+
+  const stayOnActiveCanvas = useCallback(() => {
+    pendingStudioNavigationRef.current = null
+    setShowLeaveStudioConfirm(false)
+  }, [])
+
+  const leaveActiveCanvas = useCallback(() => {
+    const pendingNavigation = pendingStudioNavigationRef.current
+    pendingStudioNavigationRef.current = null
+    setShowLeaveStudioConfirm(false)
+    if (!pendingNavigation) return
+
+    removeActiveDesignSnapshot()
+    allowStudioNavigationRef.current = true
+    closeStudioNavigationModals()
+
+    if (pendingNavigation.kind === 'history-back') {
+      window.history.go(-2)
+      return
+    }
+
+    performStudioNavigation(pendingNavigation.href)
+  }, [closeStudioNavigationModals, performStudioNavigation])
+
+  async function handleViewProfile() {
+    if (!session?.access_token) return
+    try {
+      const profile = await getMyCreatorProfile(session.access_token)
+      navigateAwayFromStudio(profile.slug ? `/gallery/${profile.slug}` : '/gallery')
+    } catch {
+      navigateAwayFromStudio('/gallery')
+    }
+  }
+
+  useEffect(() => {
+    const handleLinkClick = (event: MouseEvent) => {
+      if (!hasUnsavedChangesRef.current || event.defaultPrevented || event.button !== 0) return
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      if (!(event.target instanceof Element)) return
+
+      const link = event.target.closest('a[href]')
+      if (!(link instanceof HTMLAnchorElement)) return
+      if (link.target && link.target !== '_self') return
+      if (link.hasAttribute('download') || link.getAttribute('href')?.startsWith('#')) return
+
+      const destination = new URL(link.href, window.location.href)
+      if (destination.href === window.location.href) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      navigateAwayFromStudio(destination.href)
+    }
+
+    document.addEventListener('click', handleLinkClick, true)
+    return () => document.removeEventListener('click', handleLinkClick, true)
+  }, [navigateAwayFromStudio])
 
   useEffect(() => {
     router.prefetch('/gallery')
@@ -710,6 +878,252 @@ function StudioPage() {
     }
   }, [])
 
+  const hasActiveCanvas = Boolean(activeImagePath || previewImagePath || cells.length || hasGeneratedPreview)
+  const designFingerprint = useMemo(() => JSON.stringify({
+    activeImagePath,
+    previewImagePath,
+    previewPalette,
+    cells,
+    draftSettings,
+    draftName,
+    finalPdfPath,
+    parentGalleryItemId,
+  }), [
+    activeImagePath,
+    cells,
+    draftName,
+    draftSettings,
+    finalPdfPath,
+    parentGalleryItemId,
+    previewImagePath,
+    previewPalette,
+  ])
+  const latestDesignFingerprintRef = useRef(designFingerprint)
+  latestDesignFingerprintRef.current = designFingerprint
+
+  const hasUnsavedChanges = isDesignReady
+    && hasActiveCanvas
+    && (cleanDesignFingerprint === null || designFingerprint !== cleanDesignFingerprint)
+  hasUnsavedChangesRef.current = hasUnsavedChanges
+
+  const recoverySnapshot = useMemo<ActiveDesignSnapshot>(() => ({
+    version: ACTIVE_DESIGN_VERSION,
+    savedAt: new Date().toISOString(),
+    ownerId: user?.id ?? null,
+    activeImagePath,
+    previewImagePath,
+    originalPreviewImagePath,
+    lastVisibleImageUrl,
+    allPalette,
+    previewPalette,
+    enabledColorHexes,
+    cells,
+    originalCells,
+    manualCellOverrides,
+    finishOutlineBackups,
+    draftSettings,
+    lastSettings,
+    savedProjectId,
+    draftName,
+    hasGeneratedPreview,
+    viewMode,
+    activeWorkflowStep,
+    importedAspectRatio,
+    finalPdfPath,
+    finalPreviewImagePath,
+    parentGalleryItemId,
+    paletteReductionTarget,
+    manuallyDisabledHexes,
+    removalMode,
+    finishApplied,
+    finishShape,
+    finishSizeInches,
+    lockAspectRatio,
+  }), [
+    activeImagePath,
+    activeWorkflowStep,
+    allPalette,
+    cells,
+    draftName,
+    draftSettings,
+    enabledColorHexes,
+    finalPdfPath,
+    finalPreviewImagePath,
+    finishApplied,
+    finishOutlineBackups,
+    finishShape,
+    finishSizeInches,
+    hasGeneratedPreview,
+    importedAspectRatio,
+    lastSettings,
+    lastVisibleImageUrl,
+    lockAspectRatio,
+    manualCellOverrides,
+    manuallyDisabledHexes,
+    originalCells,
+    originalPreviewImagePath,
+    paletteReductionTarget,
+    parentGalleryItemId,
+    previewImagePath,
+    previewPalette,
+    removalMode,
+    savedProjectId,
+    user?.id,
+    viewMode,
+  ])
+  latestRecoverySnapshotRef.current = recoverySnapshot
+
+  const markCurrentDesignClean = useCallback(() => {
+    setCleanCheckpoint((current) => current + 1)
+  }, [])
+
+  useEffect(() => {
+    if (cleanCheckpoint === 0) return
+    setCleanDesignFingerprint(latestDesignFingerprintRef.current)
+    setIsDesignReady(true)
+  }, [cleanCheckpoint])
+
+  const persistRecoverySnapshot = useCallback(() => {
+    if (allowStudioNavigationRef.current || !hasUnsavedChangesRef.current || !latestRecoverySnapshotRef.current) return
+    try {
+      window.localStorage.setItem(
+        ACTIVE_DESIGN_STORAGE_KEY,
+        JSON.stringify(latestRecoverySnapshotRef.current),
+      )
+    } catch {}
+  }, [])
+  persistRecoverySnapshotRef.current = persistRecoverySnapshot
+
+  useEffect(() => {
+    if (!isDesignReady) return
+    if (!hasUnsavedChanges) {
+      removeActiveDesignSnapshot()
+      return
+    }
+
+    const timeoutId = window.setTimeout(persistRecoverySnapshot, 350)
+    return () => window.clearTimeout(timeoutId)
+  }, [hasUnsavedChanges, isDesignReady, persistRecoverySnapshot, recoverySnapshot])
+
+  useEffect(() => {
+    const handlePageHide = () => persistRecoverySnapshot()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') persistRecoverySnapshot()
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChangesRef.current || allowStudioNavigationRef.current) return
+      persistRecoverySnapshot()
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('pagehide', handlePageHide)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [persistRecoverySnapshot])
+
+  useEffect(() => {
+    const guardState = window.history.state && typeof window.history.state === 'object'
+      ? window.history.state as Record<string, unknown>
+      : {}
+    if (!guardState.mnsStudioGuard) {
+      window.history.pushState(
+        { ...guardState, mnsStudioGuard: true },
+        '',
+        window.location.href,
+      )
+    }
+
+    const handleHistoryNavigation = () => {
+      if (allowStudioNavigationRef.current) return
+      if (!hasUnsavedChangesRef.current) {
+        allowStudioNavigationRef.current = true
+        window.history.back()
+        return
+      }
+
+      persistRecoverySnapshot()
+      const currentState = window.history.state && typeof window.history.state === 'object'
+        ? window.history.state as Record<string, unknown>
+        : {}
+      window.history.pushState(
+        { ...currentState, mnsStudioGuard: true },
+        '',
+        window.location.href,
+      )
+      pendingStudioNavigationRef.current = { kind: 'history-back' }
+      setShowLeaveStudioConfirm(true)
+    }
+
+    window.addEventListener('popstate', handleHistoryNavigation)
+    return () => window.removeEventListener('popstate', handleHistoryNavigation)
+  }, [persistRecoverySnapshot])
+
+  const restoreRecoveredDesign = useCallback(() => {
+    const snapshot = recoveryCandidate
+    if (!snapshot) return
+
+    const recoveredCells = Array.isArray(snapshot.cells) ? snapshot.cells : []
+    const recoveredAllPalette = snapshot.allPalette?.length
+      ? snapshot.allPalette
+      : (snapshot.previewPalette ?? [])
+    const knownColors = [...(snapshot.previewPalette ?? []), ...recoveredAllPalette]
+    const activePalette = recoveredCells.length
+      ? derivePaletteFromCells(recoveredCells, knownColors)
+      : (snapshot.previewPalette ?? recoveredAllPalette)
+    const resolvedPalette = activePalette.length
+      ? activePalette
+      : (snapshot.previewPalette ?? recoveredAllPalette)
+
+    setActiveImagePath(snapshot.activeImagePath ?? null)
+    setPreviewImagePath(snapshot.previewImagePath ?? null)
+    setOriginalPreviewImagePath(snapshot.originalPreviewImagePath ?? snapshot.previewImagePath ?? null)
+    setLastVisibleImageUrl(snapshot.lastVisibleImageUrl ?? snapshot.previewImagePath ?? null)
+    setAllPalette(recoveredAllPalette)
+    setPreviewPalette(resolvedPalette)
+    setEnabledColorHexes(snapshot.enabledColorHexes ?? resolvedPalette.map((color) => color.hex))
+    setCells(recoveredCells)
+    setOriginalCells(snapshot.originalCells ?? recoveredCells)
+    setActivePaintColor(resolvedPalette[0]?.hex ?? null)
+    setManualCellOverrides(snapshot.manualCellOverrides ?? {})
+    setFinishOutlineBackups(snapshot.finishOutlineBackups ?? {})
+    setDraftSettings(snapshot.draftSettings ?? DEFAULT_SETTINGS)
+    setLastSettings(snapshot.lastSettings ?? null)
+    setSavedProjectId(snapshot.savedProjectId ?? null)
+    setDraftName(snapshot.draftName || 'Untitled')
+    setHasGeneratedPreview(Boolean(snapshot.hasGeneratedPreview || recoveredCells.length))
+    setViewMode(snapshot.viewMode ?? (recoveredCells.length ? 'stitch' : 'original'))
+    setActiveWorkflowStep(snapshot.activeWorkflowStep ?? (recoveredCells.length ? 2 : 1))
+    setImportedAspectRatio(snapshot.importedAspectRatio ?? null)
+    setFinalPdfPath(snapshot.finalPdfPath ?? null)
+    setFinalPreviewImagePath(snapshot.finalPreviewImagePath ?? null)
+    setParentGalleryItemId(snapshot.parentGalleryItemId ?? null)
+    setPaletteReductionTarget(snapshot.paletteReductionTarget ?? 128)
+    setManuallyDisabledHexes(snapshot.manuallyDisabledHexes ?? [])
+    setRemovalMode(snapshot.removalMode ?? 'fill')
+    setFinishApplied(snapshot.finishApplied ?? false)
+    setFinishShape(snapshot.finishShape ?? 'circle')
+    setFinishSizeInches(snapshot.finishSizeInches ?? 4)
+    setLockAspectRatio(snapshot.lockAspectRatio ?? true)
+    setRecoveryCandidate(null)
+    setCleanDesignFingerprint(null)
+    setIsDesignReady(true)
+    if (recoveredCells.length) {
+      window.requestAnimationFrame(() => setGridKey((current) => current + 1))
+    }
+  }, [recoveryCandidate])
+
+  const discardRecoveredDesign = useCallback(() => {
+    removeActiveDesignSnapshot()
+    setRecoveryCandidate(null)
+    markCurrentDesignClean()
+  }, [markCurrentDesignClean])
+
   useEffect(() => {
     if (session?.access_token && authPrompt !== 'login') {
       setAuthPrompt(null)
@@ -721,50 +1135,13 @@ function StudioPage() {
 
     if (!projectId) {
       if (projectLoadedRef.current) return
-      const saved = localStorage.getItem('mns_active_design')
-      if (!saved) return
       projectLoadedRef.current = true
-      try {
-        const d = JSON.parse(saved)
-        if (d.activeImagePath) setActiveImagePath(d.activeImagePath)
-        if (d.previewImagePath) {
-          setPreviewImagePath(d.previewImagePath)
-          setOriginalPreviewImagePath(d.originalPreviewImagePath ?? d.previewImagePath)
-          setLastVisibleImageUrl(d.lastVisibleImageUrl ?? d.previewImagePath)
-        }
-        if (d.allPalette?.length) {
-          setAllPalette(d.allPalette)
-          // Reset the working palette to the colors actually stitched into the
-          // saved cells — not the original generated palette
-          const knownColors: PaletteColor[] = [...(d.previewPalette ?? []), ...d.allPalette]
-          const activePalette = d.cells?.length
-            ? derivePaletteFromCells(d.cells, knownColors)
-            : (d.previewPalette ?? d.allPalette)
-          const resolvedPalette = activePalette.length ? activePalette : (d.previewPalette ?? d.allPalette)
-          setPreviewPalette(resolvedPalette)
-          setEnabledColorHexes(d.enabledColorHexes ?? resolvedPalette.map((c: PaletteColor) => c.hex))
-          setActivePaintColor(resolvedPalette[0]?.hex ?? null)
-        }
-        if (d.cells?.length) {
-          setCells(d.cells)
-          setOriginalCells(d.originalCells ?? d.cells)
-        }
-        if (d.manualCellOverrides) setManualCellOverrides(d.manualCellOverrides)
-        if (d.draftSettings) {
-          setDraftSettings(d.draftSettings)
-          setImportedAspectRatio(d.importedAspectRatio ?? null)
-        }
-        if (d.lastSettings) setLastSettings(d.lastSettings)
-        if (d.savedProjectId) setSavedProjectId(d.savedProjectId)
-        if (d.draftName) setDraftName(d.draftName)
-        if (d.hasGeneratedPreview) setHasGeneratedPreview(true)
-        if (d.viewMode) setViewMode(d.viewMode)
-        if (d.activeWorkflowStep) setActiveWorkflowStep(d.activeWorkflowStep)
-        if (d.parentGalleryItemId) setParentGalleryItemId(d.parentGalleryItemId)
-        if (d.cells?.length) {
-          window.requestAnimationFrame(() => setGridKey((k) => k + 1))
-        }
-      } catch {}
+      const recoveredDesign = readActiveDesignSnapshot()
+      if (recoveredDesign) {
+        setRecoveryCandidate(recoveredDesign)
+        return
+      }
+      markCurrentDesignClean()
       return
     }
 
@@ -830,10 +1207,12 @@ function StudioPage() {
         setActiveWorkflowStep(project.pdf_url ? 3 : 2)
         window.requestAnimationFrame(() => setGridKey((k) => k + 1))
       }
+      markCurrentDesignClean()
     }).catch(() => {
       // project load failed silently — user starts fresh
+      markCurrentDesignClean()
     })
-  }, [searchParams, session?.access_token])
+  }, [markCurrentDesignClean, searchParams, session?.access_token])
 
   useEffect(() => {
     if (searchParams.get('order') === 'success') {
@@ -872,7 +1251,7 @@ function StudioPage() {
     [draftSettings, hasGeneratedPreview, lastSettings]
   )
   const isBlankCanvas = !activeImagePath && hasGeneratedPreview
-  const isUnauthenticatedWithCanvas = !session && (!!activeImagePath || hasGeneratedPreview)
+  const isUnauthenticatedWithCanvas = !session && hasActiveCanvas
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
   const currentDesignStitchCount = useMemo(
@@ -1129,8 +1508,10 @@ function StudioPage() {
     if (!activeImagePath) return
     const requestId = latestApplyRequestIdRef.current + 1
     latestApplyRequestIdRef.current = requestId
-    const previewSettings = {
-      ...settings,
+    const previewSettings = normalizePreviewSettings(settings, draftSettingsRef.current)
+    if (getSettingsKey(previewSettings) !== getSettingsKey(settings)) {
+      draftSettingsRef.current = previewSettings
+      setDraftSettings(previewSettings)
     }
 
     const capturedReductionTarget = paletteReductionTarget
@@ -1164,6 +1545,7 @@ function StudioPage() {
         previewSettings.mesh_count === lastSettings.mesh_count
     )
 
+    setUploadError(null)
     setLoading(true)
     try {
       const result = await createPreview({
@@ -1283,6 +1665,12 @@ function StudioPage() {
     }
   }
 
+  function applyPreviewInBackground(settings: PreviewSettings) {
+    void handleApply(settings).catch((error) => {
+      setUploadError(error instanceof Error ? error.message : 'Preview generation failed.')
+    })
+  }
+
   useEffect(() => {
     if (!hasGeneratedPreview || !activeImagePath || !lastSettings) return
 
@@ -1291,7 +1679,7 @@ function StudioPage() {
     if (draftKey === lastKey) return
 
     const timeoutId = window.setTimeout(() => {
-      void handleApply(draftSettings)
+      applyPreviewInBackground(draftSettings)
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
@@ -2341,14 +2729,31 @@ function StudioPage() {
         break
       case 'set_dimensions': {
         const patch: Partial<PreviewSettings> = {}
-        if (action.width_inches !== undefined) patch.width_inches = action.width_inches as number
-        if (action.height_inches !== undefined) patch.height_inches = action.height_inches as number
-        if (action.mesh_count !== undefined) patch.mesh_count = action.mesh_count as 13 | 18
-        updateSettings(patch)
+        if (action.width_inches !== undefined && action.width_inches !== null) {
+          const width = toFiniteNumber(action.width_inches)
+          if (width === null || width <= 0) throw new Error('MNS Pro could not apply that width. Use a positive number of inches.')
+          patch.width_inches = width
+        }
+        if (action.height_inches !== undefined && action.height_inches !== null) {
+          const height = toFiniteNumber(action.height_inches)
+          if (height === null || height <= 0) throw new Error('MNS Pro could not apply that height. Use a positive number of inches.')
+          patch.height_inches = height
+        }
+        if (action.mesh_count !== undefined && action.mesh_count !== null) {
+          const meshCount = toFiniteNumber(action.mesh_count)
+          if (meshCount !== 13 && meshCount !== 18) throw new Error('MNS Pro supports only 13 or 18 mesh.')
+          patch.mesh_count = meshCount
+        }
+        if (!Object.keys(patch).length) break
+
+        const merged = normalizePreviewSettings(
+          { ...draftSettingsRef.current, ...patch },
+          draftSettingsRef.current,
+        )
+        draftSettingsRef.current = merged
+        setDraftSettings(merged)
         if (activeImagePath) {
-          const merged = { ...draftSettingsRef.current, ...patch }
-          const { width_inches, height_inches } = clampPrintDimensions(merged.width_inches, merged.height_inches)
-          await handleApply({ ...merged, width_inches, height_inches })
+          await handleApply(merged)
         }
         break
       }
@@ -2852,6 +3257,7 @@ function StudioPage() {
       setShowFinalizeModal(false)
       setShowRefinalizeConfirm(false)
       setShowPostFinalizeOptions(true)
+      markCurrentDesignClean()
     } catch (err) {
       setFinalizeError(err instanceof Error ? err.message : 'Something went wrong generating the PDF.')
     } finally {
@@ -3166,6 +3572,7 @@ function StudioPage() {
         setShowDraftNameModal(false)
       }
       setSaveStatus('saved')
+      markCurrentDesignClean()
       setTimeout(() => setSaveStatus('idle'), 2500)
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
@@ -3251,7 +3658,7 @@ function StudioPage() {
         gap: isMobile ? 8 : 18,
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: isMobile ? '8px 12px' : '10px 14px',
+        padding: isPhoneCanvasLandscape ? '3px 10px' : isMobile ? '8px 12px' : '10px 14px',
         borderBottom: '1px solid #e8e4db',
         background: '#fffdf8',
         flexWrap: 'wrap',
@@ -3259,10 +3666,12 @@ function StudioPage() {
       }}
     >
       <div style={{ display: 'flex', gap: isMobile ? 10 : 18, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
-        <div>
-          <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>DESIGN</div>
-          <strong style={{ fontSize: 13 }}>{previewDesignLabel}</strong>
-        </div>
+        {!isPhoneCanvasLandscape && (
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: 1.5, color: '#8b8377', fontWeight: 700 }}>DESIGN</div>
+            <strong style={{ fontSize: 13 }}>{previewDesignLabel}</strong>
+          </div>
+        )}
         {!isMobile && (
           <>
             <div>
@@ -3287,24 +3696,35 @@ function StudioPage() {
             </div>
           </>
         )}
-        {isMobile && previewStatsSettings && (
+        {isMobile && !isPhoneCanvasLandscape && previewStatsSettings && (
           <div style={{ fontSize: 12, color: '#8a8177' }}>
             {previewStitchesLabel} stitches · {previewMeshLabel}
           </div>
         )}
+        {isPhoneCanvasLandscape && previewStatsSettings && (
+          <div style={{ fontSize: 11, color: '#8a8177' }}>
+            {previewStitchesLabel} · {previewMeshLabel}
+          </div>
+        )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => setIsPreviewExpanded((current) => !current)}
-        style={{
-          ...(isPreviewExpanded ? btnSecondary : btnPrimary),
-          fontSize: isMobile ? 12 : 13,
-          padding: isMobile ? '6px 10px' : '8px 14px',
-        }}
-      >
-        {isPreviewExpanded ? 'Collapse' : 'Expand'}
-      </button>
+      {isPhoneDevice && !isLandscapeOrientation ? (
+        <span style={{ fontSize: 11, color: '#8a8177', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          ↻ Rotate to landscape to expand
+        </span>
+      ) : !isPhoneCanvasLandscape ? (
+        <button
+          type="button"
+          onClick={() => setIsPreviewExpanded((current) => !current)}
+          style={{
+            ...(isPreviewExpanded ? btnSecondary : btnPrimary),
+            fontSize: isMobile ? 12 : 13,
+            padding: isMobile ? '6px 10px' : '8px 14px',
+          }}
+        >
+          {isPreviewExpanded ? 'Collapse' : 'Expand'}
+        </button>
+      ) : null}
     </div>
   )
 
@@ -3505,7 +3925,7 @@ function StudioPage() {
           {activeImagePath && (
             <button
               type="button"
-              onClick={() => void handleApply(draftSettings)}
+              onClick={() => applyPreviewInBackground(draftSettings)}
               disabled={loading}
               style={btnPrimary}
             >
@@ -3889,6 +4309,12 @@ function StudioPage() {
     />
   )
 
+  const NAV_HEIGHT = 70
+  const CREDIT_BAR_HEIGHT = 28
+  const hideTopChrome = isPhoneCanvasLandscape
+  const showCreditBar = !hideTopChrome && pendingCents !== null && pendingCents > 0
+  const topOffset = hideTopChrome ? 0 : NAV_HEIGHT + (showCreditBar ? CREDIT_BAR_HEIGHT : 0)
+
   return (
     <main
       style={{
@@ -3896,7 +4322,7 @@ function StudioPage() {
         gridTemplateRows: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) auto',
         minHeight: '100dvh',
         height: '100dvh',
-        paddingTop: 70,
+        paddingTop: topOffset,
         overflow: 'hidden',
         boxSizing: 'border-box',
         width: '100%',
@@ -3905,6 +4331,7 @@ function StudioPage() {
         isolation: 'isolate',
       }}
     >
+      {!hideTopChrome && (
       <nav
         style={{
           display: 'flex',
@@ -3918,7 +4345,7 @@ function StudioPage() {
           top: 0,
           left: 0,
           right: 0,
-          height: 70,
+          height: NAV_HEIGHT,
           boxSizing: 'border-box',
           zIndex: 10000,
           pointerEvents: 'auto',
@@ -3988,14 +4415,6 @@ function StudioPage() {
             title="Tutorial"
             style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >?</button>
-          {pendingCents !== null && pendingCents > 0 && (
-            <span
-              title="Canvas credit available"
-              style={{ background: '#e8f0e6', color: '#4a7244', border: '1px solid #c5d9c2', borderRadius: 12, padding: '2px 9px', fontSize: 12, fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}
-            >
-              {formatCents(pendingCents)} credit
-            </span>
-          )}
           <button
             type="button"
             onClick={() => setShowCartDrawer(true)}
@@ -4022,7 +4441,7 @@ function StudioPage() {
               user={user}
               onProfile={() => void handleViewProfile()}
               onLogout={() => setShowLogoutConfirm(true)}
-              onAdmin={() => router.push('/admin')}
+              onAdmin={() => navigateAwayFromStudio('/admin')}
             />
           ) : (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
@@ -4031,11 +4450,39 @@ function StudioPage() {
           )}
         </div>
       </nav>
+      )}
+
+      {showCreditBar && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            position: 'fixed',
+            top: NAV_HEIGHT,
+            left: 0,
+            right: 0,
+            height: CREDIT_BAR_HEIGHT,
+            background: '#e8f0e6',
+            borderBottom: '1px solid #c5d9c2',
+            color: '#4a7244',
+            fontSize: 12,
+            fontWeight: 600,
+            boxSizing: 'border-box',
+            zIndex: 9999,
+          }}
+        >
+          🌿 {formatCents(pendingCents ?? 0)} canvas credit available
+        </div>
+      )}
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr'
+          gridTemplateColumns: isPhoneCanvasLandscape
+            ? 'minmax(0, 1fr) minmax(200px, 260px)'
+            : isMobile ? '1fr'
             : isPreviewExpanded && activeWorkflowStep === 2
               ? 'minmax(0, 1fr) minmax(240px, 280px)'
               : isPreviewExpanded
@@ -4049,7 +4496,7 @@ function StudioPage() {
           zIndex: 1,
         }}
       >
-        {!isPreviewExpanded && (() => {
+        {!isPreviewExpanded && !isPhoneCanvasLandscape && (() => {
           const mobileDrawer = isMobile && activeWorkflowStep === 2
           const asideContent = (
             <>
@@ -4409,7 +4856,7 @@ function StudioPage() {
           </div>
 
           {!isFinalizeReview && (
-            isMobile ? (
+            isMobile && !isPhoneCanvasLandscape ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))', borderTop: '1px solid #ded8cf', background: '#fffdf8', zIndex: 35, pointerEvents: 'auto' }}>
                 {activePaintColor && (
                   <div style={{
@@ -4463,7 +4910,7 @@ function StudioPage() {
           )}
         </section>
 
-        {!isMobile && activeWorkflowStep === 2 && !isFinalizeReview && (
+        {(!isMobile || isPhoneCanvasLandscape) && activeWorkflowStep === 2 && !isFinalizeReview && (
           <aside
             data-tutorial="palette-panel"
             style={{
@@ -4571,9 +5018,9 @@ function StudioPage() {
           >
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
-              {(activeImagePath || cells.length > 0) && !savedProjectId ? (
+              {hasUnsavedChanges ? (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
-                  You have an unsaved canvas. Save it as a draft first, or log out and lose your work.
+                  This canvas has changes that have not been saved. Save the draft first, or log out and lose those changes.
                 </p>
               ) : (
                 <p style={{ margin: 0, color: '#8a8177', fontSize: 14 }}>
@@ -4585,7 +5032,7 @@ function StudioPage() {
               <button type="button" onClick={() => setShowLogoutConfirm(false)} style={btnSecondary}>
                 Cancel
               </button>
-              {(activeImagePath || cells.length > 0) && !savedProjectId && (
+              {hasUnsavedChanges && (
                 <button
                   type="button"
                   onClick={() => {
@@ -5155,7 +5602,79 @@ function StudioPage() {
         </div>
       )}
 
-      {tutorial.show && <StudioTutorial onClose={tutorial.close} />}
+      {recoveryCandidate && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recovery-dialog-title"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.52)', display: 'grid', placeItems: 'center', zIndex: 100001, padding: 18 }}
+        >
+          <div
+            style={{ background: '#fffdf8', borderRadius: 10, padding: 24, width: 'min(430px, 100%)', display: 'grid', gap: 14, boxSizing: 'border-box', boxShadow: '0 12px 36px rgba(0,0,0,0.22)' }}
+          >
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 id="recovery-dialog-title" style={{ margin: 0, fontSize: 21, color: '#3f382f' }}>
+                Restore your unsaved canvas?
+              </h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                We found canvas work saved on this device that was not saved as a draft.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={discardRecoveredDesign}
+                style={{ ...btnSecondary, color: '#a03428' }}
+              >
+                Discard recovery
+              </button>
+              <button type="button" onClick={restoreRecoveredDesign} style={btnPrimary}>
+                Restore canvas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLeaveStudioConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="leave-studio-dialog-title"
+          onClick={stayOnActiveCanvas}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.52)', display: 'grid', placeItems: 'center', zIndex: 100002, padding: 18 }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{ background: '#fffdf8', borderRadius: 10, padding: 24, width: 'min(430px, 100%)', display: 'grid', gap: 14, boxSizing: 'border-box', boxShadow: '0 12px 36px rgba(0,0,0,0.22)' }}
+          >
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 id="leave-studio-dialog-title" style={{ margin: 0, fontSize: 21, color: '#3f382f' }}>
+                Leave this unsaved canvas?
+              </h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                Your latest changes have not been saved as a draft. Leaving now will discard them.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button type="button" onClick={stayOnActiveCanvas} style={btnSecondary}>
+                Stay on canvas
+              </button>
+              <button
+                type="button"
+                onClick={leaveActiveCanvas}
+                style={{ ...btnPrimary, background: '#a03428', borderColor: '#a03428' }}
+              >
+                Leave without saving
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tutorial.show && !recoveryCandidate && !showLeaveStudioConfirm && (
+        <StudioTutorial onClose={tutorial.close} />
+      )}
 
       {showSettingsGuardModal && (
         <div
@@ -5207,7 +5726,7 @@ function StudioPage() {
             />
             <button
               type="button"
-              onClick={() => { clearActiveCanvas(); router.push('/gallery') }}
+              onClick={() => navigateAwayFromStudio('/gallery')}
               style={{ justifySelf: 'center', border: 0, background: 'transparent', color: '#fff', font: 'inherit', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
             >
               Go to gallery instead
