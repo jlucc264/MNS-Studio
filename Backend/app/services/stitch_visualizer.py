@@ -505,6 +505,26 @@ def debug_resize_linear_light_steps(
         "pow_2_4_at_center": pow_2_4[15, 15, :].tolist(),
     }
 
+    # Instrument the real function's own internals directly (not a parallel
+    # computation) since a structurally-different-but-equivalent computation
+    # (the high_branch_breakdown above) gave correct results while calling
+    # the actual function on the same array gave wrong results — meaning the
+    # divergence is inside _srgb_to_linear_array's own extra steps (the mask
+    # and blend), not the power formula itself.
+    mask = (arr <= 0.04045).astype(arr.dtype)
+    low = arr / 12.92
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * pow_2_4
+    real_fn_internals = {
+        "mask_at_center": mask[15, 15, :].tolist(),
+        "low_at_center": low[15, 15, :].tolist(),
+        "mask_low_at_center": mask_low[15, 15, :].tolist(),
+        "inv_mask_at_center": inv_mask[15, 15, :].tolist(),
+        "inv_mask_high_at_center": inv_mask_high[15, 15, :].tolist(),
+        "sum_at_center": (mask_low + inv_mask_high)[15, 15, :].tolist(),
+    }
+
     lin = _srgb_to_linear_array(arr)
     lin_at_center = lin[15, 15, :].tolist()
 
@@ -525,6 +545,7 @@ def debug_resize_linear_light_steps(
         "raw_pixel_at_center": list(raw_pixel_at_center),
         "arr_at_center": arr_at_center,
         "high_branch_breakdown": high_branch_breakdown,
+        "real_fn_internals": real_fn_internals,
         "lin_before_resize": lin_at_center,
         "lin_after_resize": lin_after_resize,
         "srgb_after_reencode": srgb_at_center,
