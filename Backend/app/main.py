@@ -152,12 +152,18 @@ def debug_numeric():
     from PIL import Image as PILImage
     from app.services import stitch_visualizer as sv
 
+    import inspect
+
     out: dict = {
         "thread": threading.current_thread().name,
         "numpy_version": np.__version__,
         "pillow_version": __import__("PIL").__version__,
         "numpy_env_ok_flag": sv._NUMPY_ENV_OK,
         "code_marker": "25becf9-named-intermediates-v2",
+        "srgb_to_linear_source": inspect.getsource(sv._srgb_to_linear_array),
+        "srgb_to_linear_file": inspect.getfile(sv._srgb_to_linear_array),
+        "srgb_to_linear_module_file": sv.__file__,
+        "srgb_to_linear_id": id(sv._srgb_to_linear_array),
     }
     u = np.array([0.784313725, 0.117647059, 0.156862745])
     out["decode_where"] = np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4).round(6).tolist()
