@@ -229,16 +229,40 @@ _OKLAB_M1_INV = np.linalg.inv(_OKLAB_M1)
 _OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
 
 
+# np.where(cond, A, B) was found to incorrectly compose its two branches
+# (rather than select between them) for large arrays on Render production
+# host — a 200x200 solid color came back wrong at this exact decode/encode
+# step while an 8x8 array of the same values came back correct (see the
+# comment near _verify_numeric_environment for the full diagnostic trail).
+# Boolean-mask assignment computes each branch only from the *original*
+# array, restricted to its own elements, so one branch's output can never
+# feed into the other regardless of how that composition bug manifests.
+def _srgb_to_linear_array(u: np.ndarray) -> np.ndarray:
+    mask = u <= 0.04045
+    out = np.empty_like(u)
+    out[mask] = u[mask] / 12.92
+    out[~mask] = ((u[~mask] + 0.055) / 1.055) ** 2.4
+    return out
+
+
+def _linear_to_srgb_array(lin: np.ndarray) -> np.ndarray:
+    mask = lin <= 0.0031308
+    out = np.empty_like(lin)
+    out[mask] = lin[mask] * 12.92
+    out[~mask] = 1.055 * np.clip(lin[~mask], 0.0, None) ** (1 / 2.4) - 0.055
+    return out
+
+
 def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
     u = rgb / 255.0
-    lin = np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4)
+    lin = _srgb_to_linear_array(u)
     return np.cbrt(lin @ _OKLAB_M1.T) @ _OKLAB_M2.T
 
 
 def _oklab_to_srgb_array(lab: np.ndarray) -> np.ndarray:
     lms = (lab @ _OKLAB_M2_INV.T) ** 3
     lin = lms @ _OKLAB_M1_INV.T
-    u = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.clip(lin, 0.0, None) ** (1 / 2.4) - 0.055)
+    u = _linear_to_srgb_array(lin)
     return np.clip(u * 255.0, 0.0, 255.0)
 
 
@@ -421,7 +445,7 @@ def resize_linear_light(
     if not globals().get("_NUMPY_ENV_OK", True) or _FORCE_FALLBACK.get():
         return img.convert("RGB").resize(size, resampling)
     arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
-    lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+    lin = _srgb_to_linear_array(arr)
     channels = [
         np.asarray(
             Image.fromarray(lin[:, :, c].astype(np.float32), mode="F").resize(size, resampling)
@@ -429,11 +453,7 @@ def resize_linear_light(
         for c in range(3)
     ]
     lin_small = np.stack(channels, axis=-1)
-    srgb = np.where(
-        lin_small <= 0.0031308,
-        lin_small * 12.92,
-        1.055 * np.clip(lin_small, 0.0, None) ** (1 / 2.4) - 0.055,
-    )
+    srgb = _linear_to_srgb_array(lin_small)
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
@@ -450,7 +470,7 @@ def debug_resize_linear_light_steps(
     raw_pixel_at_center = converted.getpixel((15, 15))
     arr = np.asarray(converted, dtype=np.float64) / 255.0
     arr_at_center = arr[15, 15, :].tolist()
-    lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+    lin = _srgb_to_linear_array(arr)
     lin_at_center = lin[15, 15, :].tolist()
 
     resized_channels = [
@@ -461,11 +481,7 @@ def debug_resize_linear_light_steps(
     lin_after_resize = [chan.getpixel((px, py)) for chan in resized_channels]
 
     lin_small = np.stack([np.asarray(chan) for chan in resized_channels], axis=-1)
-    srgb = np.where(
-        lin_small <= 0.0031308,
-        lin_small * 12.92,
-        1.055 * np.clip(lin_small, 0.0, None) ** (1 / 2.4) - 0.055,
-    )
+    srgb = _linear_to_srgb_array(lin_small)
     srgb_at_center = srgb[py, px, :].tolist()
     final = np.clip(srgb * 255.0, 0, 255).astype(np.uint8)[py, px, :].tolist()
 
