@@ -253,11 +253,11 @@ def _srgb_to_linear_array(u: np.ndarray) -> np.ndarray:
     # an anonymous temporary's buffer gets reused before it's fully read, so
     # every intermediate is now forced into its own named variable to keep
     # that from happening.
-    mask = (u <= 0.04045).astype(u.dtype)
-    low = u / 12.92
-    plus_055 = u + 0.055
-    div_1055 = plus_055 / 1.055
-    high = div_1055 ** 2.4
+    mask = (u.copy() <= 0.04045).astype(u.dtype)
+    low = u.copy() / 12.92
+    plus_055 = u.copy() + 0.055
+    div_1055 = plus_055.copy() / 1.055
+    high = div_1055.copy() ** 2.4
     mask_low = mask * low
     inv_mask = 1.0 - mask
     inv_mask_high = inv_mask * high
@@ -265,10 +265,10 @@ def _srgb_to_linear_array(u: np.ndarray) -> np.ndarray:
 
 
 def _linear_to_srgb_array(lin: np.ndarray) -> np.ndarray:
-    mask = (lin <= 0.0031308).astype(lin.dtype)
-    low = lin * 12.92
-    clipped = np.clip(lin, 0.0, None)
-    powed = clipped ** (1 / 2.4)
+    mask = (lin.copy() <= 0.0031308).astype(lin.dtype)
+    low = lin.copy() * 12.92
+    clipped = np.clip(lin.copy(), 0.0, None)
+    powed = clipped.copy() ** (1 / 2.4)
     high = 1.055 * powed - 0.055
     mask_low = mask * low
     inv_mask = 1.0 - mask
@@ -548,8 +548,8 @@ def debug_resize_linear_light_steps(
     # Isolate exactly which sub-operation of the high branch
     # (((arr+0.055)/1.055)**2.4) first goes wrong on this array size.
     plus_055 = arr.copy() + 0.055
-    div_1055 = plus_055 / 1.055
-    pow_2_4 = div_1055 ** 2.4
+    div_1055 = plus_055.copy() / 1.055
+    pow_2_4 = div_1055.copy() ** 2.4
     high_branch_breakdown = {
         "plus_055_at_center": plus_055[15, 15, :].tolist(),
         "div_1055_at_center": div_1055[15, 15, :].tolist(),
