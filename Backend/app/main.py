@@ -157,6 +157,7 @@ def debug_numeric():
         "numpy_version": np.__version__,
         "pillow_version": __import__("PIL").__version__,
         "numpy_env_ok_flag": sv._NUMPY_ENV_OK,
+        "code_marker": "25becf9-named-intermediates-v2",
     }
     u = np.array([0.784313725, 0.117647059, 0.156862745])
     out["decode_where"] = np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4).round(6).tolist()
