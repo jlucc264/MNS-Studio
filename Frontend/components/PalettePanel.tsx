@@ -65,6 +65,13 @@ type Props = {
   onShapeBorderColorChange: (color: string | null) => void
   shapeBorderSize: number
   onShapeBorderSizeChange: (size: number) => void
+  // Phone landscape has too little height for the normal fixed-header
+  // plus independently-scrolling-middle layout — the header/tool rows
+  // alone can exceed the available space, and content past them is
+  // clipped with no way to reach it since the root hides overflow. This
+  // lets the whole panel scroll as one unit inside its scrollable
+  // ancestor instead of clipping.
+  scrollWholePanel?: boolean
 }
 
 const BLANK_CELL = '__BLANK__'
@@ -140,6 +147,7 @@ export default function PalettePanel({
   onShapeBorderColorChange,
   shapeBorderSize,
   onShapeBorderSizeChange,
+  scrollWholePanel,
 }: Props) {
   const [hoveredSwatchHex, setHoveredSwatchHex] = useState<string | null>(null)
   const [selectSubMode, setSelectSubMode] = useState<'color' | 'stamp'>('color')
@@ -207,14 +215,11 @@ export default function PalettePanel({
 
   return (
     <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        height: '100%',
-        minHeight: 0,
-        overflow: 'hidden',
-      }}
+      style={
+        scrollWholePanel
+          ? { display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }
+          : { display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0, overflow: 'hidden' }
+      }
     >
       {/* Top-level tab row: Create | Select */}
       <div

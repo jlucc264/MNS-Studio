@@ -579,6 +579,11 @@ function StudioPage() {
     anchorRow: number
     anchorCol: number
   } | null>(null)
+  // Cut blanks the source cells immediately so the stamp can be dragged
+  // around; cancelling it needs to undo that deletion, not just drop the
+  // stamp, or the source region stays blank. Copy/paste never touch cells,
+  // so cancelling those is already a no-op.
+  const stampCameFromCutRef = useRef(false)
   const [manualCellOverrides, setManualCellOverrides] = useState<Record<string, string>>({})
   const [finishOutlineBackups, setFinishOutlineBackups] = useState<Record<string, string>>({})
   const [finishApplied, setFinishApplied] = useState(false)
@@ -2202,6 +2207,7 @@ function StudioPage() {
   function handleCopySelection() {
     const captured = captureSelectionStamp()
     if (!captured) return
+    stampCameFromCutRef.current = false
     setStampClipboard(captured.cells)
     setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
     setSelectedRegions([])
@@ -2226,6 +2232,7 @@ function StudioPage() {
     setCells(nextCells)
     setManualCellOverrides(nextOverrides)
     refreshPreviewPalette(nextCells)
+    stampCameFromCutRef.current = true
     setStampClipboard(captured.cells)
     setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
     setSelectedRegions([])
@@ -2240,6 +2247,7 @@ function StudioPage() {
     const stampW = stampClipboard[0]?.length ?? 0
     const anchorRow = Math.max(0, Math.round((cells.length - stampH) / 2))
     const anchorCol = Math.max(0, Math.round(((cells[0]?.length ?? 0) - stampW) / 2))
+    stampCameFromCutRef.current = false
     setFloatingStamp({ cells: stampClipboard, anchorRow, anchorCol })
     setSelectedRegions([])
     setViewMode('stitch')
@@ -2322,10 +2330,15 @@ function StudioPage() {
       setFinalPreviewImagePath(null)
       setViewMode('stitch')
     }
+    stampCameFromCutRef.current = false
     setFloatingStamp(null)
   }
 
   function handleCancelStamp() {
+    if (stampCameFromCutRef.current) {
+      handleUndoColorChange()
+    }
+    stampCameFromCutRef.current = false
     setFloatingStamp(null)
   }
 
@@ -4241,6 +4254,7 @@ function StudioPage() {
 
   const palettePanelElement = (
     <PalettePanel
+      scrollWholePanel={isPhoneCanvasLandscape}
       colors={displayPalette}
       activeDesignColors={currentDesignPalette}
       activeColor={activePaintColor}
