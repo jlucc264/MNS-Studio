@@ -284,9 +284,9 @@ def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
     # through a call to that separate function, on the same input, on Render
     # production only. Inlining sidesteps whatever that is without needing
     # the root cause pinned down further.
-    mask = (u <= 0.04045).astype(u.dtype)
-    low = u / 12.92
-    plus_055 = u + 0.055
+    mask = (u.copy() <= 0.04045).astype(u.dtype)
+    low = u.copy() / 12.92
+    plus_055 = u.copy() + 0.055
     div_1055 = plus_055 / 1.055
     high = div_1055 ** 2.4
     mask_low = mask * low
@@ -301,9 +301,9 @@ def _oklab_to_srgb_array(lab: np.ndarray) -> np.ndarray:
     lin = lms @ _OKLAB_M1_INV.T
     # Inlined for the same reason as the decode side above, see
     # _srgb_to_oklab_array.
-    mask = (lin <= 0.0031308).astype(lin.dtype)
-    low = lin * 12.92
-    clipped = np.clip(lin, 0.0, None)
+    mask = (lin.copy() <= 0.0031308).astype(lin.dtype)
+    low = lin.copy() * 12.92
+    clipped = np.clip(lin.copy(), 0.0, None)
     powed = clipped ** (1 / 2.4)
     high = 1.055 * powed - 0.055
     mask_low = mask * low
@@ -493,10 +493,16 @@ def resize_linear_light(
         return img.convert("RGB").resize(size, resampling)
     arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
     # Inlined rather than calling _srgb_to_linear_array — see the comment in
-    # _srgb_to_oklab_array for why.
-    mask = (arr <= 0.04045).astype(arr.dtype)
-    low = arr / 12.92
-    plus_055 = arr + 0.055
+    # _srgb_to_oklab_array for why. /debug/numeric further proved that on
+    # this host, a binary op on a large array (e.g. arr + 0.055) mutates its
+    # left operand in place and aliases it to the result, so any later read
+    # of that same array variable silently picks up the wrong, already
+    # "added-to" value instead of the original. Every operand that gets read
+    # more than once here is given its own .copy() immediately beforehand so
+    # each read starts from an untouched buffer.
+    mask = (arr.copy() <= 0.04045).astype(arr.dtype)
+    low = arr.copy() / 12.92
+    plus_055 = arr.copy() + 0.055
     div_1055 = plus_055 / 1.055
     high = div_1055 ** 2.4
     mask_low = mask * low
@@ -511,10 +517,11 @@ def resize_linear_light(
     ]
     lin_small = np.stack(channels, axis=-1)
     # Inlined rather than calling _linear_to_srgb_array — see the comment in
-    # _srgb_to_oklab_array.
-    mask2 = (lin_small <= 0.0031308).astype(lin_small.dtype)
-    low2 = lin_small * 12.92
-    clipped2 = np.clip(lin_small, 0.0, None)
+    # _srgb_to_oklab_array. See the comment above for why every reused
+    # operand gets its own .copy() first.
+    mask2 = (lin_small.copy() <= 0.0031308).astype(lin_small.dtype)
+    low2 = lin_small.copy() * 12.92
+    clipped2 = np.clip(lin_small.copy(), 0.0, None)
     powed2 = clipped2 ** (1 / 2.4)
     high2 = 1.055 * powed2 - 0.055
     mask_low2 = mask2 * low2
@@ -540,7 +547,7 @@ def debug_resize_linear_light_steps(
 
     # Isolate exactly which sub-operation of the high branch
     # (((arr+0.055)/1.055)**2.4) first goes wrong on this array size.
-    plus_055 = arr + 0.055
+    plus_055 = arr.copy() + 0.055
     div_1055 = plus_055 / 1.055
     pow_2_4 = div_1055 ** 2.4
     high_branch_breakdown = {
@@ -548,15 +555,22 @@ def debug_resize_linear_light_steps(
         "div_1055_at_center": div_1055[15, 15, :].tolist(),
         "pow_2_4_at_center": pow_2_4[15, 15, :].tolist(),
     }
+    # Confirms or refutes the theory that a binary op on a large array
+    # mutates its own left operand in place on this host: if that were still
+    # happening, arr itself would now read back as arr+0.055 instead of its
+    # original value.
+    arr_at_center_after_plus055 = arr[15, 15, :].tolist()
 
     # Instrument the real function's own internals directly (not a parallel
     # computation) since a structurally-different-but-equivalent computation
     # (the high_branch_breakdown above) gave correct results while calling
     # the actual function on the same array gave wrong results — meaning the
     # divergence is inside _srgb_to_linear_array's own extra steps (the mask
-    # and blend), not the power formula itself.
-    mask = (arr <= 0.04045).astype(arr.dtype)
-    low = arr / 12.92
+    # and blend). A follow-up test then proved arr itself was silently
+    # mutated in place by the earlier "arr + 0.055" op, so every operand read
+    # here now gets its own .copy() first.
+    mask = (arr.copy() <= 0.04045).astype(arr.dtype)
+    low = arr.copy() / 12.92
     mask_low = mask * low
     inv_mask = 1.0 - mask
     inv_mask_high = inv_mask * pow_2_4
@@ -588,6 +602,7 @@ def debug_resize_linear_light_steps(
         "input_rgb": list(rgb),
         "raw_pixel_at_center": list(raw_pixel_at_center),
         "arr_at_center": arr_at_center,
+        "arr_at_center_after_plus055": arr_at_center_after_plus055,
         "high_branch_breakdown": high_branch_breakdown,
         "real_fn_internals": real_fn_internals,
         "lin_before_resize": lin_at_center,
