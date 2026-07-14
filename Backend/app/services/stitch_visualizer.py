@@ -446,7 +446,10 @@ def debug_resize_linear_light_steps(
     rgb: tuple[int, int, int], size: tuple[int, int], resampling: Image.Resampling
 ) -> dict:
     img = Image.new("RGB", (200, 200), rgb)
-    arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    converted = img.convert("RGB")
+    raw_pixel_at_center = converted.getpixel((15, 15))
+    arr = np.asarray(converted, dtype=np.float64) / 255.0
+    arr_at_center = arr[15, 15, :].tolist()
     lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
     lin_at_center = lin[15, 15, :].tolist()
 
@@ -468,6 +471,8 @@ def debug_resize_linear_light_steps(
 
     return {
         "input_rgb": list(rgb),
+        "raw_pixel_at_center": list(raw_pixel_at_center),
+        "arr_at_center": arr_at_center,
         "lin_before_resize": lin_at_center,
         "lin_after_resize": lin_after_resize,
         "srgb_after_reencode": srgb_at_center,
