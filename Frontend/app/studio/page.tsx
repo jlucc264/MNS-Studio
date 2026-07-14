@@ -26,7 +26,6 @@ import PreviewControls, { PreviewSettings } from '../../components/PreviewContro
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { CanvasCreditPill } from '../../components/CanvasCreditPill'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
@@ -4481,6 +4480,7 @@ function StudioPage() {
               onProfile={() => void handleViewProfile()}
               onLogout={() => setShowLogoutConfirm(true)}
               onAdmin={() => navigateAwayFromStudio('/admin')}
+              pendingCents={pendingCents}
             />
           ) : (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
@@ -4490,8 +4490,6 @@ function StudioPage() {
         </div>
       </nav>
       )}
-
-      {!hideTopChrome && <CanvasCreditPill pendingCents={pendingCents} navHeight={NAV_HEIGHT} />}
 
       <div
         style={{

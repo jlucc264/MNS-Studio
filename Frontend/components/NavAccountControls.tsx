@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { UserAvatar } from './UserAvatar'
+import { formatCents } from '../lib/api'
 
 const ADMIN_USER_ID = process.env.NEXT_PUBLIC_ADMIN_USER_ID ?? ''
 
@@ -12,12 +13,14 @@ export function NavAccountControls({
   onLogout,
   onStudio,
   onAdmin,
+  pendingCents,
 }: {
   user?: User | null
   onProfile: () => void
   onLogout: () => void
   onStudio?: () => void
   onAdmin?: () => void
+  pendingCents?: number | null
 }) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -58,6 +61,23 @@ export function NavAccountControls({
             zIndex: 200,
           }}
         >
+          {pendingCents !== null && pendingCents !== undefined && pendingCents > 0 && (
+            <>
+              <div
+                title="Canvas credit available"
+                style={{
+                  padding: '11px 16px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#4a7244',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                🌿 {formatCents(pendingCents)} credit
+              </div>
+              <div style={{ height: 1, background: '#f0ece5', margin: '0 12px' }} />
+            </>
+          )}
           {onStudio && (
             <>
               <button

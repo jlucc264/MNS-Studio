@@ -12,7 +12,6 @@ import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, ge
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
-import { CanvasCreditPill } from '../../components/CanvasCreditPill'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
@@ -447,6 +446,7 @@ function GalleryPage() {
                 onLogout={() => setShowLogoutConfirm(true)}
                 onStudio={() => router.push('/studio')}
                 onAdmin={() => router.push('/admin')}
+                pendingCents={pendingCents}
               />
             </>
           ) : (
@@ -461,8 +461,6 @@ function GalleryPage() {
           )}
         </div>
       </nav>
-
-      <CanvasCreditPill pendingCents={pendingCents} />
 
       {hasActiveDesign && (
         <div style={{ background: '#eee7dc', borderBottom: '1px solid #d8cfc5', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center' }}>
