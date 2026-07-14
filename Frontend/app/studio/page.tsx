@@ -1467,6 +1467,7 @@ function StudioPage() {
     setViewMode('stitch')
     setGridKey((k) => k + 1)
     setActiveWorkflowStep(2)
+    markCurrentDesignClean()
   }
 
   function buildPaletteForCells(nextCells: string[][]) {
@@ -1692,7 +1693,9 @@ function StudioPage() {
       setFinalPreviewImagePath(null)
       setHasGeneratedPreview(true)
       setViewMode(hasGeneratedPreview ? previousViewMode : 'stitch')
-      if (!hasGeneratedPreview) { setToolMode('select'); setActivePaintColor(null) }
+      // First generation for this design (not a settings-tweak regenerate):
+      // nothing has been edited yet, so this shouldn't count as unsaved work.
+      if (!hasGeneratedPreview) { setToolMode('select'); setActivePaintColor(null); markCurrentDesignClean() }
       setActiveWorkflowStep(2)
       setSelectedRegions([])
     } finally {
@@ -3143,6 +3146,7 @@ function StudioPage() {
     setHasGeneratedPreview(true)
     setViewMode('stitch')
     setActiveWorkflowStep(2)
+    markCurrentDesignClean()
   }
 
   async function handlePatternImportFile(file: File) {
