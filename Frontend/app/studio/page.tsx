@@ -4733,6 +4733,7 @@ function StudioPage() {
               >
                 <GridEditor
                   centerKey={gridKey}
+                  isPhoneLandscape={isPhoneCanvasLandscape}
                   traceImageUrl={activeImagePath ? assetUrl(activeImagePath) : null}
                   traceOpacity={traceOpacity}
                   onTraceOpacityChange={setTraceOpacity}
@@ -4885,7 +4886,7 @@ function StudioPage() {
           </div>
 
           {isPhoneCanvasLandscape && !isFinalizeReview && (
-            <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6, zIndex: 35, pointerEvents: 'auto' }}>
+            <div style={{ position: 'absolute', bottom: 10, left: 20, display: 'flex', gap: 6, zIndex: 35, pointerEvents: 'auto' }}>
               <button
                 type="button"
                 onClick={handleUndoColorChange}

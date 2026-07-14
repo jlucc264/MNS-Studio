@@ -37,6 +37,10 @@ type Props = {
   floatingStamp?: { cells: (string | null)[][]; anchorRow: number; anchorCol: number } | null
   onStampMove?: (anchor: { row: number; col: number }) => void
   clearSelectionSignal?: number
+  // Phone landscape has so little horizontal room in this toolbar that the
+  // Trace slider (last in the row) gets pushed off since the row does not
+  // wrap. Compact everything else so it stays reachable without wrapping.
+  isPhoneLandscape?: boolean
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
@@ -514,6 +518,7 @@ export default function GridEditor({
   floatingStamp = null,
   onStampMove,
   clearSelectionSignal = 0,
+  isPhoneLandscape = false,
 }: Props) {
   if (!cells.length) return null
 
@@ -2178,8 +2183,8 @@ export default function GridEditor({
           flexWrap: 'wrap',
         }}
       >
-        <strong style={{ fontSize: isMobile ? 11 : 14 }}>Stitch Preview</strong>
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 8, flexShrink: 0 }}>
+        {!isPhoneLandscape && <strong style={{ fontSize: isMobile ? 11 : 14 }}>Stitch Preview</strong>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: isPhoneLandscape ? 2 : isMobile ? 4 : 8, flexShrink: 0 }}>
           <div
             style={{
               display: 'inline-grid',
@@ -2242,7 +2247,7 @@ export default function GridEditor({
             >
               −
             </button>
-            <span ref={zoomLabelRef} style={{ minWidth: 44, textAlign: 'center', fontSize: 13, userSelect: 'none' }}>
+            <span ref={zoomLabelRef} style={{ minWidth: isPhoneLandscape ? 32 : 44, textAlign: 'center', fontSize: 13, userSelect: 'none' }}>
               {Math.round(zoomPercent)}%
             </span>
             <button
@@ -2257,12 +2262,13 @@ export default function GridEditor({
           <button
             type="button"
             onClick={resetView}
+            aria-label="Reset view"
             style={{ padding: toolbarButtonPadding, border: '1px solid #d7d7d7', borderRadius: 999, background: '#ffffff', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', color: '#555', whiteSpace: 'nowrap' }}
           >
-            Reset
+            {isPhoneLandscape ? '↺' : 'Reset'}
           </button>
           {traceImageUrl && onTraceOpacityChange && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 11 : 12, color: '#8a8177', userSelect: 'none', flexShrink: 0 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: isPhoneLandscape ? 3 : 6, fontSize: isMobile ? 11 : 12, color: '#8a8177', userSelect: 'none', flexShrink: 0 }}>
               Trace
               <input
                 type="range"
@@ -2271,7 +2277,7 @@ export default function GridEditor({
                 step={0.01}
                 value={traceOpacity}
                 onChange={(e) => onTraceOpacityChange(parseFloat(e.target.value))}
-                style={{ width: isMobile ? 60 : 80, accentColor: '#6e8d67', cursor: 'pointer' }}
+                style={{ width: isPhoneLandscape ? 42 : isMobile ? 60 : 80, accentColor: '#6e8d67', cursor: 'pointer' }}
               />
             </label>
           )}
