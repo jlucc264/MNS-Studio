@@ -78,9 +78,9 @@ export type ChatActionItem = {
   to_code?: string
   setting?: string
   url?: string
-  width_inches?: number
-  height_inches?: number
-  mesh_count?: number
+  width_inches?: number | null
+  height_inches?: number | null
+  mesh_count?: number | null
   // draw_shape
   shape?: 'box' | 'arc' | 'line'
   r1?: number
@@ -169,7 +169,11 @@ async function throwVisualizeError(res: Response, label: string): Promise<never>
   try {
     const data = await res.json()
     detail = Array.isArray(data.detail)
-      ? data.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
+      ? data.detail.map((e: { loc?: Array<string | number>; msg?: string }) => {
+          const field = e.loc?.filter((part) => part !== 'body').join('.')
+          const message = e.msg ?? JSON.stringify(e)
+          return field ? `${field}: ${message}` : message
+        }).join('; ')
       : (data.detail ?? data.message ?? '')
   } catch {}
   throw new Error(`${label}${detail ? `: ${detail}` : ''}`)

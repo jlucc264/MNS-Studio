@@ -237,7 +237,7 @@ def fetch_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-@app.post("/chat", response_model=LlmChatResponse)
+@app.post("/chat", response_model=LlmChatResponse, response_model_exclude_none=True)
 def chat(request: LlmChatRequest):
     history = [{"role": m.role, "content": m.content} for m in request.history]
     result = chat_with_claude(request.message.strip(), request.context.model_dump(), history)
