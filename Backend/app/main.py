@@ -175,6 +175,10 @@ def debug_numeric():
 
     rt = sv._oklab_to_srgb_array(sv._srgb_to_oklab_array(np.array([[200.0, 30.0, 40.0]])))
     out["oklab_roundtrip"] = rt.round(3).tolist()
+
+    out["step_breakdown"] = sv.debug_resize_linear_light_steps(
+        (200, 30, 40), (30, 30), PILImage.Resampling.BILINEAR
+    )
     return out
 
 

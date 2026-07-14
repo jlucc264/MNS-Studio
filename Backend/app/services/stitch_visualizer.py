@@ -437,6 +437,58 @@ def resize_linear_light(
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
+# TEMPORARY diagnostic for the 2026-07 Render resize corruption (see the
+# comment above _verify_numeric_environment). Mirrors resize_linear_light
+# step by step so /debug/numeric can report where a solid color first goes
+# wrong: the sRGB->linear decode, Pillow's own F-mode .resize(), or the
+# linear->sRGB re-encode. Remove once the corruption is diagnosed and fixed.
+def debug_resize_linear_light_steps(
+    rgb: tuple[int, int, int], size: tuple[int, int], resampling: Image.Resampling
+) -> dict:
+    img = Image.new("RGB", (200, 200), rgb)
+    arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    lin = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+    lin_at_center = lin[15, 15, :].tolist()
+
+    resized_channels = [
+        Image.fromarray(lin[:, :, c].astype(np.float32), mode="F").resize(size, resampling)
+        for c in range(3)
+    ]
+    py, px = size[1] // 2, size[0] // 2
+    lin_after_resize = [chan.getpixel((px, py)) for chan in resized_channels]
+
+    lin_small = np.stack([np.asarray(chan) for chan in resized_channels], axis=-1)
+    srgb = np.where(
+        lin_small <= 0.0031308,
+        lin_small * 12.92,
+        1.055 * np.clip(lin_small, 0.0, None) ** (1 / 2.4) - 0.055,
+    )
+    srgb_at_center = srgb[py, px, :].tolist()
+    final = np.clip(srgb * 255.0, 0, 255).astype(np.uint8)[py, px, :].tolist()
+
+    return {
+        "input_rgb": list(rgb),
+        "lin_before_resize": lin_at_center,
+        "lin_after_resize": lin_after_resize,
+        "srgb_after_reencode": srgb_at_center,
+        "final_uint8": final,
+    }
+
+
+# Render's production host sets NPY_DISABLE_CPU_FEATURES (dashboard env var,
+# not read directly by this code — numpy applies it at import time). Value:
+# "SSSE3 SSE41 POPCNT SSE42 AVX F16C FMA3 AVX2" — every SIMD tier numpy
+# dispatches to above the universal SSE/SSE2/SSE3 baseline on this build.
+# Confirmed 2026-07-13 via /debug/numeric: resize_linear_light corrupted a
+# solid color at realistic sizes (200x200 -> 30x30) but not at the tiny size
+# the startup probe used (8x8 -> 4x4), and the corruption was identical
+# across a RAM upgrade and multiple redeploys/restarts — ruling out memory
+# pressure or "unlucky host" as the cause. That points at numpy's runtime
+# CPU feature dispatch selecting a SIMD code path this virtualized CPU
+# reports support for but doesn't correctly implement. Forcing numpy onto
+# its baseline dispatch path is the fix; if this env var is ever removed or
+# its feature list falls out of date with numpy's actual dispatch set,
+# expect the corruption (and the fallback below) to come back.
 def _verify_numeric_environment() -> bool:
     """Detect a numpy/Pillow install that computes wrong colors.
 
