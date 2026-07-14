@@ -478,6 +478,18 @@ def debug_resize_linear_light_steps(
     raw_pixel_at_center = converted.getpixel((15, 15))
     arr = np.asarray(converted, dtype=np.float64) / 255.0
     arr_at_center = arr[15, 15, :].tolist()
+
+    # Isolate exactly which sub-operation of the high branch
+    # (((arr+0.055)/1.055)**2.4) first goes wrong on this array size.
+    plus_055 = arr + 0.055
+    div_1055 = plus_055 / 1.055
+    pow_2_4 = div_1055 ** 2.4
+    high_branch_breakdown = {
+        "plus_055_at_center": plus_055[15, 15, :].tolist(),
+        "div_1055_at_center": div_1055[15, 15, :].tolist(),
+        "pow_2_4_at_center": pow_2_4[15, 15, :].tolist(),
+    }
+
     lin = _srgb_to_linear_array(arr)
     lin_at_center = lin[15, 15, :].tolist()
 
@@ -497,6 +509,7 @@ def debug_resize_linear_light_steps(
         "input_rgb": list(rgb),
         "raw_pixel_at_center": list(raw_pixel_at_center),
         "arr_at_center": arr_at_center,
+        "high_branch_breakdown": high_branch_breakdown,
         "lin_before_resize": lin_at_center,
         "lin_after_resize": lin_after_resize,
         "srgb_after_reencode": srgb_at_center,
