@@ -238,27 +238,42 @@ _OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
 # array, restricted to its own elements, so one branch's output can never
 # feed into the other regardless of how that composition bug manifests.
 def _srgb_to_linear_array(u: np.ndarray) -> np.ndarray:
-    # Boolean fancy-indexing assignment (the previous version of this
-    # function) raised "cannot assign N input values to the M output values
-    # where the mask is true" on Render production — the mask's own true
-    # count disagreed with the count boolean indexing produced from that
-    # same mask, which numpy guarantees can't happen. That's a second,
-    # distinct broken vectorized-array operation on this host (see the
-    # np.where comment above _verify_numeric_environment for the first).
-    # Elementwise multiply-by-mask avoids fancy indexing entirely — both
-    # branches are computed over the full array and blended arithmetically,
-    # using only basic ufuncs.
+    # Boolean fancy-indexing assignment (an earlier version of this function)
+    # raised "cannot assign N input values to the M output values where the
+    # mask is true" on Render production, and the np.where version before
+    # that silently mis-composed its two branches (see the comment above
+    # _verify_numeric_environment for that trail). The arithmetic-blend
+    # rewrite below fixed both of those, but /debug/numeric still showed
+    # wrong output here specifically, while an identical formula computed as
+    # separately-named steps (see debug_resize_linear_light_steps) came back
+    # correct on the same request. The one structural difference was that
+    # `high` here was one chained expression with anonymous intermediates
+    # that get created and freed mid-expression, versus named locals that
+    # stay alive. Something in this host's numpy build corrupts values when
+    # an anonymous temporary's buffer gets reused before it's fully read, so
+    # every intermediate is now forced into its own named variable to keep
+    # that from happening.
     mask = (u <= 0.04045).astype(u.dtype)
     low = u / 12.92
-    high = ((u + 0.055) / 1.055) ** 2.4
-    return mask * low + (1.0 - mask) * high
+    plus_055 = u + 0.055
+    div_1055 = plus_055 / 1.055
+    high = div_1055 ** 2.4
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * high
+    return mask_low + inv_mask_high
 
 
 def _linear_to_srgb_array(lin: np.ndarray) -> np.ndarray:
     mask = (lin <= 0.0031308).astype(lin.dtype)
     low = lin * 12.92
-    high = 1.055 * np.clip(lin, 0.0, None) ** (1 / 2.4) - 0.055
-    return mask * low + (1.0 - mask) * high
+    clipped = np.clip(lin, 0.0, None)
+    powed = clipped ** (1 / 2.4)
+    high = 1.055 * powed - 0.055
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * high
+    return mask_low + inv_mask_high
 
 
 def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
