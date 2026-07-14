@@ -278,14 +278,38 @@ def _linear_to_srgb_array(lin: np.ndarray) -> np.ndarray:
 
 def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
     u = rgb / 255.0
-    lin = _srgb_to_linear_array(u)
+    # Inlined rather than calling _srgb_to_linear_array: /debug/numeric proved
+    # this exact formula gives the correct result when run inline in the
+    # caller but the wrong (and always identically wrong) result when run
+    # through a call to that separate function, on the same input, on Render
+    # production only. Inlining sidesteps whatever that is without needing
+    # the root cause pinned down further.
+    mask = (u <= 0.04045).astype(u.dtype)
+    low = u / 12.92
+    plus_055 = u + 0.055
+    div_1055 = plus_055 / 1.055
+    high = div_1055 ** 2.4
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * high
+    lin = mask_low + inv_mask_high
     return np.cbrt(lin @ _OKLAB_M1.T) @ _OKLAB_M2.T
 
 
 def _oklab_to_srgb_array(lab: np.ndarray) -> np.ndarray:
     lms = (lab @ _OKLAB_M2_INV.T) ** 3
     lin = lms @ _OKLAB_M1_INV.T
-    u = _linear_to_srgb_array(lin)
+    # Inlined for the same reason as the decode side above, see
+    # _srgb_to_oklab_array.
+    mask = (lin <= 0.0031308).astype(lin.dtype)
+    low = lin * 12.92
+    clipped = np.clip(lin, 0.0, None)
+    powed = clipped ** (1 / 2.4)
+    high = 1.055 * powed - 0.055
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * high
+    u = mask_low + inv_mask_high
     return np.clip(u * 255.0, 0.0, 255.0)
 
 
@@ -468,7 +492,17 @@ def resize_linear_light(
     if not globals().get("_NUMPY_ENV_OK", True) or _FORCE_FALLBACK.get():
         return img.convert("RGB").resize(size, resampling)
     arr = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
-    lin = _srgb_to_linear_array(arr)
+    # Inlined rather than calling _srgb_to_linear_array — see the comment in
+    # _srgb_to_oklab_array for why.
+    mask = (arr <= 0.04045).astype(arr.dtype)
+    low = arr / 12.92
+    plus_055 = arr + 0.055
+    div_1055 = plus_055 / 1.055
+    high = div_1055 ** 2.4
+    mask_low = mask * low
+    inv_mask = 1.0 - mask
+    inv_mask_high = inv_mask * high
+    lin = mask_low + inv_mask_high
     channels = [
         np.asarray(
             Image.fromarray(lin[:, :, c].astype(np.float32), mode="F").resize(size, resampling)
@@ -476,7 +510,17 @@ def resize_linear_light(
         for c in range(3)
     ]
     lin_small = np.stack(channels, axis=-1)
-    srgb = _linear_to_srgb_array(lin_small)
+    # Inlined rather than calling _linear_to_srgb_array — see the comment in
+    # _srgb_to_oklab_array.
+    mask2 = (lin_small <= 0.0031308).astype(lin_small.dtype)
+    low2 = lin_small * 12.92
+    clipped2 = np.clip(lin_small, 0.0, None)
+    powed2 = clipped2 ** (1 / 2.4)
+    high2 = 1.055 * powed2 - 0.055
+    mask_low2 = mask2 * low2
+    inv_mask2 = 1.0 - mask2
+    inv_mask_high2 = inv_mask2 * high2
+    srgb = mask_low2 + inv_mask_high2
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
