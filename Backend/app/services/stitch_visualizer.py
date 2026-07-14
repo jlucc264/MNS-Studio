@@ -662,7 +662,9 @@ def _verify_numeric_environment() -> bool:
 _NUMPY_ENV_OK = _verify_numeric_environment()
 
 
-def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dither) -> Image.Image:
+def quantize_image_perceptual(
+    img: Image.Image, colors: int, dither: Image.Dither, source_type: str = "photo"
+) -> Image.Image:
     """Reduce an image to `colors` colors via weighted k-means in OKLab space.
 
     Replaces PIL's MEDIANCUT for the main quantization pass: median cut splits
@@ -708,10 +710,18 @@ def quantize_image_perceptual(img: Image.Image, colors: int, dither: Image.Dithe
             break
         centers = updated
 
-    centers = _merge_close_clusters(centers, lab, weights)
-    centers = _drop_blend_clusters(
-        centers, lab, weights, inverse, (rgb_img.height, rgb_img.width)
-    )
+    # Both of these read as "same thread family" / "canvas-stitch fringe" —
+    # correct for a photo of an already-stitched piece being re-imported,
+    # where a gray blend really is an anti-aliasing artifact between two
+    # threads. An ordinary photo or graphic has genuine continuous gradients
+    # (skin tones, fabric folds, lighting) that this same heuristic reads as
+    # duplicate/fringe clusters and collapses away, losing real detail no
+    # re-stitch scenario would call redundant.
+    if source_type == "stitched_photo":
+        centers = _merge_close_clusters(centers, lab, weights)
+        centers = _drop_blend_clusters(
+            centers, lab, weights, inverse, (rgb_img.height, rgb_img.width)
+        )
     palette = np.rint(_oklab_to_srgb_array(centers)).astype(np.uint8)
 
     if dither != Image.Dither.NONE:
@@ -2320,6 +2330,7 @@ def _generate_stitch_preview_impl(
             if source_type in {"stitched_photo", "graphic_art"} or photo_background_ratio >= ISOLATED_SUBJECT_BACKGROUND_RATIO
             else Image.Dither.FLOYDSTEINBERG
         ),
+        source_type=source_type,
     )
     quantized = normalize_background_after_quantization(quantized, source_type, clean_background)
     if source_type == "stitched_photo":
