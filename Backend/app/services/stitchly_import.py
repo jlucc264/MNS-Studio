@@ -32,7 +32,7 @@ _CODE_ALIASES = {
     "B5200": "B5200",
 }
 
-_BLANK_CODES = {"", "$null", "D00", "D0"}
+_BLANK_CODES = {"", "$null", "D00", "D0", "empty"}
 
 
 class StitchlyParseError(ValueError):
@@ -97,6 +97,15 @@ def parse_stitchly(file_bytes: bytes) -> dict:
 
     if not counts:
         raise StitchlyParseError("Pattern contains no stitches.")
+
+    if unknown_codes:
+        raise StitchlyParseError(
+            "This pattern uses color codes we can't match to a real needlepoint "
+            "thread (e.g. " + ", ".join(sorted(unknown_codes)[:6]) + "). It was "
+            "likely drawn from scratch using a different DMC thread line (such as "
+            "stranded cotton) rather than photo-imported, so we can't import it "
+            "without guessing at thread colors."
+        )
 
     palette_entries = [
         {
