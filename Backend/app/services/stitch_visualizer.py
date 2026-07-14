@@ -238,19 +238,27 @@ _OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
 # array, restricted to its own elements, so one branch's output can never
 # feed into the other regardless of how that composition bug manifests.
 def _srgb_to_linear_array(u: np.ndarray) -> np.ndarray:
-    mask = u <= 0.04045
-    out = np.empty_like(u)
-    out[mask] = u[mask] / 12.92
-    out[~mask] = ((u[~mask] + 0.055) / 1.055) ** 2.4
-    return out
+    # Boolean fancy-indexing assignment (the previous version of this
+    # function) raised "cannot assign N input values to the M output values
+    # where the mask is true" on Render production — the mask's own true
+    # count disagreed with the count boolean indexing produced from that
+    # same mask, which numpy guarantees can't happen. That's a second,
+    # distinct broken vectorized-array operation on this host (see the
+    # np.where comment above _verify_numeric_environment for the first).
+    # Elementwise multiply-by-mask avoids fancy indexing entirely — both
+    # branches are computed over the full array and blended arithmetically,
+    # using only basic ufuncs.
+    mask = (u <= 0.04045).astype(u.dtype)
+    low = u / 12.92
+    high = ((u + 0.055) / 1.055) ** 2.4
+    return mask * low + (1.0 - mask) * high
 
 
 def _linear_to_srgb_array(lin: np.ndarray) -> np.ndarray:
-    mask = lin <= 0.0031308
-    out = np.empty_like(lin)
-    out[mask] = lin[mask] * 12.92
-    out[~mask] = 1.055 * np.clip(lin[~mask], 0.0, None) ** (1 / 2.4) - 0.055
-    return out
+    mask = (lin <= 0.0031308).astype(lin.dtype)
+    low = lin * 12.92
+    high = 1.055 * np.clip(lin, 0.0, None) ** (1 / 2.4) - 0.055
+    return mask * low + (1.0 - mask) * high
 
 
 def _srgb_to_oklab_array(rgb: np.ndarray) -> np.ndarray:
