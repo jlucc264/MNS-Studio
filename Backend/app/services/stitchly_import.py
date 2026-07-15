@@ -5,89 +5,25 @@ under the "PatternData" key. The archive's root object carries the full
 project: `width`/`height` in stitches, `layerCodes` (a row-major NSArray of
 one DMC code string per stitch, "D"-prefixed, e.g. "D891"), `fabricCount`
 (mesh/fabric count), `patternName`, and the original source image bytes in
-`imageData`. Because the codes are authoritative DMC catalog numbers, no
-color quantization or snapping is involved — imports are exact.
+`imageData`. Each code is looked up in STITCHLY_DMC_COLORS (colors as
+Stitchly itself renders them, not our own DMC chart) rather than snapped
+or quantized, so an import shows the same colors the designer picked.
 """
 import plistlib
 
-from app.data.dmc_colors import DMC_COLORS
+from app.data.stitchly_dmc_colors import STITCHLY_DMC_COLORS
 from .stitch_visualizer import BLANK_CELL, rgb_to_hex
 
-_DMC_BY_CODE = {d["code"]: d for d in DMC_COLORS}
-
-# Stitchly's own "01"-"30" palette isn't part of the standard DMC catalog and
-# was never in our main table. Values below are pixel-sampled directly from
-# Stitchly's in-app color picker (2026-07-14), not looked up from a published
-# chart, so names are descriptive rather than official.
-_SUPPLEMENTAL_DMC = {
-    "01": {"code": "01", "name": "White Tin", "rgb": (231, 230, 230)},
-    "02": {"code": "02", "name": "Tin", "rgb": (197, 196, 200)},
-    "03": {"code": "03", "name": "Pewter", "rgb": (176, 176, 180)},
-    "04": {"code": "04", "name": "Charcoal Gray", "rgb": (156, 155, 157)},
-    "05": {"code": "05", "name": "Dusty Blush", "rgb": (223, 205, 192)},
-    "06": {"code": "06", "name": "Sand", "rgb": (216, 199, 186)},
-    "07": {"code": "07", "name": "Taupe", "rgb": (200, 185, 172)},
-    "08": {"code": "08", "name": "Cocoa", "rgb": (152, 126, 115)},
-    "09": {"code": "09", "name": "Espresso", "rgb": (78, 35, 23)},
-    "10": {"code": "10", "name": "Pale Chartreuse", "rgb": (240, 253, 220)},
-    "11": {"code": "11", "name": "Light Celery", "rgb": (228, 237, 187)},
-    "12": {"code": "12", "name": "Sage", "rgb": (207, 216, 160)},
-    "13": {"code": "13", "name": "Mint", "rgb": (202, 244, 225)},
-    "14": {"code": "14", "name": "Honeydew", "rgb": (216, 250, 185)},
-    "15": {"code": "15", "name": "Spring Green Light", "rgb": (214, 236, 171)},
-    "16": {"code": "16", "name": "Fern Green", "rgb": (174, 212, 134)},
-    "17": {"code": "17", "name": "Lemon", "rgb": (228, 226, 129)},
-    "18": {"code": "18", "name": "Olive Yellow", "rgb": (216, 213, 123)},
-    "19": {"code": "19", "name": "Golden Wheat", "rgb": (240, 203, 112)},
-    "20": {"code": "20", "name": "Peach", "rgb": (236, 178, 151)},
-    "21": {"code": "21", "name": "Terracotta", "rgb": (206, 155, 134)},
-    "22": {"code": "22", "name": "Brick Red", "rgb": (176, 101, 83)},
-    "23": {"code": "23", "name": "Pale Orchid", "rgb": (235, 226, 236)},
-    "24": {"code": "24", "name": "Light Lilac", "rgb": (222, 215, 236)},
-    "25": {"code": "25", "name": "Lilac Gray", "rgb": (216, 210, 231)},
-    "26": {"code": "26", "name": "Dusty Lilac", "rgb": (206, 200, 220)},
-    "27": {"code": "27", "name": "Pale Periwinkle", "rgb": (233, 236, 251)},
-    "28": {"code": "28", "name": "Violet", "rgb": (118, 80, 142)},
-    "29": {"code": "29", "name": "Deep Violet", "rgb": (97, 65, 115)},
-    "30": {"code": "30", "name": "Indigo", "rgb": (105, 85, 204)},
-    # This palette's numbering is not contiguous — it skips from 30 straight
-    # to 31 then jumps around (48, 51-53, 67, 69, 90, ...). Confirmed by
-    # cross-checking every code visible in the Stitchly color picker against
-    # our main DMC table: everything else in this same picker (150-156 and
-    # up) already resolves normally, only these are genuinely missing.
-    "31": {"code": "31", "name": "Deep Purple", "rgb": (83, 53, 157)},
-    "32": {"code": "32", "name": "Royal Purple", "rgb": (72, 47, 133)},
-    "33": {"code": "33", "name": "Magenta Pink", "rgb": (201, 92, 156)},
-    "34": {"code": "34", "name": "Mauve", "rgb": (161, 73, 126)},
-    "35": {"code": "35", "name": "Plum", "rgb": (106, 47, 83)},
-    "48": {"code": "48", "name": "Blush Pink", "rgb": (248, 216, 235)},
-    "51": {"code": "51", "name": "Amber", "rgb": (230, 150, 86)},
-    "52": {"code": "52", "name": "Indigo Purple", "rgb": (63, 39, 108)},
-    "53": {"code": "53", "name": "Slate Gray", "rgb": (85, 90, 97)},
-    "67": {"code": "67", "name": "Powder Blue", "rgb": (168, 190, 200)},
-    "69": {"code": "69", "name": "Rust", "rgb": (168, 67, 55)},
-    "90": {"code": "90", "name": "Marigold", "rgb": (243, 190, 89)},
-    "92": {"code": "92", "name": "Forest Green", "rgb": (81, 132, 76)},
-    "93": {"code": "93", "name": "Steel Blue", "rgb": (66, 98, 136)},
-    "94": {"code": "94", "name": "Olive", "rgb": (175, 173, 103)},
-    "99": {"code": "99", "name": "Rose", "rgb": (170, 75, 97)},
-    "105": {"code": "105", "name": "Chestnut", "rgb": (141, 68, 38)},
-    "106": {"code": "106", "name": "Tomato Red", "rgb": (205, 68, 57)},
-    "107": {"code": "107", "name": "Crimson", "rgb": (168, 40, 57)},
-    "111": {"code": "111", "name": "Copper Tan", "rgb": (199, 122, 84)},
-    "115": {"code": "115", "name": "Mahogany Red", "rgb": (147, 43, 19)},
-    "121": {"code": "121", "name": "Sky Blue", "rgb": (87, 150, 194)},
-    "125": {"code": "125", "name": "Soft Sage", "rgb": (168, 197, 168)},
-}
+# Deliberately not the main DMC_COLORS table: colors here are pixel-sampled
+# from Stitchly's own color picker, not our published DMC chart, so an
+# import renders the same colors the designer actually saw and picked on
+# their screen. Keeping this table separate means changes here can never
+# affect photo/graphic quantization or DMC snapping elsewhere in the app.
+_STITCHLY_DMC_BY_CODE = {d["code"]: d for d in STITCHLY_DMC_COLORS}
 _UNKNOWN_CODE_RGB = (176, 176, 176)
 
-# Stitchly uses DMC's French/catalog labels for a few threads our table
-# stores under different codes.
 _CODE_ALIASES = {
-    "BLANC": "White",
-    "WHITE": "White",
-    "ECRU": "Ecru",
-    "B5200": "B5200",
+    "WHITE": "BLANC",
 }
 
 _BLANK_CODES = {"", "$null", "D00", "D0", "empty"}
@@ -110,10 +46,8 @@ def _lookup_code(code: str) -> dict:
     code = code.rsplit(" ", 1)[-1]
     bare = code[1:] if code.startswith("D") else code
     bare = _CODE_ALIASES.get(bare.upper(), bare)
-    if bare in _DMC_BY_CODE:
-        return _DMC_BY_CODE[bare]
-    if bare in _SUPPLEMENTAL_DMC:
-        return _SUPPLEMENTAL_DMC[bare]
+    if bare in _STITCHLY_DMC_BY_CODE:
+        return _STITCHLY_DMC_BY_CODE[bare]
     return {"code": bare, "name": f"DMC {bare} (approximate)", "rgb": _UNKNOWN_CODE_RGB}
 
 
