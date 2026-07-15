@@ -1292,6 +1292,15 @@ function StudioPage() {
     [draftSettings, hasGeneratedPreview, lastSettings]
   )
   const isBlankCanvas = !activeImagePath && hasGeneratedPreview
+  // A Stitchly/pattern import also has no activeImagePath (imported cells
+  // are the source of truth, see applyImportedPattern) but already carries
+  // real content, unlike a genuinely blank canvas with nothing stitched
+  // into it yet. undoStack.length alone cannot tell these apart since an
+  // import never goes through an undo-tracked edit on its own.
+  const hasStitchedContent = useMemo(
+    () => cells.some((row) => row.some((cell) => cell !== BLANK_CELL)),
+    [cells]
+  )
   const isUnauthenticatedWithCanvas = !session && hasActiveCanvas
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
@@ -4040,8 +4049,8 @@ function StudioPage() {
             <button
               type="button"
               onClick={() => setActiveWorkflowStep(3)}
-              disabled={!activeImagePath && undoStack.length === 0}
-              style={{ ...btnSecondary, opacity: !activeImagePath && undoStack.length === 0 ? 0.4 : 1 }}
+              disabled={!activeImagePath && undoStack.length === 0 && !hasStitchedContent}
+              style={{ ...btnSecondary, opacity: !activeImagePath && undoStack.length === 0 && !hasStitchedContent ? 0.4 : 1 }}
             >
               Continue to Finalize →
             </button>
