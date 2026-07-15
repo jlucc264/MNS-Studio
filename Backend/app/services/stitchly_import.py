@@ -102,6 +102,12 @@ def _resolve(objects: list, value):
 
 
 def _lookup_code(code: str) -> dict:
+    # Custom/blended color instances are stored as "{uuid}-{index} D{code}"
+    # (e.g. "E7D1C03E-6A59-43F3-8C66-AC1142B3B3DC-1 D3846") — the UUID
+    # tracks the specific painted instance, but the real thread code is
+    # always the last whitespace-separated token. Plain codes have no
+    # space, so this is a no-op for them.
+    code = code.rsplit(" ", 1)[-1]
     bare = code[1:] if code.startswith("D") else code
     bare = _CODE_ALIASES.get(bare.upper(), bare)
     if bare in _DMC_BY_CODE:
