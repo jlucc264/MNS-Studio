@@ -50,6 +50,34 @@ _SUPPLEMENTAL_DMC = {
     "28": {"code": "28", "name": "Violet", "rgb": (118, 80, 142)},
     "29": {"code": "29", "name": "Deep Violet", "rgb": (97, 65, 115)},
     "30": {"code": "30", "name": "Indigo", "rgb": (105, 85, 204)},
+    # This palette's numbering is not contiguous — it skips from 30 straight
+    # to 31 then jumps around (48, 51-53, 67, 69, 90, ...). Confirmed by
+    # cross-checking every code visible in the Stitchly color picker against
+    # our main DMC table: everything else in this same picker (150-156 and
+    # up) already resolves normally, only these are genuinely missing.
+    "31": {"code": "31", "name": "Deep Purple", "rgb": (83, 53, 157)},
+    "32": {"code": "32", "name": "Royal Purple", "rgb": (72, 47, 133)},
+    "33": {"code": "33", "name": "Magenta Pink", "rgb": (201, 92, 156)},
+    "34": {"code": "34", "name": "Mauve", "rgb": (161, 73, 126)},
+    "35": {"code": "35", "name": "Plum", "rgb": (106, 47, 83)},
+    "48": {"code": "48", "name": "Blush Pink", "rgb": (248, 216, 235)},
+    "51": {"code": "51", "name": "Amber", "rgb": (230, 150, 86)},
+    "52": {"code": "52", "name": "Indigo Purple", "rgb": (63, 39, 108)},
+    "53": {"code": "53", "name": "Slate Gray", "rgb": (85, 90, 97)},
+    "67": {"code": "67", "name": "Powder Blue", "rgb": (168, 190, 200)},
+    "69": {"code": "69", "name": "Rust", "rgb": (168, 67, 55)},
+    "90": {"code": "90", "name": "Marigold", "rgb": (243, 190, 89)},
+    "92": {"code": "92", "name": "Forest Green", "rgb": (81, 132, 76)},
+    "93": {"code": "93", "name": "Steel Blue", "rgb": (66, 98, 136)},
+    "94": {"code": "94", "name": "Olive", "rgb": (175, 173, 103)},
+    "99": {"code": "99", "name": "Rose", "rgb": (170, 75, 97)},
+    "105": {"code": "105", "name": "Chestnut", "rgb": (141, 68, 38)},
+    "106": {"code": "106", "name": "Tomato Red", "rgb": (205, 68, 57)},
+    "107": {"code": "107", "name": "Crimson", "rgb": (168, 40, 57)},
+    "111": {"code": "111", "name": "Copper Tan", "rgb": (199, 122, 84)},
+    "115": {"code": "115", "name": "Mahogany Red", "rgb": (147, 43, 19)},
+    "121": {"code": "121", "name": "Sky Blue", "rgb": (87, 150, 194)},
+    "125": {"code": "125", "name": "Soft Sage", "rgb": (168, 197, 168)},
 }
 _UNKNOWN_CODE_RGB = (176, 176, 176)
 
