@@ -702,10 +702,8 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
 
     creator_user_id = None
     if request.parent_gallery_item_id:
-        from app.services.supabase_db import get_gallery_item
-        parent = get_gallery_item(request.parent_gallery_item_id)
-        if parent:
-            creator_user_id = parent.get("user_id")
+        from app.services.supabase_db import resolve_root_creator_id
+        creator_user_id = resolve_root_creator_id(request.parent_gallery_item_id)
 
     try:
         url = create_print_own_checkout(
@@ -724,7 +722,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
 
 @app.post("/checkout/template/{item_id}", response_model=CheckoutResponse)
 def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
-    from app.services.supabase_db import get_gallery_item
+    from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
     item = get_gallery_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
@@ -732,7 +730,7 @@ def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_u
         url = create_template_checkout(
             gallery_item_id=item_id,
             gallery_item_title=item.get("title", "Untitled"),
-            creator_user_id=item.get("user_id", ""),
+            creator_user_id=resolve_root_creator_id(item_id) or "",
             pdf_url=item.get("pdf_url", ""),
             buyer_user_id=user_id,
         )
@@ -743,7 +741,7 @@ def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_u
 
 @app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
 def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
-    from app.services.supabase_db import get_gallery_item
+    from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
     item = get_gallery_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
@@ -758,7 +756,7 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
         url = create_gallery_print_checkout(
             gallery_item_id=item_id,
             gallery_item_title=item.get("title", "Untitled"),
-            creator_user_id=item.get("user_id", ""),
+            creator_user_id=resolve_root_creator_id(item_id) or "",
             pdf_url=item.get("pdf_url", ""),
             width_inches=width,
             height_inches=height,
@@ -771,7 +769,7 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
 
 @app.post("/checkout/cart", response_model=CheckoutResponse)
 def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_current_user_id)):
-    from app.services.supabase_db import get_gallery_item
+    from app.services.supabase_db import resolve_root_creator_id
     if not request.items:
         raise HTTPException(status_code=422, detail="Cart is empty.")
 
@@ -782,9 +780,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
         creator_user_id = None
         creator_gallery_item_id = item.gallery_item_id or item.parent_gallery_item_id
         if creator_gallery_item_id:
-            gi = get_gallery_item(creator_gallery_item_id)
-            if gi:
-                creator_user_id = gi.get("user_id")
+            creator_user_id = resolve_root_creator_id(creator_gallery_item_id)
         items_data.append({
             "pdf_url": item.pdf_url,
             "internal_pdf_supabase_path": item.internal_pdf_supabase_path,

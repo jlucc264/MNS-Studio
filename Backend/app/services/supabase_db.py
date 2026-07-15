@@ -184,6 +184,30 @@ def get_gallery_item(item_id: str, user_id: str | None = None) -> dict | None:
     return _normalize_gallery_item(result[0], liked_ids)
 
 
+def resolve_root_creator_id(gallery_item_id: str, _seen: set | None = None) -> str | None:
+    """Walk parent_gallery_item_id up to the original, non-remixed item and
+    return its owner's user_id.
+
+    Remixing a design must never earn its own creator royalty — otherwise a
+    "shameless recreation" (a near-copy republished as its own gallery entry,
+    or a remix-of-a-remix chain) could funnel print royalties to whoever
+    last relabeled the design instead of whoever actually made it. Royalties
+    always flow to the root, no matter how many times it has been remixed
+    and republished in between.
+    """
+    seen = _seen or set()
+    if gallery_item_id in seen:
+        return None
+    seen.add(gallery_item_id)
+    item = get_gallery_item(gallery_item_id)
+    if not item:
+        return None
+    parent_id = item.get("parent_gallery_item_id")
+    if parent_id:
+        return resolve_root_creator_id(parent_id, seen) or item.get("user_id")
+    return item.get("user_id")
+
+
 def get_gallery_item_by_project_id(project_id: str) -> dict | None:
     encoded = quote(project_id, safe="")
     result = _request("GET", "/gallery_items", params=f"project_id=eq.{encoded}&select=*&limit=1")
