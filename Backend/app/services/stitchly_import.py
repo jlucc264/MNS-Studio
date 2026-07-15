@@ -15,11 +15,41 @@ from .stitch_visualizer import BLANK_CELL, rgb_to_hex
 
 _DMC_BY_CODE = {d["code"]: d for d in DMC_COLORS}
 
-# DMC's 2017 "01-35" range isn't in our main table yet; approximate the two
-# codes observed in real Stitchly exports so their stitches aren't dropped.
+# Stitchly's own "01"-"30" palette isn't part of the standard DMC catalog and
+# was never in our main table. Values below are pixel-sampled directly from
+# Stitchly's in-app color picker (2026-07-14), not looked up from a published
+# chart, so names are descriptive rather than official.
 _SUPPLEMENTAL_DMC = {
-    "01": {"code": "01", "name": "White Tin", "rgb": (227, 227, 225)},
-    "02": {"code": "02", "name": "Tin", "rgb": (200, 200, 203)},
+    "01": {"code": "01", "name": "White Tin", "rgb": (231, 230, 230)},
+    "02": {"code": "02", "name": "Tin", "rgb": (197, 196, 200)},
+    "03": {"code": "03", "name": "Pewter", "rgb": (176, 176, 180)},
+    "04": {"code": "04", "name": "Charcoal Gray", "rgb": (156, 155, 157)},
+    "05": {"code": "05", "name": "Dusty Blush", "rgb": (223, 205, 192)},
+    "06": {"code": "06", "name": "Sand", "rgb": (216, 199, 186)},
+    "07": {"code": "07", "name": "Taupe", "rgb": (200, 185, 172)},
+    "08": {"code": "08", "name": "Cocoa", "rgb": (152, 126, 115)},
+    "09": {"code": "09", "name": "Espresso", "rgb": (78, 35, 23)},
+    "10": {"code": "10", "name": "Pale Chartreuse", "rgb": (240, 253, 220)},
+    "11": {"code": "11", "name": "Light Celery", "rgb": (228, 237, 187)},
+    "12": {"code": "12", "name": "Sage", "rgb": (207, 216, 160)},
+    "13": {"code": "13", "name": "Mint", "rgb": (202, 244, 225)},
+    "14": {"code": "14", "name": "Honeydew", "rgb": (216, 250, 185)},
+    "15": {"code": "15", "name": "Spring Green Light", "rgb": (214, 236, 171)},
+    "16": {"code": "16", "name": "Fern Green", "rgb": (174, 212, 134)},
+    "17": {"code": "17", "name": "Lemon", "rgb": (228, 226, 129)},
+    "18": {"code": "18", "name": "Olive Yellow", "rgb": (216, 213, 123)},
+    "19": {"code": "19", "name": "Golden Wheat", "rgb": (240, 203, 112)},
+    "20": {"code": "20", "name": "Peach", "rgb": (236, 178, 151)},
+    "21": {"code": "21", "name": "Terracotta", "rgb": (206, 155, 134)},
+    "22": {"code": "22", "name": "Brick Red", "rgb": (176, 101, 83)},
+    "23": {"code": "23", "name": "Pale Orchid", "rgb": (235, 226, 236)},
+    "24": {"code": "24", "name": "Light Lilac", "rgb": (222, 215, 236)},
+    "25": {"code": "25", "name": "Lilac Gray", "rgb": (216, 210, 231)},
+    "26": {"code": "26", "name": "Dusty Lilac", "rgb": (206, 200, 220)},
+    "27": {"code": "27", "name": "Pale Periwinkle", "rgb": (233, 236, 251)},
+    "28": {"code": "28", "name": "Violet", "rgb": (118, 80, 142)},
+    "29": {"code": "29", "name": "Deep Violet", "rgb": (97, 65, 115)},
+    "30": {"code": "30", "name": "Indigo", "rgb": (105, 85, 204)},
 }
 _UNKNOWN_CODE_RGB = (176, 176, 176)
 
