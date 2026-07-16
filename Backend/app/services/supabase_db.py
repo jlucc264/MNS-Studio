@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -69,13 +70,27 @@ def log_chat(user_message: str, assistant_reply: str, actions: list, context: di
     except Exception as exc:
         logger.warning("Chat log write failed: %s", exc)
 
-def get_logo_cells(mesh_count: int) -> list[list[str]] | None:
-    name = quote(f"Logo - {mesh_count} Mesh", safe="")
-    result = _request("GET", "/projects", params=f"name=eq.{name}&select=cells&limit=1")
+def get_creator_signature(user_id: str) -> str | None:
+    encoded = quote(user_id, safe="")
+    result = _request("GET", "/creator_signatures", params=f"user_id=eq.{encoded}&select=image_url&limit=1")
     rows = result if isinstance(result, list) else []
-    if rows and rows[0].get("cells"):
-        return rows[0]["cells"]
+    if rows and rows[0].get("image_url"):
+        return rows[0]["image_url"]
     return None
+
+
+def upsert_creator_signature(user_id: str, image_url: str) -> bool:
+    encoded = quote(user_id, safe="")
+    updated = _request(
+        "PATCH",
+        "/creator_signatures",
+        body={"image_url": image_url, "updated_at": datetime.now(timezone.utc).isoformat()},
+        params=f"user_id=eq.{encoded}",
+    )
+    if isinstance(updated, list) and updated:
+        return True
+    created = _request("POST", "/creator_signatures", body={"user_id": user_id, "image_url": image_url})
+    return isinstance(created, list) and bool(created)
 
 
 def list_projects(user_id: str) -> list[dict]:

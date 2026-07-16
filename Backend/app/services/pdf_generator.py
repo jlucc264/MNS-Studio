@@ -1,8 +1,11 @@
+import logging
 import math
 from pathlib import Path
 from io import BytesIO
 from collections import Counter
 from datetime import datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
@@ -11,6 +14,8 @@ from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
 from PIL import Image, ImageDraw
 
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
+
+logger = logging.getLogger(__name__)
 
 DISPLAY_CELL_SIZE = 12
 
@@ -41,11 +46,37 @@ CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
 
+# Signature placement: centered in the margin band beyond the design's own
+# bottom-right corner, 1" from both the design edge and the outer canvas
+# edge (so it never overlaps the stitches and never runs off the fabric).
+SIGNATURE_INSET_IN = 1.0
+SIGNATURE_MAX_WIDTH_IN = 1.5
+SIGNATURE_MAX_HEIGHT_IN = 1.0
+
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
     cleaned = asset_url.lstrip("/")
     return ASSETS_DIR.parent / cleaned
+
+
+def load_signature_image(image_url: str | None) -> Image.Image | None:
+    """Load a creator signature from its stored URL (local `/assets/...` path
+    or an absolute Supabase storage URL). Returns None on any failure so a
+    missing/broken signature never blocks a print job."""
+    if not image_url:
+        return None
+    try:
+        if image_url.startswith("http://") or image_url.startswith("https://"):
+            request = Request(image_url, headers={"User-Agent": "MNS/1.0"})
+            with urlopen(request, timeout=15) as response:
+                data = response.read()
+        else:
+            data = _resolve_asset_path(image_url).read_bytes()
+        return Image.open(BytesIO(data)).convert("RGBA")
+    except (OSError, HTTPError, URLError, Image.UnidentifiedImageError) as exc:
+        logger.warning("Failed to load signature image %s: %s", image_url, exc)
+        return None
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -71,7 +102,7 @@ def _render_preview_image_from_cells(
     include_border: bool = True,
     grid_color: tuple = GRID_COLOR,
     grid_line_width: int = 1,
-    logo_cells: list[list[str]] | None = None,
+    signature_image: Image.Image | None = None,
     border_inches: float = BORDER_INCHES,
 ) -> Image.Image:
     stitch_height = len(cells)
@@ -108,26 +139,25 @@ def _render_preview_image_from_cells(
         for y in range(0, display_h + 1, DISPLAY_CELL_SIZE):
             draw.line([(0, y), (display_w, y)], fill=grid_color, width=grid_line_width)
 
-    if include_border and logo_cells and border_stitches > 0:
-        cropped_logo = _crop_to_content(logo_cells)
-        logo_h = len(cropped_logo)
-        logo_w = len(cropped_logo[0]) if logo_h else 0
-        if logo_w and logo_h:
-            logo_img = Image.new("RGBA", (logo_w, logo_h), (255, 255, 255, 0))
-            logo_img.putdata([
-                (255, 255, 255, 0) if cell == BLANK_CELL
-                else (0, 0, 0, 255) if cell == FINISH_OUTLINE_CELL
-                else (*_hex_to_rgb(cell), 255)
-                for row in cropped_logo
-                for cell in row
-            ])
-            logo_display_w = logo_w * DISPLAY_CELL_SIZE
-            logo_display_h = logo_h * DISPLAY_CELL_SIZE
-            logo_scaled = logo_img.resize((logo_display_w, logo_display_h), Image.Resampling.NEAREST)
-            padding = DISPLAY_CELL_SIZE
-            paste_x = display_w - logo_display_w - padding
-            paste_y = display_h - logo_display_h - padding
-            preview.paste(logo_scaled, (paste_x, paste_y), logo_scaled)
+    if include_border and signature_image and border_stitches > 0:
+        px_per_inch = mesh_count * DISPLAY_CELL_SIZE
+        design_right_px = border_stitches * DISPLAY_CELL_SIZE + stitch_width * DISPLAY_CELL_SIZE
+        design_bottom_px = border_stitches * DISPLAY_CELL_SIZE + stitch_height * DISPLAY_CELL_SIZE
+        inset_px = SIGNATURE_INSET_IN * px_per_inch
+        center_x = design_right_px + inset_px
+        center_y = design_bottom_px + inset_px
+
+        max_w_px = SIGNATURE_MAX_WIDTH_IN * px_per_inch
+        max_h_px = SIGNATURE_MAX_HEIGHT_IN * px_per_inch
+        sig_w, sig_h = signature_image.size
+        if sig_w and sig_h:
+            scale = min(max_w_px / sig_w, max_h_px / sig_h, 1.0)
+            box_w = max(1, round(sig_w * scale))
+            box_h = max(1, round(sig_h * scale))
+            sig_scaled = signature_image.resize((box_w, box_h), Image.Resampling.LANCZOS)
+            paste_x = round(center_x - box_w / 2)
+            paste_y = round(center_y - box_h / 2)
+            preview.paste(sig_scaled, (paste_x, paste_y), sig_scaled)
 
     return preview
 
@@ -471,7 +501,7 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-    logo_cells: list[list[str]] | None = None,
+    signature_image: Image.Image | None = None,
 ) -> tuple[str, Path, Path, str, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
@@ -483,9 +513,9 @@ def generate_preview_pdf(
     design_h = len(preview_cells) / mesh_count if preview_cells else height_inches
 
     page_size = landscape(letter) if design_w > design_h else letter
-    # Cover preview: design + 2" canvas margin on each side, with logo
+    # Cover preview: design + 2" canvas margin on each side, with signature
     preview_image = _render_preview_image_from_cells(
-        preview_cells, mesh_count, show_grid, logo_cells=logo_cells, border_inches=2.0,
+        preview_cells, mesh_count, show_grid, signature_image=signature_image, border_inches=2.0,
     )
     preview_image.save(preview_path, format="PNG")
     # Report thumbnail: just the design (no canvas border) so it fills the small thumb area
@@ -803,11 +833,13 @@ def generate_roll_print_pdf(
     designs: list[dict],
     roll_width_inches: float = 8.0,
     gap_inches: float = 2.0,
-    logo_cells_by_mesh: dict[int, list[list[str]]] | None = None,
     x_offset_pts: float = 0.0,
     skew_correction_pts: float = 0.0,
     y_scale: float = 1.0,
 ) -> Path:
+    """`designs` items may include an optional `signature_image` (PIL RGBA image,
+    already resolved to the design's creator) drawn into the design's own 2"
+    margin — see `_render_preview_image_from_cells`."""
     roll_width_pts = roll_width_inches * 72
     gap_pts = gap_inches * 72
     top_margin_pts = 36.0
@@ -820,9 +852,13 @@ def generate_roll_print_pdf(
         mesh = design.get("mesh_count", 18)
         stitch_h = len(cells)
         stitch_w = len(cells[0]) if stitch_h else 0
-        draw_w = (stitch_w / mesh) * 72
-        draw_h = (stitch_h / mesh) * 72 * y_scale
-        img = _render_preview_image_from_cells(cells, mesh, show_grid=False, include_border=False)
+        border_stitches = int(2.0 * mesh)
+        draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
+        draw_h = ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale
+        img = _render_preview_image_from_cells(
+            cells, mesh, show_grid=False, include_border=True, border_inches=2.0,
+            signature_image=design.get("signature_image"),
+        )
         rendered.append({
             "img": img,
             "draw_w": draw_w,
@@ -875,36 +911,6 @@ def generate_roll_print_pdf(
             preserveAspectRatio=False,
             mask="auto",
         )
-        # Draw logo in bottom-right of this design's canvas margin area
-        logo_cells = (logo_cells_by_mesh or {}).get(rendered[i].get("mesh", 18))
-        if logo_cells:
-            logo_cells = _crop_to_content(logo_cells)
-            logo_ch = len(logo_cells)
-            logo_cw = len(logo_cells[0]) if logo_ch else 0
-            mesh = rendered[i].get("mesh", 18)
-            if logo_cw and logo_ch:
-                logo_pts_w = (logo_cw / mesh) * 72
-                logo_pts_h = (logo_ch / mesh) * 72
-                logo_img_raw = Image.new("RGBA", (logo_cw, logo_ch), (255, 255, 255, 0))
-                logo_img_raw.putdata([
-                    (255, 255, 255, 0) if cell == BLANK_CELL
-                    else (0, 0, 0, 255) if cell == FINISH_OUTLINE_CELL
-                    else (*_hex_to_rgb(cell), 255)
-                    for row in logo_cells
-                    for cell in row
-                ])
-                logo_buf = BytesIO()
-                logo_img_raw.save(logo_buf, format="PNG")
-                logo_buf.seek(0)
-                padding_pts = 4
-                logo_x = roll_width_pts - logo_pts_w - padding_pts
-                logo_y = img_bottom - logo_pts_h - padding_pts
-                pdf.drawImage(
-                    ImageReader(logo_buf),
-                    logo_x, logo_y,
-                    width=logo_pts_w, height=logo_pts_h,
-                    preserveAspectRatio=False, mask="auto",
-                )
 
         y = img_bottom
 

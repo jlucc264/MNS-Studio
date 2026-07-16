@@ -27,11 +27,18 @@ create table if not exists public.creator_earnings (
   paid_out_at timestamptz
 );
 
+create table if not exists public.creator_signatures (
+  user_id text primary key,
+  image_url text not null,
+  updated_at timestamptz default now()
+);
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
 grant select, insert, update, delete on table public.gallery_items to service_role;
 grant select, insert, update, delete on table public.gallery_likes to service_role;
 grant select, insert, update on table public.creator_earnings to service_role;
+grant select, insert, update, delete on table public.creator_signatures to service_role;
 
 grant usage, select on all sequences in schema public to service_role;

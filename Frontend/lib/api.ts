@@ -819,6 +819,32 @@ export async function updateMyCreatorName(
   return res.json()
 }
 
+export async function getMySignature(accessToken: string): Promise<{ image_url: string | null }> {
+  const res = await fetch(`${API_BASE}/profile/signature`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not load signature')
+  }
+  return res.json()
+}
+
+export async function saveMySignature(blob: Blob, accessToken: string): Promise<{ image_url: string }> {
+  const form = new FormData()
+  form.append('file', blob, 'signature.png')
+  const res = await fetch(`${API_BASE}/profile/signature`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: form,
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not save signature')
+  }
+  return res.json()
+}
+
 export async function getCreatorProfile(slug: string, accessToken?: string | null): Promise<CreatorProfile> {
   const res = await fetch(`${API_BASE}/gallery/creator/${encodeURIComponent(slug)}`, {
     headers: authHeaders(accessToken),

@@ -1,9 +1,10 @@
 'use client'
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from './AuthProvider'
-import { updateMyCreatorName } from '../lib/api'
+import { updateMyCreatorName, getMySignature, saveMySignature } from '../lib/api'
 import { useIsTouch } from '../lib/useViewport'
+import { SignaturePad } from './SignaturePad'
 
 const inputStyle = {
   width: '100%',
@@ -49,6 +50,33 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null)
+  const [savingSignature, setSavingSignature] = useState(false)
+  const [signatureError, setSignatureError] = useState('')
+  const [redrawingSignature, setRedrawingSignature] = useState(false)
+
+  useEffect(() => {
+    if (!session?.access_token) return
+    getMySignature(session.access_token)
+      .then((res) => setSignatureUrl(res.image_url))
+      .catch(() => {})
+  }, [session?.access_token])
+
+  async function handleSaveSignature(blob: Blob) {
+    if (!session?.access_token) return
+    setSavingSignature(true)
+    setSignatureError('')
+    try {
+      const res = await saveMySignature(blob, session.access_token)
+      setSignatureUrl(res.image_url)
+      setRedrawingSignature(false)
+    } catch (err) {
+      setSignatureError(err instanceof Error ? err.message : 'Could not save signature.')
+    } finally {
+      setSavingSignature(false)
+    }
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -116,6 +144,28 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
             autoFocus={!isTouch}
             style={inputStyle}
           />
+        </div>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: '#3f382f' }}>Signature</label>
+          <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
+            Printed in the corner of every canvas you finalize.
+          </p>
+          {signatureUrl && !redrawingSignature ? (
+            <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={signatureUrl}
+                alt="Your signature"
+                style={{ maxWidth: 200, maxHeight: 100, border: '1px solid #d7d0c8', borderRadius: 8, background: '#fffdf8' }}
+              />
+              <button type="button" onClick={() => setRedrawingSignature(true)} style={btnSecondary}>
+                Redraw
+              </button>
+            </div>
+          ) : (
+            <SignaturePad onSave={handleSaveSignature} saving={savingSignature} />
+          )}
+          {signatureError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{signatureError}</p>}
         </div>
         {error && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{error}</p>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

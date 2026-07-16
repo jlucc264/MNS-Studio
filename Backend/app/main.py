@@ -45,7 +45,7 @@ from app.models import (
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
-from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf
+from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, load_signature_image
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import (
     send_contact_email,
@@ -79,6 +79,9 @@ from app.services.supabase_db import (
     update_creator_name,
     increment_gallery_share,
     log_chat,
+    get_creator_signature,
+    upsert_creator_signature,
+    resolve_root_creator_id,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
 from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
@@ -343,9 +346,9 @@ def visualize(request: VisualizeRequest):
     }
 
 @app.post("/finalize", response_model=FinalizeResponse)
-def finalize(request: FinalizeRequest):
-    from app.services.supabase_db import get_logo_cells
+def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optional_user_id)):
     delete_finalized_output(request.previous_pdf_url)
+    signature_image = load_signature_image(get_creator_signature(user_id)) if user_id else None
     pdf_url, public_pdf_path, internal_pdf_path, preview_image_url, preview_image_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
@@ -356,7 +359,7 @@ def finalize(request: FinalizeRequest):
         show_grid=request.show_grid,
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
-        logo_cells=get_logo_cells(request.mesh_count),
+        signature_image=signature_image,
     )
     supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
     if supabase_pdf_url:
@@ -658,6 +661,22 @@ def get_my_earnings(user_id: str = Depends(get_current_user_id)):
     return get_creator_earnings(user_id)
 
 
+@app.get("/profile/signature")
+def get_my_signature(user_id: str = Depends(get_current_user_id)):
+    return {"image_url": get_creator_signature(user_id)}
+
+
+@app.post("/profile/signature")
+def save_my_signature(file: UploadFile = File(...), user_id: str = Depends(get_current_user_id)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Signature must be an image.")
+
+    image_url = durable_preview_url(save_upload(file), prefix="signatures")
+    if not upsert_creator_signature(user_id, image_url):
+        raise HTTPException(status_code=502, detail="Could not save signature.")
+    return {"image_url": image_url}
+
+
 @app.get("/gallery/creator/{slug}")
 def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_user_id)):
     result = get_creator_profile(slug, user_id=user_id)
@@ -937,11 +956,11 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
 @app.post("/admin/roll-print")
 def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_current_user_id)):
     _require_admin(user_id)
-    from app.services.supabase_db import get_project as db_get_project, get_logo_cells
+    from app.services.supabase_db import get_project as db_get_project
 
     project_ids = request.project_ids * request.copies
     designs = []
-    mesh_counts_used: set[int] = set()
+    signature_cache: dict[str, object] = {}
     for pid in project_ids:
         project = db_get_project(pid, user_id)
         if not project:
@@ -949,14 +968,29 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         cells = project.get("cells") or []
         mesh_count = project.get("mesh_count") or 18
         label = project.get("title") or project.get("name") or ""
-        designs.append({"cells": cells, "mesh_count": mesh_count, "label": label})
-        mesh_counts_used.add(mesh_count)
 
-    logo_cells_by_mesh = {m: get_logo_cells(m) for m in mesh_counts_used}
-    logo_cells_by_mesh = {m: c for m, c in logo_cells_by_mesh.items() if c}
+        # Attribute the signature to the design's original creator, same
+        # resolution used for royalty payouts, not just whoever owns the
+        # copy sitting in the print queue.
+        gallery_item = get_gallery_item_by_project_id(pid)
+        creator_id = (
+            resolve_root_creator_id(gallery_item["id"])
+            if gallery_item
+            else project.get("user_id")
+        )
+        if creator_id not in signature_cache:
+            signature_cache[creator_id] = load_signature_image(get_creator_signature(creator_id)) if creator_id else None
+
+        designs.append({
+            "cells": cells,
+            "mesh_count": mesh_count,
+            "label": label,
+            "signature_image": signature_cache[creator_id],
+        })
+
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72
-    path = generate_roll_print_pdf(designs, logo_cells_by_mesh=logo_cells_by_mesh or None, x_offset_pts=x_offset_pts, skew_correction_pts=skew_correction_pts, y_scale=request.y_scale)
+    path = generate_roll_print_pdf(designs, x_offset_pts=x_offset_pts, skew_correction_pts=skew_correction_pts, y_scale=request.y_scale)
     return FileResponse(
         str(path),
         media_type="application/pdf",

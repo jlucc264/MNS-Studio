@@ -2149,6 +2149,21 @@ export default function GridEditor({
     stageCols,
   ])
 
+  // Real, non-degenerate geometry for the hidden keyboard-capture input,
+  // aligned over the active text box. iOS/iPadOS Safari's anti-abuse
+  // heuristics dismiss the keyboard shortly after focusing a 1x1/opacity:0
+  // input — it has to look like a legitimate on-screen target to stick.
+  const textInputAnchorCol = Math.min(textAnchorCell?.col ?? 0, textBoxEnd?.col ?? textAnchorCell?.col ?? 0)
+  const textInputAnchorRow = Math.min(textAnchorCell?.row ?? 0, textBoxEnd?.row ?? textAnchorCell?.row ?? 0)
+  const textInputSpanCols = Math.abs((textBoxEnd?.col ?? textInputAnchorCol) - textInputAnchorCol) + 1
+  const textInputSpanRows = Math.abs((textBoxEnd?.row ?? textInputAnchorRow) - textInputAnchorRow) + 1
+  const textInputBoxStyle = {
+    left: gridOriginX + (textInputAnchorCol + contentOriginCol + borderStitches) * cellSize,
+    top: gridOriginY + (textInputAnchorRow + contentOriginRow + borderStitches) * cellSize,
+    width: Math.max(44, textInputSpanCols * cellSize),
+    height: Math.max(36, textInputSpanRows * cellSize),
+  }
+
   return (
     <div
       ref={containerRef}
@@ -2490,43 +2505,51 @@ export default function GridEditor({
                     pointerEvents: 'none',
                   }}
                 />
+                {/* Always-mounted keyboard capture, positioned over the active text box.
+                    Real geometry (not 1x1/opacity:0) so iOS/iPadOS Safari treats it as a
+                    legitimate focus target instead of dismissing the keyboard after a frame. */}
+                <input
+                  ref={textInputRef}
+                  value={textInput}
+                  onChange={(e) => {
+                    if (toolMode === 'text' && textAnchorCell && textBoxEnd) setTextInput(e.target.value)
+                  }}
+                  onKeyDown={(e) => {
+                    if (toolMode !== 'text' || !textAnchorCell || !textBoxEnd) return
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      if (textInput.trim() && activeColor) {
+                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+                        onApplyShapeCells?.(stampCells)
+                      }
+                      setTextAnchorCell(null)
+                      setTextBoxEnd(null)
+                      setTextInput('')
+                    } else if (e.key === 'Escape') {
+                      setTextAnchorCell(null)
+                      setTextBoxEnd(null)
+                      setTextInput('')
+                    }
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: textInputBoxStyle.left,
+                    top: textInputBoxStyle.top,
+                    width: textInputBoxStyle.width,
+                    height: textInputBoxStyle.height,
+                    color: 'transparent',
+                    background: 'transparent',
+                    caretColor: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    pointerEvents: 'none',
+                  }}
+                />
               </div>
             </div>
           </div>
         </div>
       </div>
-      {/* Always-mounted keyboard capture — outside viewportRef so it never triggers scroll-into-view on mount or keypress */}
-      <input
-        ref={textInputRef}
-        value={textInput}
-        onChange={(e) => {
-          if (toolMode === 'text' && textAnchorCell && textBoxEnd) setTextInput(e.target.value)
-        }}
-        onKeyDown={(e) => {
-          if (toolMode !== 'text' || !textAnchorCell || !textBoxEnd) return
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            if (textInput.trim() && activeColor) {
-              const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
-              onApplyShapeCells?.(stampCells)
-            }
-            setTextAnchorCell(null)
-            setTextBoxEnd(null)
-            setTextInput('')
-          } else if (e.key === 'Escape') {
-            setTextAnchorCell(null)
-            setTextBoxEnd(null)
-            setTextInput('')
-          }
-        }}
-        style={{
-          position: 'fixed',
-          top: 0, left: 0,
-          width: 1, height: 1,
-          opacity: 0,
-          pointerEvents: 'none',
-        }}
-      />
     </div>
   )
 }
