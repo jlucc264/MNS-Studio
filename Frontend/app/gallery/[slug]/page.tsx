@@ -6,7 +6,8 @@ import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
 import { NavAccountControls } from '../../../components/NavAccountControls'
-import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, isDesignPrintable, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { SignaturePad } from '../../../components/SignaturePad'
+import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isDesignPrintable, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -115,6 +116,11 @@ export default function CreatorProfilePage() {
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
 
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null)
+  const [savingSignature, setSavingSignature] = useState(false)
+  const [signatureError, setSignatureError] = useState('')
+  const [redrawingSignature, setRedrawingSignature] = useState(false)
+
   const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
@@ -139,6 +145,14 @@ export default function CreatorProfilePage() {
     if (!isOwnProfile || !session?.access_token) return
     getCreatorEarnings(session.access_token)
       .then(setEarnings)
+      .catch(() => { /* non-critical */ })
+  }, [isOwnProfile, session?.access_token])
+
+  // Fetch the saved signature once we know it's the own profile
+  useEffect(() => {
+    if (!isOwnProfile || !session?.access_token) return
+    getMySignature(session.access_token)
+      .then((res) => setSignatureUrl(res.image_url))
       .catch(() => { /* non-critical */ })
   }, [isOwnProfile, session?.access_token])
 
@@ -247,6 +261,21 @@ export default function CreatorProfilePage() {
       setSaveError(err instanceof Error ? err.message : 'Could not save profile.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSaveSignature(blob: Blob) {
+    if (!session?.access_token) return
+    setSavingSignature(true)
+    setSignatureError('')
+    try {
+      const res = await saveMySignature(blob, session.access_token)
+      setSignatureUrl(res.image_url)
+      setRedrawingSignature(false)
+    } catch (err) {
+      setSignatureError(err instanceof Error ? err.message : 'Could not save signature.')
+    } finally {
+      setSavingSignature(false)
     }
   }
 
@@ -374,6 +403,28 @@ export default function CreatorProfilePage() {
                     rows={3}
                     style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
                   />
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600 }}>Signature</label>
+                  <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
+                    Printed in the corner of every canvas you finalize.
+                  </p>
+                  {signatureUrl && !redrawingSignature ? (
+                    <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={signatureUrl}
+                        alt="Your signature"
+                        style={{ maxWidth: 200, maxHeight: 100, border: '1px solid #d7d0c8', borderRadius: 8, background: '#fffdf8' }}
+                      />
+                      <button type="button" onClick={() => setRedrawingSignature(true)} style={btnSecondary}>
+                        Redraw
+                      </button>
+                    </div>
+                  ) : (
+                    <SignaturePad onSave={handleSaveSignature} saving={savingSignature} />
+                  )}
+                  {signatureError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{signatureError}</p>}
                 </div>
                 {saveError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{saveError}</p>}
                 <div style={{ display: 'flex', gap: 8 }}>
