@@ -277,10 +277,10 @@ export type FinalizeResponse = {
   internal_pdf_supabase_path?: string | null
 }
 
-export async function finalizePreview(payload: FinalizePayload): Promise<FinalizeResponse> {
+export async function finalizePreview(payload: FinalizePayload, accessToken?: string | null): Promise<FinalizeResponse> {
   const res = await fetch(`${API_BASE}/finalize`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(accessToken),
     body: JSON.stringify(payload),
   })
 

@@ -3258,7 +3258,7 @@ function StudioPage() {
         palette: currentDesignPalette,
         cells,
         previous_pdf_url: previousPdfUrl,
-      })
+      }, session.access_token)
 
       const existingId = activeDraftProjectId
       const finalizedPayload = {
