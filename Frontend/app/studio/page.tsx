@@ -44,6 +44,7 @@ import {
   formatCents,
   getCanvasForDesign,
   getMyCreatorProfile,
+  getMySignature,
   getProject,
   gridRender,
   isDesignPrintable,
@@ -536,6 +537,7 @@ function StudioPage() {
   const { session, user, signOut } = useAuth()
   const router = useRouter()
   const tutorial = useTutorial()
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null)
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
@@ -844,6 +846,13 @@ function StudioPage() {
     router.prefetch('/gallery')
     router.prefetch('/drafts')
   }, [router])
+
+  useEffect(() => {
+    if (!session?.access_token) { setSignatureUrl(null); return }
+    getMySignature(session.access_token)
+      .then((res) => setSignatureUrl(res.image_url))
+      .catch(() => { /* non-critical */ })
+  }, [session?.access_token])
 
   useEffect(() => {
     if (!hasGeneratedPreview) return
@@ -4742,6 +4751,7 @@ function StudioPage() {
               >
                 <GridEditor
                   centerKey={gridKey}
+                  signatureUrl={signatureUrl}
                   isPhoneLandscape={isPhoneCanvasLandscape}
                   traceImageUrl={activeImagePath ? assetUrl(activeImagePath) : null}
                   traceOpacity={traceOpacity}

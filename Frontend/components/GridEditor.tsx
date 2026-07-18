@@ -37,6 +37,7 @@ type Props = {
   floatingStamp?: { cells: (string | null)[][]; anchorRow: number; anchorCol: number } | null
   onStampMove?: (anchor: { row: number; col: number }) => void
   clearSelectionSignal?: number
+  signatureUrl?: string | null
   // Phone landscape has so little horizontal room in this toolbar that the
   // Trace slider (last in the row) gets pushed off since the row does not
   // wrap. Compact everything else so it stays reachable without wrapping.
@@ -519,6 +520,7 @@ export default function GridEditor({
   onStampMove,
   clearSelectionSignal = 0,
   isPhoneLandscape = false,
+  signatureUrl = null,
 }: Props) {
   if (!cells.length) return null
 
@@ -780,9 +782,7 @@ export default function GridEditor({
         const anchorCol = Math.min(start.col, textBoxEnd.col)
         textBoxStartRef.current = null
         setTextAnchorCell({ row: anchorRow, col: anchorCol })
-        // On touch, don't summon the keyboard the moment a box is drawn (it
-        // wrecks the layout) — tapping inside the box opens it deliberately
-        if (event.pointerType !== 'touch') focusTextInputForKeyboard()
+        focusTextInputForKeyboard()
       }
 
       if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
@@ -2546,6 +2546,32 @@ export default function GridEditor({
                   }}
                 />
               </div>
+              {signatureUrl && (
+                // Live preview badge only — the design fills the whole active
+                // canvas with no margin today, so this peeks outside the
+                // corner rather than compositing into the design pixels
+                // (the print/finalize output places it in the real margin).
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: -14,
+                    bottom: -14,
+                    pointerEvents: 'none',
+                    background: '#fffdf8',
+                    border: '1px solid #d7d0c8',
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    padding: 4,
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={signatureUrl}
+                    alt="Your signature"
+                    style={{ display: 'block', maxWidth: 64, maxHeight: 44, objectFit: 'contain' }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
