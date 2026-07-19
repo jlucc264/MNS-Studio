@@ -832,7 +832,13 @@ def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item
     })
 
 
-def _handle_completed_session(session: dict) -> None:
+def _handle_completed_session(session) -> None:
+    # Stripe SDK objects (from Webhook.construct_event or Session.retrieve)
+    # support subscript access but not dict-style .get() in stripe==15.x —
+    # normalize to a plain dict so the rest of this function can use .get()
+    # freely, regardless of which caller passed which representation.
+    if hasattr(session, "to_dict"):
+        session = session.to_dict()
     metadata = session.get("metadata") or {}
     order_type = metadata.get("type", "")
     customer_details = session.get("customer_details") or {}
@@ -1026,5 +1032,11 @@ async def stripe_webhook(
     except (ValueError, stripe_lib.error.SignatureVerificationError):
         raise HTTPException(status_code=400, detail="Invalid webhook signature.")
     if event["type"] == "checkout.session.completed":
-        _handle_completed_session(event["data"]["object"])
+        try:
+            _handle_completed_session(event["data"]["object"])
+        except Exception:
+            # Always ack the event — a bug here shouldn't make Stripe retry
+            # indefinitely or flag the endpoint unhealthy. Errors still need
+            # eyes, they just belong in logs, not in Stripe's retry queue.
+            logger.exception("Failed to process checkout.session.completed for event %s", event.get("id"))
     return {"received": True}
