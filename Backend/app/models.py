@@ -330,3 +330,7 @@ class RollPrintRequest(BaseModel):
     x_offset_inches: float = 0.0
     skew_correction_inches: float = 0.0
     y_scale: float = 1.0
+
+
+class ReplayCheckoutSessionRequest(BaseModel):
+    session_id: str

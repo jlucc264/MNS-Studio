@@ -16,6 +16,7 @@ from app.models import (
     ContactRequest,
     ImportUrlRequest,
     RollPrintRequest,
+    ReplayCheckoutSessionRequest,
     LlmChatRequest,
     LlmChatResponse,
     SuggestionsRequest,
@@ -996,6 +997,20 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         media_type="application/pdf",
         filename="mns_roll_print.pdf",
     )
+
+
+@app.post("/admin/replay-checkout-session")
+def admin_replay_checkout_session(request: ReplayCheckoutSessionRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    import stripe as stripe_lib
+
+    try:
+        session = stripe_lib.checkout.Session.retrieve(request.session_id)
+    except stripe_lib.error.InvalidRequestError as exc:
+        raise HTTPException(status_code=404, detail=f"Stripe session not found: {exc}")
+
+    _handle_completed_session(session)
+    return {"message": "Replayed checkout session.", "session_id": request.session_id}
 
 
 @app.post("/stripe/webhook")
