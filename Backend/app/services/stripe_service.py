@@ -53,6 +53,7 @@ def create_print_own_checkout(
     gallery_item_id: str | None = None,
     creator_user_id: str | None = None,
     internal_pdf_supabase_path: str | None = None,
+    project_id: str | None = None,
 ) -> str:
     canvas = get_canvas_for_design(width_inches, height_inches)
 
@@ -75,6 +76,8 @@ def create_print_own_checkout(
         metadata["creator_user_id"] = creator_user_id
     if internal_pdf_supabase_path:
         metadata["internal_pdf_supabase_path"] = internal_pdf_supabase_path
+    if project_id:
+        metadata["project_id"] = project_id
 
     coupon_id, applied_cents = _apply_canvas_credit(user_id, total)
     if applied_cents:
@@ -249,6 +252,8 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
         if has_creator:
             item_meta["gi"] = item.get("creator_gallery_item_id", "")
             item_meta["cu"] = item["creator_user_id"]
+        if item.get("project_id"):
+            item_meta["pid"] = item["project_id"]
 
         metadata[f"item_{i}"] = json.dumps(item_meta)
 

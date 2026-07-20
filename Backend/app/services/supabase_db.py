@@ -116,6 +116,17 @@ def get_project(project_id: str, user_id: str) -> dict | None:
     return None
 
 
+def get_project_by_id(project_id: str) -> dict | None:
+    """Unscoped project fetch for fulfillment/admin use — reaches across
+    every customer's account, unlike get_project which requires the caller
+    to already own the project."""
+    encoded = quote(project_id, safe="")
+    result = _request("GET", "/projects", params=f"id=eq.{encoded}&select=*")
+    if isinstance(result, list) and result:
+        return result[0]
+    return None
+
+
 def create_project(data: dict, user_id: str) -> dict | None:
     data["user_id"] = user_id
     result = _request("POST", "/projects", body=data)
@@ -452,3 +463,51 @@ def toggle_gallery_like(item_id: str, user_id: str) -> dict | None:
         updated[0]["liked_by_me"] = liked
         return _normalize_gallery_item(updated[0], {item_id} if liked else set())
     return None
+
+
+# ── print fulfillment ───────────────────────────────────────────────────────
+
+def create_print_order(
+    stripe_session_id: str,
+    order_type: str,
+    project_id: str | None,
+    gallery_item_id: str | None,
+    buyer_user_id: str | None,
+    title: str | None,
+    width_inches: float | None,
+    height_inches: float | None,
+) -> None:
+    _request("POST", "/print_orders", body={
+        "stripe_session_id": stripe_session_id,
+        "order_type": order_type,
+        "project_id": project_id,
+        "gallery_item_id": gallery_item_id,
+        "buyer_user_id": buyer_user_id,
+        "title": title,
+        "width_inches": width_inches,
+        "height_inches": height_inches,
+    })
+
+
+def list_pending_print_orders() -> list[dict]:
+    result = _request("GET", "/print_orders", params="status=eq.pending&order=created_at.asc&select=*")
+    return result if isinstance(result, list) else []
+
+
+def get_print_order(print_order_id: str) -> dict | None:
+    encoded = quote(print_order_id, safe="")
+    result = _request("GET", "/print_orders", params=f"id=eq.{encoded}&select=*")
+    if isinstance(result, list) and result:
+        return result[0]
+    return None
+
+
+def mark_print_orders_printed(print_order_ids: list[str]) -> None:
+    for pid in print_order_ids:
+        encoded = quote(pid, safe="")
+        _request(
+            "PATCH",
+            "/print_orders",
+            params=f"id=eq.{encoded}",
+            body={"status": "printed", "printed_at": datetime.now(timezone.utc).isoformat()},
+        )

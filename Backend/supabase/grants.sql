@@ -33,6 +33,21 @@ create table if not exists public.creator_signatures (
   updated_at timestamptz default now()
 );
 
+create table if not exists public.print_orders (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  stripe_session_id text not null,
+  order_type text not null,
+  project_id text,
+  gallery_item_id text,
+  buyer_user_id text,
+  title text,
+  width_inches numeric,
+  height_inches numeric,
+  status text not null default 'pending',
+  printed_at timestamptz
+);
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
@@ -40,5 +55,6 @@ grant select, insert, update, delete on table public.gallery_items to service_ro
 grant select, insert, update, delete on table public.gallery_likes to service_role;
 grant select, insert, update on table public.creator_earnings to service_role;
 grant select, insert, update, delete on table public.creator_signatures to service_role;
+grant select, insert, update, delete on table public.print_orders to service_role;
 
 grant usage, select on all sequences in schema public to service_role;

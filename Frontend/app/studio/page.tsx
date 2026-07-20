@@ -3411,6 +3411,7 @@ function StudioPage() {
           height_inches: finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings.height_inches),
           parent_gallery_item_id: parentGalleryItemId ?? null,
           internal_pdf_supabase_path: internalPdfSupabasePath,
+          project_id: savedProjectId ?? null,
         },
         session.access_token,
       )

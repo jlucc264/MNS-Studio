@@ -44,6 +44,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
           quantity: i.quantity,
           gallery_item_id: i.gallery_item_id,
           parent_gallery_item_id: i.parent_gallery_item_id,
+          project_id: i.project_id,
         })),
         accessToken,
         useCredit,

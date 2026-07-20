@@ -703,7 +703,7 @@ export function formatCents(cents: number): string {
 export type CheckoutResponse = { client_secret: string }
 
 export async function createPrintOwnCheckout(
-  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null; internal_pdf_supabase_path?: string | null },
+  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null; internal_pdf_supabase_path?: string | null; project_id?: string | null },
   accessToken?: string | null,
 ): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/print-own`, {
@@ -876,6 +876,7 @@ export async function createCartCheckout(
     quantity: number
     gallery_item_id: string | null
     parent_gallery_item_id: string | null
+    project_id: string | null
   }>,
   accessToken: string,
   useCredit = true,

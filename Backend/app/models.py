@@ -202,6 +202,7 @@ class PrintOwnCheckoutRequest(BaseModel):
     height_inches: float
     parent_gallery_item_id: Optional[str] = None
     internal_pdf_supabase_path: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class CheckoutResponse(BaseModel):
@@ -216,6 +217,7 @@ class CartCheckoutItem(BaseModel):
     quantity: int = 1
     gallery_item_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class CartCheckoutRequest(BaseModel):
@@ -325,7 +327,8 @@ class GalleryItemResponse(BaseModel):
 
 
 class RollPrintRequest(BaseModel):
-    project_ids: list[str]
+    project_ids: list[str] = []
+    print_order_ids: list[str] = []
     copies: int = 1
     x_offset_inches: float = 0.0
     skew_correction_inches: float = 0.0

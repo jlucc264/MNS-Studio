@@ -734,6 +734,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
             gallery_item_id=request.parent_gallery_item_id,
             creator_user_id=creator_user_id,
             internal_pdf_supabase_path=request.internal_pdf_supabase_path,
+            project_id=request.project_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -807,6 +808,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
             "width_inches": item.width_inches,
             "height_inches": item.height_inches,
             "quantity": item.quantity,
+            "project_id": item.project_id,
             "creator_gallery_item_id": creator_gallery_item_id,
             "creator_user_id": creator_user_id,
         })
@@ -861,6 +863,21 @@ def _handle_completed_session(session) -> None:
             except Exception:
                 pass
 
+        try:
+            from app.services.supabase_db import create_print_order
+            create_print_order(
+                stripe_session_id=session["id"],
+                order_type=order_type,
+                project_id=metadata.get("project_id"),
+                gallery_item_id=metadata.get("gallery_item_id"),
+                buyer_user_id=metadata.get("user_id"),
+                title=metadata.get("title"),
+                width_inches=float(metadata["width_inches"]) if metadata.get("width_inches") else None,
+                height_inches=float(metadata["height_inches"]) if metadata.get("height_inches") else None,
+            )
+        except Exception:
+            logger.exception("Failed to record print order for session %s", session.get("id"))
+
     cart_attachments: list[tuple[bytes, str]] = []
     if order_type == "cart":
         item_count = int(metadata.get("item_count", 0))
@@ -892,6 +909,20 @@ def _handle_completed_session(session) -> None:
                     _record_creator_earnings(f"{session['id']}_{i}", cu, gi, "cart", item_total)
                 except Exception:
                     logger.exception("Failed to record cart creator earnings for session %s item %d", session.get("id"), i)
+            try:
+                from app.services.supabase_db import create_print_order
+                create_print_order(
+                    stripe_session_id=f"{session['id']}_{i}",
+                    order_type="cart",
+                    project_id=item_meta.get("pid"),
+                    gallery_item_id=gi,
+                    buyer_user_id=metadata.get("user_id"),
+                    title=None,
+                    width_inches=item_meta.get("w"),
+                    height_inches=item_meta.get("h"),
+                )
+            except Exception:
+                logger.exception("Failed to record cart print order for session %s item %d", session.get("id"), i)
 
     try:
         send_order_notification(order_type, metadata, customer_email, shipping,
@@ -960,49 +991,92 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
     )
 
 
+def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None) -> dict:
+    cells = project.get("cells") or []
+    mesh_count = project.get("mesh_count") or 18
+    label = label_override or project.get("title") or project.get("name") or ""
+
+    # Attribute the signature to the design's original creator, same
+    # resolution used for royalty payouts, not just whoever owns the
+    # copy sitting in the print queue.
+    gallery_item_id = known_gallery_item_id
+    if not gallery_item_id and project_id:
+        gallery_item = get_gallery_item_by_project_id(project_id)
+        gallery_item_id = gallery_item["id"] if gallery_item else None
+    creator_id = (
+        resolve_root_creator_id(gallery_item_id)
+        if gallery_item_id
+        else project.get("user_id")
+    )
+    if creator_id not in signature_cache:
+        signature_cache[creator_id] = load_signature_image(get_creator_signature(creator_id)) if creator_id else None
+
+    return {
+        "cells": cells,
+        "mesh_count": mesh_count,
+        "label": label,
+        "signature_image": signature_cache[creator_id],
+    }
+
+
 @app.post("/admin/roll-print")
 def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_current_user_id)):
     _require_admin(user_id)
-    from app.services.supabase_db import get_project as db_get_project
+    from app.services.supabase_db import (
+        get_project as db_get_project,
+        get_project_by_id,
+        get_print_order,
+        mark_print_orders_printed,
+    )
 
-    project_ids = request.project_ids * request.copies
     designs = []
     signature_cache: dict[str, object] = {}
-    for pid in project_ids:
+
+    for pid in request.project_ids * request.copies:
         project = db_get_project(pid, user_id)
         if not project:
             raise HTTPException(status_code=404, detail=f"Project {pid} not found.")
-        cells = project.get("cells") or []
-        mesh_count = project.get("mesh_count") or 18
-        label = project.get("title") or project.get("name") or ""
+        designs.append(_build_roll_print_design(project, pid, signature_cache))
 
-        # Attribute the signature to the design's original creator, same
-        # resolution used for royalty payouts, not just whoever owns the
-        # copy sitting in the print queue.
-        gallery_item = get_gallery_item_by_project_id(pid)
-        creator_id = (
-            resolve_root_creator_id(gallery_item["id"])
-            if gallery_item
-            else project.get("user_id")
-        )
-        if creator_id not in signature_cache:
-            signature_cache[creator_id] = load_signature_image(get_creator_signature(creator_id)) if creator_id else None
+    for order_id in request.print_order_ids * request.copies:
+        order = get_print_order(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail=f"Print order {order_id} not found.")
 
-        designs.append({
-            "cells": cells,
-            "mesh_count": mesh_count,
-            "label": label,
-            "signature_image": signature_cache[creator_id],
-        })
+        project = None
+        project_id = order.get("project_id")
+        if project_id:
+            project = get_project_by_id(project_id)
+        if not project and order.get("gallery_item_id"):
+            project = get_public_project_by_gallery_item(order["gallery_item_id"])
+        if not project:
+            raise HTTPException(status_code=404, detail=f"Could not resolve design for print order {order_id}.")
+
+        designs.append(_build_roll_print_design(
+            project, project_id, signature_cache,
+            label_override=order.get("title"),
+            known_gallery_item_id=order.get("gallery_item_id"),
+        ))
 
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72
     path = generate_roll_print_pdf(designs, x_offset_pts=x_offset_pts, skew_correction_pts=skew_correction_pts, y_scale=request.y_scale)
+
+    if request.print_order_ids:
+        mark_print_orders_printed(request.print_order_ids)
+
     return FileResponse(
         str(path),
         media_type="application/pdf",
         filename="mns_roll_print.pdf",
     )
+
+
+@app.get("/admin/print-orders")
+def admin_list_print_orders(user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_pending_print_orders
+    return list_pending_print_orders()
 
 
 @app.post("/admin/replay-checkout-session")
