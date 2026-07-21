@@ -97,10 +97,11 @@ export type ChatActionItem = {
   col?: number
   color?: string
   font_size?: 'small' | 'medium' | 'large'
-  font_family?: 'sans' | 'serif'
+  font_family?: 'sans' | 'serif' | 'script' | 'dancing-script' | 'pacifico' | 'playfair-display' | 'alfa-slab-one' | 'luckiest-guy'
   bold?: boolean
   italic?: boolean
   outline?: boolean
+  orientation?: 'horizontal' | 'stacked' | 'down' | 'up'
   // flood_fill (row/col/color shared with add_text above)
 }
 
@@ -688,7 +689,28 @@ export function getCanvasForDesign(widthInches: number, heightInches: number): C
 export const MAX_PRINTABLE_SHORT_SIDE = 13
 export const MAX_PRINTABLE_LONG_SIDE = 20
 
+// Belt mode: a long, narrow strip outside the normal short/long envelope
+// above. Mirrors Backend/app/services/canvas_pricing.py — keep in sync.
+export const BELT_HEIGHT_INCHES = 1.25
+export const BELT_MESH_COUNT = 18
+export const BELT_TAIL_INCHES = 4
+export const BELT_MIN_LENGTH_IN = 20
+export const BELT_MAX_LENGTH_IN = 60
+const BELT_SHORT_MAX_IN = 1.75 // headroom above BELT_HEIGHT_INCHES for float drift
+export const BELT_PANT_SIZES = [28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48] as const
+
+export function beltLengthForPantSize(pantSize: number): number {
+  return pantSize - BELT_TAIL_INCHES
+}
+
+export function isBeltDesign(widthInches: number, heightInches: number): boolean {
+  const short = Math.min(widthInches, heightInches)
+  const long = Math.max(widthInches, heightInches)
+  return short <= BELT_SHORT_MAX_IN && long <= BELT_MAX_LENGTH_IN
+}
+
 export function isDesignPrintable(widthInches: number, heightInches: number): boolean {
+  if (isBeltDesign(widthInches, heightInches)) return true
   const short = Math.min(widthInches, heightInches)
   const long = Math.max(widthInches, heightInches)
   return short <= MAX_PRINTABLE_SHORT_SIDE && long <= MAX_PRINTABLE_LONG_SIDE

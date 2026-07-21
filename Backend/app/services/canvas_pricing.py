@@ -18,8 +18,27 @@ TEMPLATE_PRICE_CENTS = 500        # $5
 _MAX_PRINT_SHORT_IN = 13.0
 _MAX_PRINT_LONG_IN = 20.0
 
+# Belt mode: a long, narrow strip that doesn't fit the normal short/long
+# envelope above. Mirrors the frontend's belt constants (studio/page.tsx) —
+# geometry-only, so any belt-shaped design clears the same printability gate
+# used by checkout/cart/gallery without threading an is_belt flag through them.
+BELT_HEIGHT_INCHES = 1.25
+BELT_MESH_COUNT = 18
+BELT_TAIL_INCHES = 4.0
+BELT_MIN_LENGTH_IN = 20.0
+BELT_MAX_LENGTH_IN = 60.0
+_BELT_SHORT_MAX_IN = 1.75  # headroom above BELT_HEIGHT_INCHES for float drift
+
+
+def is_belt_design(width_inches: float, height_inches: float) -> bool:
+    short = min(width_inches, height_inches)
+    long = max(width_inches, height_inches)
+    return short <= _BELT_SHORT_MAX_IN and long <= BELT_MAX_LENGTH_IN
+
 
 def is_design_printable(width_inches: float, height_inches: float) -> bool:
+    if is_belt_design(width_inches, height_inches):
+        return True
     short = min(width_inches, height_inches)
     long = max(width_inches, height_inches)
     return short <= _MAX_PRINT_SHORT_IN and long <= _MAX_PRINT_LONG_IN

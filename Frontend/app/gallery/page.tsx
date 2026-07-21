@@ -18,6 +18,7 @@ import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
 
 const ORIGIN_TAGS = new Set(['remix', 'from photo', 'graphic art'])
+const WELCOME_STORAGE_KEY = 'mns_welcome_seen'
 
 const shimmerKeyframes = `
 @keyframes gallery-shimmer {
@@ -194,6 +195,18 @@ function GalleryPage() {
   const pendingCents = useCanvasCredit(session?.access_token)
   const [activeDraftName, setActiveDraftName] = useState('Untitled')
   const [shareToast, setShareToast] = useState(false)
+  const [showWelcome, setShowWelcome] = useState(false)
+
+  function dismissWelcome() {
+    setShowWelcome(false)
+    try { localStorage.setItem(WELCOME_STORAGE_KEY, '1') } catch {}
+  }
+
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(WELCOME_STORAGE_KEY)) setShowWelcome(true)
+    } catch {}
+  }, [])
 
   const slugMap = useMemo(() => buildCreatorSlugMap(items), [items])
 
@@ -830,6 +843,27 @@ function GalleryPage() {
           </section>
         )}
       </main>
+
+      {showWelcome && (
+        <div role="dialog" aria-modal="true" aria-labelledby="welcome-dialog-title" onClick={dismissWelcome} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 95, padding: 18 }}>
+          <div onClick={(event) => event.stopPropagation()} style={{ background: '#fffdf8', padding: 28, borderRadius: 14, width: 400, maxWidth: '100%', display: 'grid', gap: 16, boxSizing: 'border-box' }}>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <h2 id="welcome-dialog-title" style={{ margin: 0, fontSize: 22 }}>Welcome to MNS Studio</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                Browse the gallery below for inspiration from other stitchers, or jump into Studio to turn a photo, screenshot, or your own artwork into a needlepoint or cross-stitch pattern.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => { dismissWelcome(); router.push('/studio') }} style={{ ...btnPrimary, flex: 1 }}>
+                Start designing
+              </button>
+              <button type="button" onClick={dismissWelcome} style={btnSecondary}>
+                Browse the gallery
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAuthPrompt && (
         <div role="dialog" aria-modal="true" onClick={() => setShowAuthPrompt(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 80, padding: 18 }}>

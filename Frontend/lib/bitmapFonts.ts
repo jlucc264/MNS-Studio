@@ -1,6 +1,13 @@
 // Bitmap font data for the text tool.
 // Each character maps to an array of row bitmaps. For a W-wide font,
 // each row is a W-bit number where the MSB (bit W-1) = leftmost column.
+// New fonts are authored as ASCII art under lib/fonts/ and compiled at load.
+
+import { LOWERCASE_5x7 } from './fonts/lowercase5x7'
+import { SCRIPT_9x12 } from './fonts/script9x12'
+import { type RasterFontId, isRasterFamily, rasterizeText } from './fonts/rasterFonts'
+
+export { RASTER_FONTS, isRasterFamily, ensureFontLoaded, type RasterFontId } from './fonts/rasterFonts'
 
 // ── 3×5 font (sans) ──────────────────────────────────────────────────────────
 const FONT_3x5: Record<string, number[]> = {
@@ -128,31 +135,57 @@ const FONT_SERIF_5x7: Record<string, number[]> = {
   '~': [0,9,22,0,0,0,0],
 }
 
-// ── Scale 5×7 → 8×13 ─────────────────────────────────────────────────────────
-// Column mapping (5→8): bit4→cols 0,1 | bit3→cols 2,3 | bit2→col 4 | bit1→cols 5,6 | bit0→col 7
+// ── Scale 5×7 → 9×13 ─────────────────────────────────────────────────────────
+// Column mapping (5→9): bit4→cols 0,1 | bit3→cols 2,3 | bit2→col 4 | bit1→cols 5,6 | bit0→cols 7,8
 // Row mapping (7→13): rows 0,1 / 2,3 / 4,5 / 6 / 7,8 / 9,10 / 11,12
-function scale5x7to8x13(rows5: number[]): number[] {
+// Both mappings double the outer pairs and single the middle (2,2,1,2,2), so
+// left/right stems come out the same weight — an 8-wide target can't do that.
+function scale5x7to9x13(rows5: number[]): number[] {
   const result = new Array(13).fill(0)
   const rowMap = [[0,1],[2,3],[4,5],[6],[7,8],[9,10],[11,12]]
   for (let r5 = 0; r5 < 7; r5++) {
     const row5 = rows5[r5] ?? 0
-    let row8 = 0
-    if (row5 & 0b10000) row8 |= 0b11000000
-    if (row5 & 0b01000) row8 |= 0b00110000
-    if (row5 & 0b00100) row8 |= 0b00001000
-    if (row5 & 0b00010) row8 |= 0b00000110
-    if (row5 & 0b00001) row8 |= 0b00000001
-    for (const r8 of rowMap[r5]) result[r8] = row8
+    let row9 = 0
+    if (row5 & 0b10000) row9 |= 0b110000000
+    if (row5 & 0b01000) row9 |= 0b001100000
+    if (row5 & 0b00100) row9 |= 0b000010000
+    if (row5 & 0b00010) row9 |= 0b000001100
+    if (row5 & 0b00001) row9 |= 0b000000011
+    for (const r13 of rowMap[r5]) result[r13] = row9
   }
   return result
 }
 
 function scaleFont(source: Record<string, number[]>): Record<string, number[]> {
-  return Object.fromEntries(Object.entries(source).map(([ch, rows]) => [ch, scale5x7to8x13(rows)]))
+  return Object.fromEntries(Object.entries(source).map(([ch, rows]) => [ch, scale5x7to9x13(rows)]))
 }
 
-const FONT_8x13      = scaleFont(FONT_5x7)
-const FONT_SERIF_8x13 = scaleFont(FONT_SERIF_5x7)
+// Lowercase merges into both 5×7 families (serif detail doesn't survive at a
+// 5-pixel x-height, so they share glyphs — same call the 3×5 size makes).
+const FONT_5x7_FULL       = { ...FONT_5x7, ...LOWERCASE_5x7 }
+const FONT_SERIF_5x7_FULL = { ...FONT_SERIF_5x7, ...LOWERCASE_5x7 }
+
+const FONT_9x13       = scaleFont(FONT_5x7_FULL)
+const FONT_SERIF_9x13 = scaleFont(FONT_SERIF_5x7_FULL)
+
+// ── Generic 2× scale (each pixel → 2×2 block) ────────────────────────────────
+function scaleRows2x(rows: number[], width: number): number[] {
+  const out: number[] = []
+  for (const row of rows) {
+    let wide = 0
+    for (let c = 0; c < width; c++) {
+      if ((row >> (width - 1 - c)) & 1) wide |= 0b11 << (2 * (width - 1 - c))
+    }
+    out.push(wide, wide)
+  }
+  return out
+}
+
+function scaleFont2x(source: Record<string, number[]>, width: number): Record<string, number[]> {
+  return Object.fromEntries(Object.entries(source).map(([ch, rows]) => [ch, scaleRows2x(rows, width)]))
+}
+
+const SCRIPT_18x24 = scaleFont2x(SCRIPT_9x12, 9)
 
 // ── Style modifiers ───────────────────────────────────────────────────────────
 
@@ -191,34 +224,59 @@ function applyOutline(rows: number[], width: number): number[] {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export type FontSize   = 'small' | 'medium' | 'large'
-export type FontFamily = 'sans'  | 'serif'
-export type TextStyle  = { bold?: boolean; italic?: boolean; outline?: boolean }
+export type FontSize        = 'small' | 'medium' | 'large'
+// Bitmap families are hand-tuned for small lettering; raster ids are real
+// TTFs thresholded onto the grid, only offered at display sizes (16+ tall).
+export type BitmapFamily    = 'sans'  | 'serif' | 'script'
+export type FontFamily      = BitmapFamily | RasterFontId
+export type TextStyle       = { bold?: boolean; italic?: boolean; outline?: boolean }
+// horizontal: normal · stacked: upright letters top-to-bottom ·
+// down: rotated 90° CW (reads downward) · up: rotated 90° CCW (reads upward)
+export type TextOrientation = 'horizontal' | 'stacked' | 'down' | 'up'
 
 type FontMeta = { width: number; height: number; data: Record<string, number[]>; spacing: number }
 
-const FONT_META: Record<FontSize, Record<FontFamily, FontMeta>> = {
+// Script has one drawn size (9×12); large uses a 2× scale. small/medium share
+// the native size rather than offering an unreadable shrunken variant.
+const SCRIPT_META:    FontMeta = { width: 9,  height: 12, data: SCRIPT_9x12,  spacing: 1 }
+const SCRIPT_META_2X: FontMeta = { width: 18, height: 24, data: SCRIPT_18x24, spacing: 2 }
+
+// Stitch heights for rasterized fonts — nothing below 16, where TTF
+// thresholding turns to mush and the hand-tuned bitmap fonts take over.
+const RASTER_SIZES: Record<FontSize, number> = { small: 16, medium: 22, large: 30 }
+
+const FONT_META: Record<FontSize, Record<BitmapFamily, FontMeta>> = {
   small:  {
-    sans:  { width: 3, height: 5,  data: FONT_3x5,       spacing: 1 },
-    serif: { width: 3, height: 5,  data: FONT_3x5,       spacing: 1 }, // same at 3×5
+    sans:   { width: 3, height: 5,  data: FONT_3x5,       spacing: 1 },
+    serif:  { width: 3, height: 5,  data: FONT_3x5,       spacing: 1 }, // same at 3×5
+    script: SCRIPT_META,
   },
   medium: {
-    sans:  { width: 5, height: 7,  data: FONT_5x7,       spacing: 1 },
-    serif: { width: 5, height: 7,  data: FONT_SERIF_5x7, spacing: 1 },
+    sans:   { width: 5, height: 7,  data: FONT_5x7_FULL,       spacing: 1 },
+    serif:  { width: 5, height: 7,  data: FONT_SERIF_5x7_FULL, spacing: 1 },
+    script: SCRIPT_META,
   },
   large:  {
-    sans:  { width: 8, height: 13, data: FONT_8x13,       spacing: 2 },
-    serif: { width: 8, height: 13, data: FONT_SERIF_8x13, spacing: 2 },
+    sans:   { width: 9, height: 13, data: FONT_9x13,       spacing: 2 },
+    serif:  { width: 9, height: 13, data: FONT_SERIF_9x13, spacing: 2 },
+    script: SCRIPT_META_2X,
   },
 }
 
+const EMPTY_DATA: Record<string, number[]> = {}
+
 export function getFontMeta(size: FontSize, family: FontFamily = 'sans'): FontMeta {
+  if (isRasterFamily(family)) {
+    // Raster fonts are proportional — width 0 signals "no fixed advance".
+    return { width: 0, height: RASTER_SIZES[size], data: EMPTY_DATA, spacing: 1 }
+  }
   return FONT_META[size][family]
 }
 
-// How far each character advances horizontally, accounting for italic expansion.
-export function getCharAdvance(size: FontSize, style: TextStyle = {}): number {
-  const { width, height, spacing } = getFontMeta(size)
+// How far each character advances horizontally, accounting for italic
+// expansion. Bitmap families only — raster fonts are proportional.
+export function getCharAdvance(size: FontSize, family: FontFamily = 'sans', style: TextStyle = {}): number {
+  const { width, height, spacing } = getFontMeta(size, family)
   let charWidth = width
   if (style.italic) {
     const totalShift = Math.max(1, Math.floor((height - 1) / 3))
@@ -227,22 +285,67 @@ export function getCharAdvance(size: FontSize, style: TextStyle = {}): number {
   return charWidth + spacing
 }
 
-export function getTextCells(
+// Where the typing caret sits, in cells relative to the text anchor.
+// axis is the direction the caret bar spans (it's drawn thin the other way).
+// Takes the typed text itself because raster fonts are proportional.
+export function getCaretPlacement(
   text: string,
-  anchorRow: number,
-  anchorCol: number,
   size: FontSize,
   family: FontFamily,
-  color: string,
   style: TextStyle = {},
-): Array<{ row: number; col: number; color: string }> {
+  orientation: TextOrientation = 'horizontal',
+): { row: number; col: number; axis: 'vertical' | 'horizontal'; span: number } {
   const meta = getFontMeta(size, family)
-  const { height, spacing } = meta
-  const cells: Array<{ row: number; col: number; color: string }> = []
-  let col = anchorCol
+  const height = meta.height
+  const charCount = Array.from(text).length
 
+  if (isRasterFamily(family)) {
+    const advance = text ? (rasterizeText(family, text, height, style)?.width ?? 0) + 1 : 0
+    const charSpan = Math.max(3, Math.round(height * 0.6))
+    switch (orientation) {
+      case 'stacked':    return { row: charCount * (height + 1), col: 0, axis: 'horizontal', span: charSpan }
+      case 'down':       return { row: advance, col: 0, axis: 'horizontal', span: height }
+      case 'up':         return { row: 0, col: 0, axis: 'horizontal', span: height }
+      default:           return { row: 0, col: advance, axis: 'vertical', span: height }
+    }
+  }
+
+  const advance = getCharAdvance(size, family, style)
+  switch (orientation) {
+    case 'stacked':
+      return { row: charCount * (height + meta.spacing), col: 0, axis: 'horizontal', span: advance - meta.spacing }
+    case 'down':
+      return { row: charCount * advance, col: 0, axis: 'horizontal', span: height }
+    case 'up':
+      // Anchor stays the block's top-left, so new characters surface at the top.
+      return { row: 0, col: 0, axis: 'horizontal', span: height }
+    default:
+      return { row: 0, col: charCount * advance, axis: 'vertical', span: height }
+  }
+}
+
+// Keep only cells with at least one unlit 4-neighbor (outline style for
+// raster fonts, where the bit-mask version can't apply).
+function outlineCells(rel: Array<{ r: number; c: number }>): Array<{ r: number; c: number }> {
+  const lit = new Set(rel.map(({ r, c }) => `${r},${c}`))
+  return rel.filter(({ r, c }) =>
+    !lit.has(`${r - 1},${c}`) || !lit.has(`${r + 1},${c}`) || !lit.has(`${r},${c - 1}`) || !lit.has(`${r},${c + 1}`),
+  )
+}
+
+function bitmapLayout(
+  text: string,
+  meta: FontMeta,
+  style: TextStyle,
+  stacked: boolean,
+): Array<{ r: number; c: number }> {
+  const { height, spacing } = meta
+  const rel: Array<{ r: number; c: number }> = []
+  let cursor = 0
   for (const char of text) {
-    const key = char.toUpperCase()
+    // Case-sensitive lookup, falling back to the capital for fonts without
+    // lowercase (3×5, script) and to blank for unknown characters.
+    const key = meta.data[char] ? char : char.toUpperCase()
     let rows = [...(meta.data[key] ?? meta.data[' '] ?? new Array(height).fill(0))]
     let charWidth = meta.width
 
@@ -254,12 +357,79 @@ export function getTextCells(
       const rowBits = rows[r] ?? 0
       for (let c = 0; c < charWidth; c++) {
         if ((rowBits >> (charWidth - 1 - c)) & 1) {
-          cells.push({ row: anchorRow + r, col: col + c, color })
+          rel.push({ r: (stacked ? cursor : 0) + r, c: (stacked ? 0 : cursor) + c })
         }
       }
     }
-    col += charWidth + spacing
+    cursor += stacked ? height + spacing : charWidth + spacing
+  }
+  return rel
+}
+
+function rasterLayout(
+  family: RasterFontId,
+  text: string,
+  height: number,
+  style: TextStyle,
+  stacked: boolean,
+): Array<{ r: number; c: number }> {
+  const rel: Array<{ r: number; c: number }> = []
+  if (stacked) {
+    // Per-character blocks, centered on the widest, one blank row between.
+    const blocks = Array.from(text).map((char) => rasterizeText(family, char, height, style))
+    const maxWidth = blocks.reduce((m, b) => Math.max(m, b?.width ?? 0), 1)
+    let rowOffset = 0
+    for (const block of blocks) {
+      if (block) {
+        const colOffset = Math.floor((maxWidth - block.width) / 2)
+        for (let r = 0; r < block.height; r++) {
+          for (let c = 0; c < block.width; c++) {
+            if (block.grid[r][c]) rel.push({ r: rowOffset + r, c: colOffset + c })
+          }
+        }
+      }
+      rowOffset += height + 1
+    }
+  } else {
+    const block = rasterizeText(family, text, height, style)
+    if (block) {
+      for (let r = 0; r < block.height; r++) {
+        for (let c = 0; c < block.width; c++) {
+          if (block.grid[r][c]) rel.push({ r, c })
+        }
+      }
+    }
+  }
+  return style.outline ? outlineCells(rel) : rel
+}
+
+export function getTextCells(
+  text: string,
+  anchorRow: number,
+  anchorCol: number,
+  size: FontSize,
+  family: FontFamily,
+  color: string,
+  style: TextStyle = {},
+  orientation: TextOrientation = 'horizontal',
+): Array<{ row: number; col: number; color: string }> {
+  const meta = getFontMeta(size, family)
+  const stacked = orientation === 'stacked'
+
+  const rel = isRasterFamily(family)
+    ? rasterLayout(family, text, meta.height, style, stacked)
+    : bitmapLayout(text, meta, style, stacked)
+
+  // Rotate the laid-out block for the rotated orientations, keeping the
+  // anchor at the block's top-left corner.
+  let placed = rel
+  if (orientation === 'down' || orientation === 'up') {
+    const maxR = meta.height - 1
+    const maxC = rel.reduce((m, p) => Math.max(m, p.c), 0)
+    placed = rel.map(({ r, c }) =>
+      orientation === 'down' ? { r: c, c: maxR - r } : { r: maxC - c, c: r },
+    )
   }
 
-  return cells
+  return placed.map(({ r, c }) => ({ row: anchorRow + r, col: anchorCol + c, color }))
 }

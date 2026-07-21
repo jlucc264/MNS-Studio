@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { type FontSize, type FontFamily } from '../lib/bitmapFonts'
+import { type FontSize, type FontFamily, type TextOrientation, getFontMeta, isRasterFamily, RASTER_FONTS } from '../lib/bitmapFonts'
 
 type PaletteColor = {
   hex: string
@@ -20,6 +20,8 @@ type Props = {
   onTextFontSizeChange: (size: FontSize) => void
   textFontFamily: FontFamily
   onTextFontFamilyChange: (family: FontFamily) => void
+  textOrientation: TextOrientation
+  onTextOrientationChange: (orientation: TextOrientation) => void
   textBold: boolean
   onTextBoldChange: (v: boolean) => void
   textItalic: boolean
@@ -102,6 +104,8 @@ export default function PalettePanel({
   onTextFontSizeChange,
   textFontFamily,
   onTextFontFamilyChange,
+  textOrientation,
+  onTextOrientationChange,
   textBold,
   onTextBoldChange,
   textItalic,
@@ -325,40 +329,85 @@ export default function PalettePanel({
           {/* Text mode */}
           {isTextTab && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Font size selector */}
-              <div
+              {/* Font family — stitch fonts are hand-tuned bitmaps, display
+                  fonts are real TTFs rasterized onto the grid at 16+ stitches */}
+              <select
+                value={textFontFamily}
+                onChange={(e) => onTextFontFamilyChange(e.target.value as FontFamily)}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr',
-                  gap: 3,
-                  padding: 3,
+                  padding: '8px 10px',
                   border: '1px solid #d7d0c8',
-                  borderRadius: 999,
-                  background: '#f0ece5',
+                  borderRadius: 10,
+                  background: '#fff',
+                  fontFamily: 'inherit',
+                  fontSize: 13,
+                  color: '#3f382f',
+                  cursor: 'pointer',
                 }}
               >
-                {(['small', 'medium', 'large'] as const).map((size) => (
-                  <button
-                    key={size}
-                    type="button"
-                    onClick={() => onTextFontSizeChange(size)}
-                    style={{
-                      ...pill,
-                      background: textFontSize === size ? '#3f382f' : 'transparent',
-                      color: textFontSize === size ? '#fff' : '#8a8177',
-                      fontSize: 11,
-                    }}
-                  >
-                    {size === 'small' ? '3×5' : size === 'medium' ? '5×7' : '8×13'}
-                  </button>
-                ))}
-              </div>
+                <optgroup label="Stitch fonts">
+                  <option value="sans">Sans</option>
+                  <option value="serif">Serif</option>
+                  <option value="script">Script (monogram)</option>
+                </optgroup>
+                <optgroup label="Display fonts">
+                  {RASTER_FONTS.map((font) => (
+                    <option key={font.id} value={font.id}>{font.label}</option>
+                  ))}
+                </optgroup>
+              </select>
 
-              {/* Font family toggle */}
+              {/* Font size selector — labels come from the actual glyph grid,
+                  deduped because some families (script) share one drawn size */}
+              {(() => {
+                const sizeOptions = (['small', 'medium', 'large'] as const).filter((size, i, all) => {
+                  const m = getFontMeta(size, textFontFamily)
+                  return all.findIndex((other) => {
+                    const om = getFontMeta(other, textFontFamily)
+                    return om.width === m.width && om.height === m.height
+                  }) === i
+                })
+                const active = getFontMeta(textFontSize, textFontFamily)
+                return (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${sizeOptions.length}, 1fr)`,
+                      gap: 3,
+                      padding: 3,
+                      border: '1px solid #d7d0c8',
+                      borderRadius: 999,
+                      background: '#f0ece5',
+                    }}
+                  >
+                    {sizeOptions.map((size) => {
+                      const m = getFontMeta(size, textFontFamily)
+                      const isActive = m.width === active.width && m.height === active.height
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => onTextFontSizeChange(size)}
+                          style={{
+                            ...pill,
+                            background: isActive ? '#3f382f' : 'transparent',
+                            color: isActive ? '#fff' : '#8a8177',
+                            fontSize: 11,
+                          }}
+                        >
+                          {isRasterFamily(textFontFamily) ? `${m.height} tall` : `${m.width}×${m.height}`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
+              {/* Orientation: horizontal, stacked, rotated down/up */}
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
+                  gridTemplateColumns: '1fr 1fr 1fr 1fr',
                   gap: 3,
                   padding: 3,
                   border: '1px solid #d7d0c8',
@@ -366,19 +415,25 @@ export default function PalettePanel({
                   background: '#f0ece5',
                 }}
               >
-                {(['sans', 'serif'] as const).map((family) => (
+                {([
+                  { value: 'horizontal', label: '→', title: 'Horizontal' },
+                  { value: 'stacked', label: '↓', title: 'Stacked — upright letters, top to bottom' },
+                  { value: 'down', label: '↻', title: 'Rotated 90° — reads downward' },
+                  { value: 'up', label: '↺', title: 'Rotated 90° — reads upward' },
+                ] as const).map(({ value, label, title }) => (
                   <button
-                    key={family}
+                    key={value}
                     type="button"
-                    onClick={() => onTextFontFamilyChange(family)}
+                    title={title}
+                    onClick={() => onTextOrientationChange(value)}
                     style={{
                       ...pill,
-                      background: textFontFamily === family ? '#3f382f' : 'transparent',
-                      color: textFontFamily === family ? '#fff' : '#8a8177',
-                      fontSize: 11,
+                      background: textOrientation === value ? '#3f382f' : 'transparent',
+                      color: textOrientation === value ? '#fff' : '#8a8177',
+                      fontSize: 12,
                     }}
                   >
-                    {family === 'sans' ? 'Sans' : 'Serif'}
+                    {label}
                   </button>
                 ))}
               </div>

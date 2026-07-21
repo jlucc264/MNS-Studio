@@ -316,16 +316,40 @@ TOOLS = [
                 "font_size": {
                     "type": "string",
                     "enum": ["small", "medium", "large"],
-                    "description": "small=3×5 cells, medium=5×7 cells, large=8×13 cells (default: medium)",
+                    "description": (
+                        "sans/serif: small=3×5, medium=5×7, large=9×13 cells. "
+                        "script: small/medium=9×12, large=18×24 cells. "
+                        "Display fonts: small=16, medium=22, large=30 cells tall "
+                        "(default: medium)"
+                    ),
                 },
                 "font_family": {
                     "type": "string",
-                    "enum": ["sans", "serif"],
-                    "description": "sans or serif (default: sans)",
+                    "enum": [
+                        "sans", "serif", "script",
+                        "dancing-script", "pacifico", "playfair-display",
+                        "alfa-slab-one", "luckiest-guy",
+                    ],
+                    "description": (
+                        "Stitch fonts: sans or serif (both support lowercase), or script — a "
+                        "flourished monogram style, capitals only. Display fonts (rasterized "
+                        "real typefaces, need 16+ rows of space): dancing-script (connected "
+                        "cursive), pacifico (brush script), playfair-display (elegant serif), "
+                        "alfa-slab-one (chunky slab), luckiest-guy (fun bold). Default: sans"
+                    ),
                 },
                 "bold": {"type": "boolean"},
                 "italic": {"type": "boolean"},
                 "outline": {"type": "boolean", "description": "Hollow outline-only letters"},
+                "orientation": {
+                    "type": "string",
+                    "enum": ["horizontal", "stacked", "down", "up"],
+                    "description": (
+                        "horizontal=normal; stacked=upright letters running top-to-bottom; "
+                        "down=rotated 90° reading downward; up=rotated 90° reading upward "
+                        "(default: horizontal). row/col is always the top-left of the placed block."
+                    ),
+                },
             },
             "required": ["text", "row", "col", "color"],
         },

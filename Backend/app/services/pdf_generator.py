@@ -829,6 +829,12 @@ def generate_registration_test_pdf(
     return output_path
 
 
+def _transpose_cells(cells: list[list[str]]) -> list[list[str]]:
+    if not cells or not cells[0]:
+        return cells
+    return [list(row) for row in zip(*cells)]
+
+
 def generate_roll_print_pdf(
     designs: list[dict],
     roll_width_inches: float = 8.0,
@@ -854,6 +860,15 @@ def generate_roll_print_pdf(
         stitch_w = len(cells[0]) if stitch_h else 0
         border_stitches = int(2.0 * mesh)
         draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
+        # Designs whose column count won't fit the roll's fixed width print
+        # rotated 90° so the long axis runs along the unbounded feed
+        # direction instead — belts (38"+ long, 1.25" tall) are the case
+        # that hits this; ordinary canvases never trigger it.
+        if draw_w > roll_width_pts:
+            cells = _transpose_cells(cells)
+            stitch_h = len(cells)
+            stitch_w = len(cells[0]) if stitch_h else 0
+            draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
         draw_h = ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale
         img = _render_preview_image_from_cells(
             cells, mesh, show_grid=False, include_border=True, border_inches=2.0,

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { type FontSize, type FontFamily, type TextStyle, getFontMeta, getCharAdvance, getTextCells } from '../lib/bitmapFonts'
+import { type FontSize, type FontFamily, type TextOrientation, type TextStyle, getCaretPlacement, getTextCells } from '../lib/bitmapFonts'
 import { useIsPhoneDevice, useIsTouch } from '../lib/useViewport'
 
 type ShapeCell = { row: number; col: number; color: string }
@@ -31,6 +31,7 @@ type Props = {
   onFillCell?: (cell: { row: number; col: number }) => void
   textFontSize?: FontSize
   textFontFamily?: FontFamily
+  textOrientation?: TextOrientation
   textBold?: boolean
   textItalic?: boolean
   textOutline?: boolean
@@ -513,6 +514,7 @@ export default function GridEditor({
   onFillCell,
   textFontSize = 'medium',
   textFontFamily = 'sans',
+  textOrientation = 'horizontal',
   textBold = false,
   textItalic = false,
   textOutline = false,
@@ -734,6 +736,14 @@ export default function GridEditor({
     return () => window.clearInterval(id)
   }, [toolMode, textAnchorCell, textInput])
 
+  // Clicking any text-settings control (font, size, orientation, B/I/outline)
+  // moves focus to that button, silently disconnecting the keyboard from the
+  // active text box. Pull focus back so typing and Enter keep working.
+  useEffect(() => {
+    if (toolMode === 'text' && textAnchorCell && textBoxEnd) focusTextInputForKeyboard()
+  }, [toolMode, textAnchorCell, textBoxEnd, focusTextInputForKeyboard,
+      textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline])
+
   useEffect(() => {
     if (!highlightSelection) {
       setDragSelectionRect(null)
@@ -858,8 +868,13 @@ export default function GridEditor({
   const cols = cells[0].length
   const totalRows = rows + borderStitches * 2
   const totalCols = cols + borderStitches * 2
-  const stageRows = Math.round(STAGE_SIZE_INCHES * meshCount)
-  const stageCols = Math.round(STAGE_SIZE_INCHES * meshCount)
+  // Stage is normally a fixed 20" square — plenty of panning room around any
+  // design up to the old printable max. A belt can run past 20" on its long
+  // axis, so the stage must grow to at least contain the actual content or
+  // scrolling hard-stops at the stage edge with the rest of the design
+  // unreachable.
+  const stageRows = Math.max(Math.round(STAGE_SIZE_INCHES * meshCount), totalRows)
+  const stageCols = Math.max(Math.round(STAGE_SIZE_INCHES * meshCount), totalCols)
   const availableStageWidth = Math.max(containerSize.width - RULER_THICKNESS, 160)
   const availableStageHeight = Math.max(
     containerSize.height - toolbarHeight - 8 - RULER_THICKNESS,
@@ -1457,7 +1472,7 @@ export default function GridEditor({
           }
           // Click outside: stamp current text then start new box
           if (textInput.trim() && activeColor) {
-            const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+            const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
             onApplyShapeCells?.(stampCells)
           }
           setTextAnchorCell(null)
@@ -1500,7 +1515,7 @@ export default function GridEditor({
     [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
-     textFontSize, textFontFamily, textBold, textItalic, textOutline, floatingStamp]
+     textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, floatingStamp]
   )
 
   const flushPendingTouchEdit = useCallback(() => {
@@ -1988,7 +2003,7 @@ export default function GridEditor({
       // Text preview + cursor from anchor
       if (textAnchorCell && activeColor) {
         if (textInput) {
-          const previewCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+          const previewCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
           context.globalAlpha = 0.85
           for (const cell of previewCells) {
             const stageRow = cell.row + contentOriginRow + borderStitches
@@ -2004,19 +2019,20 @@ export default function GridEditor({
           }
           context.globalAlpha = 1
         }
-        // Blinking cursor
+        // Blinking cursor — a bar spanning the glyph height, oriented to
+        // match which way the text advances.
         if (textCursorVisible) {
-          const { height: fh } = getFontMeta(textFontSize, textFontFamily)
-          const advance = getCharAdvance(textFontSize, { italic: textItalic })
-          const cursorCol = textAnchorCell.col + textInput.length * advance
-          const stageRow = textAnchorCell.row + contentOriginRow + borderStitches
-          const stageCol = cursorCol + contentOriginCol + borderStitches
+          const caret = getCaretPlacement(textInput, textFontSize, textFontFamily, { bold: textBold, italic: textItalic }, textOrientation)
+          const stageRow = textAnchorCell.row + caret.row + contentOriginRow + borderStitches
+          const stageCol = textAnchorCell.col + caret.col + contentOriginCol + borderStitches
           if (stageRow >= 0 && stageRow < stageRows && stageCol >= 0 && stageCol < stageCols) {
             const cx = gridOriginX + stageCol * cellSize
             const cy = gridOriginY + stageRow * cellSize
+            const thin = Math.max(1.5, cellSize * 0.18)
             context.fillStyle = activeColor
             context.globalAlpha = 0.9
-            context.fillRect(cx, cy, Math.max(1.5, cellSize * 0.18), fh * cellSize)
+            if (caret.axis === 'vertical') context.fillRect(cx, cy, thin, caret.span * cellSize)
+            else context.fillRect(cx, cy, caret.span * cellSize, thin)
             context.globalAlpha = 1
           }
         }
@@ -2138,6 +2154,7 @@ export default function GridEditor({
     textInput,
     textFontSize,
     textFontFamily,
+    textOrientation,
     textBold,
     textItalic,
     textOutline,
@@ -2282,6 +2299,42 @@ export default function GridEditor({
           >
             {isPhoneLandscape ? '↺' : 'Reset'}
           </button>
+          {totalCols * cellSize > previewViewportWidth && (
+            // macOS/Chromium overlay scrollbars stay hidden until an active
+            // scroll gesture, and drag-to-paint hijacks click-drag panning —
+            // for a canvas much wider than the viewport (a belt) there's
+            // otherwise no discoverable way to see the rest of the design.
+            // Keyed off the actual content width, not wrapperWidth (which
+            // includes generous stage padding around any design, so it
+            // would show these for every design, not just overflowing ones).
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                border: '1px solid #d7d7d7',
+                borderRadius: 999,
+                background: '#ffffff',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => viewportRef.current?.scrollBy({ left: -previewViewportWidth * 0.75, behavior: 'smooth' })}
+                aria-label="Scroll left"
+                style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                onClick={() => viewportRef.current?.scrollBy({ left: previewViewportWidth * 0.75, behavior: 'smooth' })}
+                aria-label="Scroll right"
+                style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+              >
+                ›
+              </button>
+            </div>
+          )}
           {traceImageUrl && onTraceOpacityChange && (
             <label style={{ display: 'flex', alignItems: 'center', gap: isPhoneLandscape ? 3 : 6, fontSize: isMobile ? 11 : 12, color: '#8a8177', userSelect: 'none', flexShrink: 0 }}>
               Trace
@@ -2453,8 +2506,16 @@ export default function GridEditor({
             ))}
           </div>
 
+          <style>{`
+            .mns-grid-viewport::-webkit-scrollbar { height: 14px; width: 14px; }
+            .mns-grid-viewport::-webkit-scrollbar-track { background: #f0ece5; }
+            .mns-grid-viewport::-webkit-scrollbar-thumb { background: #b8ac9c; border-radius: 7px; border: 3px solid #f0ece5; }
+            .mns-grid-viewport::-webkit-scrollbar-thumb:hover { background: #a89a86; }
+            .mns-grid-viewport { scrollbar-width: auto; scrollbar-color: #b8ac9c #f0ece5; }
+          `}</style>
           <div
             ref={viewportRef}
+            className="mns-grid-viewport"
             style={{
               gridColumn: '2 / 3',
               gridRow: '2 / 3',
@@ -2519,7 +2580,7 @@ export default function GridEditor({
                     if (e.key === 'Enter') {
                       e.preventDefault()
                       if (textInput.trim() && activeColor) {
-                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline })
+                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
                         onApplyShapeCells?.(stampCells)
                       }
                       setTextAnchorCell(null)

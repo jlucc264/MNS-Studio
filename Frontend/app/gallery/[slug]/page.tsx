@@ -7,6 +7,7 @@ import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
 import { NavAccountControls } from '../../../components/NavAccountControls'
 import { SignaturePad } from '../../../components/SignaturePad'
+import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
 import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isDesignPrintable, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
@@ -120,6 +121,7 @@ export default function CreatorProfilePage() {
   const [savingSignature, setSavingSignature] = useState(false)
   const [signatureError, setSignatureError] = useState('')
   const [redrawingSignature, setRedrawingSignature] = useState(false)
+  const [signatureMode, setSignatureMode] = useState<'draw' | 'pixel'>('draw')
 
   const [checkoutLoading, setCheckoutLoading] = useState<'template' | 'print' | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
@@ -422,7 +424,35 @@ export default function CreatorProfilePage() {
                       </button>
                     </div>
                   ) : (
-                    <SignaturePad onSave={handleSaveSignature} saving={savingSignature} />
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      <div style={{ display: 'inline-flex', border: '1px solid #d7d0c8', borderRadius: 999, padding: 3, width: 'fit-content' }}>
+                        {(['draw', 'pixel'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setSignatureMode(mode)}
+                            style={{
+                              padding: '5px 14px',
+                              borderRadius: 999,
+                              border: 'none',
+                              fontFamily: 'inherit',
+                              fontSize: 13,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              background: signatureMode === mode ? '#3f382f' : 'transparent',
+                              color: signatureMode === mode ? '#fff' : '#8a8177',
+                            }}
+                          >
+                            {mode === 'draw' ? 'Draw' : 'Pixel'}
+                          </button>
+                        ))}
+                      </div>
+                      {signatureMode === 'draw' ? (
+                        <SignaturePad onSave={handleSaveSignature} saving={savingSignature} />
+                      ) : (
+                        <SignatureGridEditor onSave={handleSaveSignature} saving={savingSignature} />
+                      )}
+                    </div>
                   )}
                   {signatureError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{signatureError}</p>}
                 </div>

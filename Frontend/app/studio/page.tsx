@@ -14,7 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import ChatPanel from '../../components/ChatPanel'
 import GridEditor, { computeShapeCells, type DesignSelectionRect } from '../../components/GridEditor'
-import { getTextCells } from '../../lib/bitmapFonts'
+import { getTextCells, ensureFontLoaded, type FontFamily, type TextOrientation } from '../../lib/bitmapFonts'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
 import { ColorBrowserModal } from '../../components/ColorBrowserModal'
@@ -23,6 +23,7 @@ import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 import MobileSheet from '../../components/MobileSheet'
 import PreviewControls, { PreviewSettings } from '../../components/PreviewControls'
+import BeltControls from '../../components/BeltControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
@@ -61,6 +62,13 @@ import {
   type ImportPatternResponse,
   MAX_PRINTABLE_LONG_SIDE,
   MAX_PRINTABLE_SHORT_SIDE,
+  BELT_HEIGHT_INCHES,
+  BELT_MESH_COUNT,
+  BELT_MIN_LENGTH_IN,
+  BELT_MAX_LENGTH_IN,
+  BELT_PANT_SIZES,
+  beltLengthForPantSize,
+  isBeltDesign,
 } from '../../lib/api'
 
 type ColorEditSnapshot = {
@@ -345,6 +353,14 @@ function clampPrintDimensions(w: number, h: number): { width_inches: number; hei
   return { width_inches: Number(width.toFixed(2)), height_inches: Number(height.toFixed(2)) }
 }
 
+// Belt canvases are a long, fixed-height strip — clamp only the length and
+// pin height/mesh, instead of the free-form photo/blank-canvas box above.
+function clampBeltDimensions(w: number, h: number): { width_inches: number; height_inches: number } {
+  const length = Math.max(w, h)
+  const clamped = Math.max(BELT_MIN_LENGTH_IN, Math.min(length, BELT_MAX_LENGTH_IN))
+  return { width_inches: Number(clamped.toFixed(2)), height_inches: BELT_HEIGHT_INCHES }
+}
+
 const DEFAULT_SETTINGS: PreviewSettings = {
   width_inches: 4,
   height_inches: 4,
@@ -380,13 +396,23 @@ function normalizePreviewSettings(
   const height = requestedHeight !== null && requestedHeight > 0
     ? requestedHeight
     : (fallbackHeight !== null && fallbackHeight > 0 ? fallbackHeight : DEFAULT_SETTINGS.height_inches)
-  const dimensions = clampPrintDimensions(width, height)
+  // A belt-shaped fallback (the design being edited) means this patch is
+  // still editing a belt — use the belt clamp/mesh instead of the generic
+  // photo/blank-canvas box. Keyed off the fallback, not the requested value,
+  // so an odd thin photo-import height never gets misread as a belt.
+  const wasBelt = isBeltDesign(
+    fallbackWidth !== null && fallbackWidth > 0 ? fallbackWidth : DEFAULT_SETTINGS.width_inches,
+    fallbackHeight !== null && fallbackHeight > 0 ? fallbackHeight : DEFAULT_SETTINGS.height_inches,
+  )
+  const dimensions = wasBelt ? clampBeltDimensions(width, height) : clampPrintDimensions(width, height)
 
   const requestedMesh = toFiniteNumber(settings.mesh_count)
   const fallbackMesh = toFiniteNumber(fallback.mesh_count)
-  const meshCount = requestedMesh === 13 || requestedMesh === 18
-    ? requestedMesh
-    : (fallbackMesh === 13 || fallbackMesh === 18 ? fallbackMesh : DEFAULT_SETTINGS.mesh_count)
+  const meshCount = wasBelt
+    ? BELT_MESH_COUNT
+    : requestedMesh === 13 || requestedMesh === 18
+      ? requestedMesh
+      : (fallbackMesh === 13 || fallbackMesh === 18 ? fallbackMesh : DEFAULT_SETTINGS.mesh_count)
 
   const requestedColorCount = toFiniteNumber(settings.color_count)
   const fallbackColorCount = toFiniteNumber(fallback.color_count)
@@ -439,6 +465,7 @@ type ActiveDesignSnapshot = {
   finishShape?: 'circle' | 'square'
   finishSizeInches?: number
   lockAspectRatio?: boolean
+  isBeltCanvas?: boolean
 }
 
 type PendingStudioNavigation =
@@ -541,6 +568,10 @@ function StudioPage() {
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
+  // Explicit rather than derived from geometry: PreviewControls allows a
+  // legitimate photo-import height down to 1", which would otherwise pass
+  // isBeltDesign's own short-side check and misfire the belt settings panel.
+  const [isBeltCanvas, setIsBeltCanvas] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [previewImagePath, setPreviewImagePath] = useState<string | null>(null)
   const [originalPreviewImagePath, setOriginalPreviewImagePath] = useState<string | null>(null)
@@ -560,7 +591,15 @@ function StudioPage() {
   const [gridKey, setGridKey] = useState(0)
   const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'>('paint')
   const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
-  const [textFontFamily, setTextFontFamily] = useState<'sans' | 'serif'>('sans')
+  const [textFontFamily, setTextFontFamily] = useState<FontFamily>('sans')
+  const [textOrientation, setTextOrientation] = useState<TextOrientation>('horizontal')
+  // Raster families must finish loading before they're active — an unloaded
+  // font renders nothing (never a substituted fallback), so switch after.
+  const handleTextFontFamilyChange = useCallback((family: FontFamily) => {
+    void ensureFontLoaded(family)
+      .catch(() => {}) // offline/failed load: switch anyway; preview is empty rather than wrong-font
+      .then(() => setTextFontFamily(family))
+  }, [])
   const [textBold, setTextBold] = useState(false)
   const [textItalic, setTextItalic] = useState(false)
   const [textOutline, setTextOutline] = useState(false)
@@ -704,6 +743,7 @@ function StudioPage() {
     setFinalPreviewImagePath(null)
     setLastSettings(null)
     setDraftSettings(DEFAULT_SETTINGS)
+    setIsBeltCanvas(false)
     setPaletteReductionTarget(128)
     setFinishShape('circle')
     setFinishSizeInches(4)
@@ -978,6 +1018,7 @@ function StudioPage() {
     finishShape,
     finishSizeInches,
     lockAspectRatio,
+    isBeltCanvas,
   }), [
     activeImagePath,
     activeWorkflowStep,
@@ -994,6 +1035,7 @@ function StudioPage() {
     finishSizeInches,
     hasGeneratedPreview,
     importedAspectRatio,
+    isBeltCanvas,
     lastSettings,
     lastVisibleImageUrl,
     lockAspectRatio,
@@ -1146,6 +1188,7 @@ function StudioPage() {
     setFinishShape(snapshot.finishShape ?? 'circle')
     setFinishSizeInches(snapshot.finishSizeInches ?? 4)
     setLockAspectRatio(snapshot.lockAspectRatio ?? true)
+    setIsBeltCanvas(snapshot.isBeltCanvas ?? false)
     setRecoveryCandidate(null)
     setCleanDesignFingerprint(null)
     setIsDesignReady(true)
@@ -1251,6 +1294,7 @@ function StudioPage() {
         }
         setDraftSettings(settings)
         setLastSettings(settings)
+        setIsBeltCanvas(isBeltDesign(settings.width_inches, settings.height_inches))
         setImportedAspectRatio(settings.width_inches / settings.height_inches)
         setHasGeneratedPreview(true)
         setViewMode('stitch')
@@ -1434,6 +1478,7 @@ function StudioPage() {
     setLastSettings(null)
     setDraftSettings(DEFAULT_SETTINGS)
     setLockAspectRatio(true)
+    setIsBeltCanvas(false)
     setHasGeneratedPreview(false)
     setViewMode('original')
     setActiveWorkflowStep(2)
@@ -1485,6 +1530,48 @@ function StudioPage() {
     setLastSettings(blankSettings)
     setDraftSettings(blankSettings)
     setLockAspectRatio(false)
+    setIsBeltCanvas(false)
+    setHasGeneratedPreview(true)
+    setViewMode('stitch')
+    setGridKey((k) => k + 1)
+    setActiveWorkflowStep(2)
+    markCurrentDesignClean()
+  }
+
+  const DEFAULT_BELT_PANT_SIZE = 34
+
+  function handleStartBelt() {
+    const beltLength = beltLengthForPantSize(DEFAULT_BELT_PANT_SIZE)
+    const w = Math.round(beltLength * BELT_MESH_COUNT)
+    const h = Math.round(BELT_HEIGHT_INCHES * BELT_MESH_COUNT)
+    const blankGrid = Array.from({ length: h }, () => Array(w).fill(BLANK_CELL))
+    const beltSettings: PreviewSettings = {
+      ...DEFAULT_SETTINGS,
+      width_inches: beltLength,
+      height_inches: BELT_HEIGHT_INCHES,
+      mesh_count: BELT_MESH_COUNT,
+    }
+    setActiveImagePath(null)
+    setImportedAspectRatio(beltLength / BELT_HEIGHT_INCHES)
+    setPreviewImagePath(null)
+    setOriginalPreviewImagePath(null)
+    setLastVisibleImageUrl(null)
+    setAllPalette([])
+    setPreviewPalette([])
+    setOriginalCells(blankGrid)
+    setEnabledColorHexes([])
+    setCells(blankGrid)
+    setActivePaintColor(null)
+    setManualCellOverrides({})
+    setFinishOutlineBackups({})
+    setUndoStack([])
+    setRedoStack([])
+    setFinalPdfPath(null)
+    setFinalPreviewImagePath(null)
+    setLastSettings(beltSettings)
+    setDraftSettings(beltSettings)
+    setLockAspectRatio(false)
+    setIsBeltCanvas(true)
     setHasGeneratedPreview(true)
     setViewMode('stitch')
     setGridKey((k) => k + 1)
@@ -1794,7 +1881,9 @@ function StudioPage() {
   function updateSettings(patch: Partial<PreviewSettings>) {
     setDraftSettings((current) => {
       const next = { ...current, ...patch }
-      const { width_inches, height_inches } = clampPrintDimensions(next.width_inches, next.height_inches)
+      const { width_inches, height_inches } = isBeltDesign(current.width_inches, current.height_inches)
+        ? clampBeltDimensions(next.width_inches, next.height_inches)
+        : clampPrintDimensions(next.width_inches, next.height_inches)
       return { ...next, width_inches, height_inches }
     })
   }
@@ -3022,12 +3111,14 @@ function StudioPage() {
       case 'add_text': {
         if (!cells.length || action.row === undefined || action.col === undefined || !action.text || !action.color) break
         const textColor = findPaletteColor(action.color)?.hex ?? action.color
+        if (action.font_family) await ensureFontLoaded(action.font_family).catch(() => {})
         const textCells = getTextCells(
           action.text, action.row, action.col,
           action.font_size ?? 'medium',
           action.font_family ?? 'sans',
           textColor,
           { bold: action.bold, italic: action.italic, outline: action.outline },
+          action.orientation ?? 'horizontal',
         )
         if (!textCells.length) break
         pushUndoSnapshot()
@@ -3172,6 +3263,7 @@ function StudioPage() {
     setSettingsGuardAccepted(false)
     setDraftSettings(settings)
     setLastSettings(settings)
+    setIsBeltCanvas(false)
     setImportedAspectRatio(settings.width_inches / settings.height_inches)
     setHasGeneratedPreview(true)
     setViewMode('stitch')
@@ -3506,19 +3598,27 @@ function StudioPage() {
         <h2 style={{ margin: 0, fontSize: 13 }}>Size and Settings</h2>
       </div>
 
-      <PreviewControls
-        importedAspectRatio={importedAspectRatio}
-        settings={draftSettings}
-        lockAspectRatio={lockAspectRatio}
-        isBlankCanvas={isBlankCanvas}
-        compact={isMobile}
-        onSettingsChange={setDraftSettings}
-        onLockAspectRatioChange={setLockAspectRatio}
-        onDimensionClamped={() => {
-          setDimensionLimitHit(true)
-          setTimeout(() => setDimensionLimitHit(false), 3000)
-        }}
-      />
+      {isBeltCanvas ? (
+        <BeltControls
+          settings={draftSettings}
+          compact={isMobile}
+          onSettingsChange={setDraftSettings}
+        />
+      ) : (
+        <PreviewControls
+          importedAspectRatio={importedAspectRatio}
+          settings={draftSettings}
+          lockAspectRatio={lockAspectRatio}
+          isBlankCanvas={isBlankCanvas}
+          compact={isMobile}
+          onSettingsChange={setDraftSettings}
+          onLockAspectRatioChange={setLockAspectRatio}
+          onDimensionClamped={() => {
+            setDimensionLimitHit(true)
+            setTimeout(() => setDimensionLimitHit(false), 3000)
+          }}
+        />
+      )}
       <label
         style={{
           display: 'flex',
@@ -3933,6 +4033,14 @@ function StudioPage() {
           >
             Start with a blank canvas
           </button>
+          <button
+            type="button"
+            onClick={handleStartBelt}
+            disabled={loading}
+            style={btnSecondary}
+          >
+            Design a belt
+          </button>
           {/* Native <label> activation: JS input.click() is silently ignored
               in installed-PWA WebKit, so the input lives inside the label. */}
           <label
@@ -4287,7 +4395,9 @@ function StudioPage() {
       textFontSize={textFontSize}
       onTextFontSizeChange={setTextFontSize}
       textFontFamily={textFontFamily}
-      onTextFontFamilyChange={setTextFontFamily}
+      onTextFontFamilyChange={handleTextFontFamilyChange}
+      textOrientation={textOrientation}
+      onTextOrientationChange={setTextOrientation}
       textBold={textBold}
       onTextBoldChange={setTextBold}
       textItalic={textItalic}
@@ -4792,6 +4902,7 @@ function StudioPage() {
                   onDesignAreaMiss={() => { setActivePaintColor(null); setSelectedRegions([]) }}
                   textFontSize={textFontSize}
                   textFontFamily={textFontFamily}
+                  textOrientation={textOrientation}
                   textBold={textBold}
                   textItalic={textItalic}
                   textOutline={textOutline}
