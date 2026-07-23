@@ -482,7 +482,7 @@ function GalleryPage() {
         </div>
       )}
 
-      <div style={{ position: 'sticky', top: 72, zIndex: 40, background: '#f5f1ea', borderBottom: '1px solid #e7e1d8' }}>
+      <div style={{ position: 'sticky', top: 70, zIndex: 40, background: '#f5f1ea', borderBottom: '1px solid #e7e1d8' }}>
         <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '12px 12px 12px' : '14px 24px 14px', display: 'grid', gap: 10 }}>
           <h1 style={{ margin: 0, fontSize: isMobile ? 20 : 28 }}>Gallery</h1>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
