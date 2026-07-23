@@ -141,7 +141,7 @@ def send_customer_order_confirmation(
     customer_email: str,
     shipping: dict | None,
     amount_total_cents: int | None,
-    pattern_pdf_bytes: bytes | None = None,
+    pdf_attachments: list[tuple[bytes, str]] | None = None,
 ) -> bool:
     if not _ready():
         return False
@@ -150,11 +150,15 @@ def send_customer_order_confirmation(
     items = _order_items_summary(order_type, metadata)
     total = f"${amount_total_cents / 100:,.2f}" if amount_total_cents is not None else None
 
-    next_steps = (
-        "Your pattern PDF is attached to this email — happy stitching!"
-        if is_template
-        else "We're preparing your canvas now and will be in touch when it ships."
-    )
+    if is_template:
+        next_steps = "Your pattern PDF is attached to this email — happy stitching!"
+    else:
+        next_steps = (
+            "We're preparing your canvas now — expect it to ship within 5–7 business days, "
+            "and we'll follow up with tracking once it's on its way."
+        )
+        if pdf_attachments:
+            next_steps += " We've attached a production report of what you ordered for your records."
 
     text_lines = ["Thank you for your order from MNS Studio!", ""]
     text_lines += [f"  • {item}" for item in items]
@@ -192,6 +196,7 @@ def send_customer_order_confirmation(
     html = f"""
 <div style="background:#f9f5ee;padding:32px 16px;font-family:Georgia,'Times New Roman',serif;color:#2f2a24;">
   <div style="max-width:520px;margin:0 auto;background:#fffdf9;border:1px solid #e8e0d0;border-radius:10px;padding:32px;">
+    <img src="https://www.mns.studio/icons/icon-512.png" width="48" height="48" alt="MNS Studio" style="border-radius:10px;margin:0 0 20px;display:block;">
     <h1 style="margin:0 0 6px;font-size:22px;font-weight:normal;">Thank you for your order</h1>
     <p style="margin:0 0 20px;color:#5b544a;">Your MNS Studio order is confirmed.</p>
     <table style="width:100%;border-collapse:collapse;font-size:15px;">{item_rows}{total_row}</table>
@@ -211,14 +216,10 @@ def send_customer_order_confirmation(
         "text": "\n".join(text_lines),
         "html": html,
     }
-    if pattern_pdf_bytes:
-        safe_title = "".join(
-            ch for ch in metadata.get("title", "pattern") if ch.isalnum() or ch in " -_"
-        ).strip() or "pattern"
-        params["attachments"] = [{
-            "filename": f"{safe_title}.pdf",
-            "content": list(pattern_pdf_bytes),
-        }]
+    if pdf_attachments:
+        params["attachments"] = [
+            {"filename": name, "content": list(content)} for content, name in pdf_attachments
+        ]
 
     resend.Emails.send(params)
     return True

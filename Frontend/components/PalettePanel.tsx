@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { type FontSize, type FontFamily, type TextOrientation, getFontMeta, isRasterFamily, RASTER_FONTS } from '../lib/bitmapFonts'
+import { colorDistance } from '../lib/colorDistance'
 
 type PaletteColor = {
   hex: string
@@ -33,14 +34,15 @@ type Props = {
   onBrushDensityChange: (value: number) => void
   hasSelectedRegion: boolean
   selectedRegionCount: number
-  selectionMergeSuggestions: PaletteColor[]
   onApplyColorToSelection: (hex: string) => void
   onClearSelection: () => void
   hasClipboard: boolean
   hasFloatingStamp: boolean
+  isImportPickerOpen: boolean
   onCutSelection: () => void
   onCopySelection: () => void
   onPasteClipboard: () => void
+  onImportProject: () => void
   onStampNudge: (direction: 'up' | 'down' | 'left' | 'right') => void
   onRotateStamp: () => void
   onFlipStamp: (axis: 'horizontal' | 'vertical') => void
@@ -79,21 +81,6 @@ type Props = {
 
 const BLANK_CELL = '__BLANK__'
 
-function hexToRgb(hex: string) {
-  const cleaned = hex.replace('#', '')
-  return [
-    Number.parseInt(cleaned.slice(0, 2), 16),
-    Number.parseInt(cleaned.slice(2, 4), 16),
-    Number.parseInt(cleaned.slice(4, 6), 16),
-  ] as const
-}
-
-function colorDistance(a: string, b: string) {
-  const [ar, ag, ab] = hexToRgb(a)
-  const [br, bg, bb] = hexToRgb(b)
-  return Math.sqrt((ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2)
-}
-
 export default function PalettePanel({
   colors,
   activeDesignColors,
@@ -118,14 +105,15 @@ export default function PalettePanel({
   onBrushDensityChange,
   hasSelectedRegion,
   selectedRegionCount,
-  selectionMergeSuggestions,
   onApplyColorToSelection,
   onClearSelection,
   hasClipboard,
   hasFloatingStamp,
+  isImportPickerOpen,
   onCutSelection,
   onCopySelection,
   onPasteClipboard,
+  onImportProject,
   onStampNudge,
   onRotateStamp,
   onFlipStamp,
@@ -1056,23 +1044,41 @@ export default function PalettePanel({
       {isSelectTab && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Sub-tab toggle */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5', flexShrink: 0 }}>
-            {(['color', 'stamp'] as const).map((mode) => (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5', flexShrink: 0 }}>
+            {(['color', 'stamp'] as const).map((mode) => {
+              const selected = selectSubMode === mode && !isImportPickerOpen
+              return (
               <button
                 key={mode}
                 type="button"
                 onClick={() => setSelectSubMode(mode)}
                 style={{
                   ...pill,
-                  background: selectSubMode === mode ? '#6e8d67' : 'transparent',
-                  color: selectSubMode === mode ? '#fff' : '#8a8177',
+                  background: selected ? '#6e8d67' : 'transparent',
+                  color: selected ? '#fff' : '#8a8177',
                   fontSize: 11,
                   textTransform: 'capitalize',
                 }}
               >
                 {mode === 'color' ? '◉ Color' : '✂ Cut / Paste'}
               </button>
-            ))}
+              )
+            })}
+            <button
+              type="button"
+              onClick={onImportProject}
+              disabled={hasFloatingStamp}
+              title={hasFloatingStamp ? 'Place or cancel the current stamp first' : undefined}
+              style={{
+                ...pill,
+                background: isImportPickerOpen ? '#6e8d67' : 'transparent',
+                color: hasFloatingStamp ? '#c4bcb1' : isImportPickerOpen ? '#fff' : '#8a8177',
+                fontSize: 11,
+                cursor: hasFloatingStamp ? 'not-allowed' : 'pointer',
+              }}
+            >
+              ⤵ Import
+            </button>
           </div>
 
           <div
@@ -1269,8 +1275,7 @@ export default function PalettePanel({
             >
             {colorsToList.map((color) => {
               const selected = activeColor === color.hex
-              const visibleSuggestions =
-                selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
+              const visibleSuggestions = fallbackSelectionSuggestions
               const hovered = hoveredSwatchHex === color.hex
 
               return (

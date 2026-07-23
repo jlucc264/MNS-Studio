@@ -48,6 +48,7 @@ type Props = {
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
 const RULER_THICKNESS = 24
 const ZOOM_BUTTON_STEP = 10
+const MAX_ZOOM_PERCENT = 800
 const STAGE_SIZE_INCHES = 20
 const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
@@ -274,7 +275,7 @@ function stitchShadow(hex: string) {
 }
 
 function clampZoom(nextZoom: number) {
-  return Math.max(100, Math.min(400, nextZoom))
+  return Math.max(100, Math.min(MAX_ZOOM_PERCENT, nextZoom))
 }
 
 const TOUCH_EDIT_GRACE_MS = 90
@@ -2285,7 +2286,7 @@ export default function GridEditor({
             <button
               type="button"
               onClick={() => scheduleZoom(Math.floor((zoomPercentRef.current + ZOOM_BUTTON_STEP) / 10) * 10)}
-              disabled={zoomPercentRef.current >= 400}
+              disabled={zoomPercentRef.current >= MAX_ZOOM_PERCENT}
               style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
             >
               +
@@ -2299,7 +2300,7 @@ export default function GridEditor({
           >
             {isPhoneLandscape ? '↺' : 'Reset'}
           </button>
-          {totalCols * cellSize > previewViewportWidth && (
+          {(() => {
             // macOS/Chromium overlay scrollbars stay hidden until an active
             // scroll gesture, and drag-to-paint hijacks click-drag panning —
             // for a canvas much wider than the viewport (a belt) there's
@@ -2307,6 +2308,16 @@ export default function GridEditor({
             // Keyed off the actual content width, not wrapperWidth (which
             // includes generous stage padding around any design, so it
             // would show these for every design, not just overflowing ones).
+            //
+            // Always mounted (visibility toggled, not conditionally
+            // rendered) so this group's width doesn't come and go — mounting
+            // it used to widen the button cluster, and since the cluster is
+            // right-anchored (justifyContent: 'space-between' on the parent
+            // row), that shifted every earlier button — including Reset —
+            // left by its width, right into the spot the zoom "+" button had
+            // just been clicked at.
+            const canScroll = totalCols * cellSize > previewViewportWidth
+            return (
             <div
               style={{
                 display: 'inline-flex',
@@ -2315,10 +2326,12 @@ export default function GridEditor({
                 borderRadius: 999,
                 background: '#ffffff',
                 overflow: 'hidden',
+                visibility: canScroll ? 'visible' : 'hidden',
               }}
             >
               <button
                 type="button"
+                tabIndex={canScroll ? 0 : -1}
                 onClick={() => viewportRef.current?.scrollBy({ left: -previewViewportWidth * 0.75, behavior: 'smooth' })}
                 aria-label="Scroll left"
                 style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
@@ -2327,6 +2340,7 @@ export default function GridEditor({
               </button>
               <button
                 type="button"
+                tabIndex={canScroll ? 0 : -1}
                 onClick={() => viewportRef.current?.scrollBy({ left: previewViewportWidth * 0.75, behavior: 'smooth' })}
                 aria-label="Scroll right"
                 style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
@@ -2334,7 +2348,8 @@ export default function GridEditor({
                 ›
               </button>
             </div>
-          )}
+            )
+          })()}
           {traceImageUrl && onTraceOpacityChange && (
             <label style={{ display: 'flex', alignItems: 'center', gap: isPhoneLandscape ? 3 : 6, fontSize: isMobile ? 11 : 12, color: '#8a8177', userSelect: 'none', flexShrink: 0 }}>
               Trace

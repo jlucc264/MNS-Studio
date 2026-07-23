@@ -247,7 +247,7 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
         ip = item.get("internal_pdf_supabase_path")
         if ip:
             item_meta["ip"] = ip
-        else:
+        if item.get("pdf_url"):
             item_meta["pdf"] = item["pdf_url"]
         if has_creator:
             item_meta["gi"] = item.get("creator_gallery_item_id", "")

@@ -901,6 +901,7 @@ def _handle_completed_session(session) -> None:
             logger.exception("Failed to record print order for session %s", session.get("id"))
 
     cart_attachments: list[tuple[bytes, str]] = []
+    customer_cart_attachments: list[tuple[bytes, str]] = []
     if order_type == "cart":
         item_count = int(metadata.get("item_count", 0))
         for i in range(item_count):
@@ -909,20 +910,18 @@ def _handle_completed_session(session) -> None:
                 item_meta = json.loads(raw)
             except Exception:
                 continue
-            item_pdf: bytes | None = None
             ip = item_meta.get("ip")
             if ip:
                 item_pdf = download_from_supabase_storage(ip, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
-            if not item_pdf:
-                pdf_url = item_meta.get("pdf")
-                if pdf_url:
-                    try:
-                        with _ur.urlopen(pdf_url, timeout=20) as r:
-                            item_pdf = r.read()
-                    except Exception:
-                        pass
-            if item_pdf:
-                cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
+                if item_pdf:
+                    cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
+            pdf_url = item_meta.get("pdf")
+            if pdf_url:
+                try:
+                    with _ur.urlopen(pdf_url, timeout=20) as r:
+                        customer_cart_attachments.append((r.read(), f"production_report_{i + 1}.pdf"))
+                except Exception:
+                    logger.exception("Could not fetch cart item PDF for session %s item %d", session.get("id"), i)
             gi = item_meta.get("gi")
             cu = item_meta.get("cu")
             if gi and cu:
@@ -954,18 +953,23 @@ def _handle_completed_session(session) -> None:
         logger.exception("Order notification email failed for session %s", session.get("id"))
 
     if customer_email:
-        pattern_pdf: bytes | None = None
-        if order_type == "template" and metadata.get("pdf_url"):
+        customer_pdf_attachments: list[tuple[bytes, str]] = []
+        if order_type == "cart":
+            customer_pdf_attachments = customer_cart_attachments
+        elif metadata.get("pdf_url"):
+            safe_title = "".join(
+                ch for ch in metadata.get("title", "pattern") if ch.isalnum() or ch in " -_"
+            ).strip() or "pattern"
             try:
                 with _ur.urlopen(metadata["pdf_url"], timeout=20) as r:
-                    pattern_pdf = r.read()
+                    customer_pdf_attachments = [(r.read(), f"{safe_title}.pdf")]
             except Exception:
-                logger.exception("Could not fetch pattern PDF for session %s", session.get("id"))
+                logger.exception("Could not fetch order PDF for session %s", session.get("id"))
         try:
             send_customer_order_confirmation(
                 order_type, metadata, customer_email, shipping,
                 amount_total_cents=session.get("amount_total"),
-                pattern_pdf_bytes=pattern_pdf,
+                pdf_attachments=customer_pdf_attachments,
             )
         except Exception:
             logger.exception("Customer confirmation email failed for session %s", session.get("id"))

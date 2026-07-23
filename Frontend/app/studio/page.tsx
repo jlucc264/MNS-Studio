@@ -47,6 +47,8 @@ import {
   getMyCreatorProfile,
   getMySignature,
   getProject,
+  listProjects,
+  type Project,
   gridRender,
   isDesignPrintable,
   samplePixel,
@@ -111,6 +113,29 @@ const DISPLAY_GROUP_DISTANCE = 12
 const MIN_PALETTE_STATE_OVERLAP_RATIO = 0.6
 const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
+
+// Mirrors the backend's crop_to_content (pdf_generator.py) — a saved
+// project's stored grid can include blank margin around the design, which
+// would otherwise turn into a big blank bounding box when imported as a
+// stamp.
+function cropCellsToContent(cells: string[][]): string[][] {
+  if (!cells.length || !cells[0]?.length) return cells
+  let minR = cells.length
+  let maxR = -1
+  let minC = cells[0].length
+  let maxC = -1
+  cells.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (cell === BLANK_CELL) return
+      if (r < minR) minR = r
+      if (r > maxR) maxR = r
+      if (c < minC) minC = c
+      if (c > maxC) maxC = c
+    })
+  })
+  if (maxR < 0) return cells
+  return cells.slice(minR, maxR + 1).map((row) => row.slice(minC, maxC + 1))
+}
 
 function estimateSkeins(stitchCount: number, meshCount: number): number {
   const stitchesPerSkein = meshCount >= 18 ? 1750 : 1250
@@ -621,6 +646,10 @@ function StudioPage() {
   const [settingsGuardAccepted, setSettingsGuardAccepted] = useState(false)
   const [showSettingsGuardModal, setShowSettingsGuardModal] = useState(false)
   const [stampClipboard, setStampClipboard] = useState<(string | null)[][] | null>(null)
+  const [showImportProjectPicker, setShowImportProjectPicker] = useState(false)
+  const [importableProjects, setImportableProjects] = useState<Project[] | null>(null)
+  const [importProjectsLoading, setImportProjectsLoading] = useState(false)
+  const [importProjectsError, setImportProjectsError] = useState('')
   const [floatingStamp, setFloatingStamp] = useState<{
     cells: (string | null)[][]
     anchorRow: number
@@ -696,7 +725,6 @@ function StudioPage() {
   const [draftSaveError, setDraftSaveError] = useState('')
   const [showColorBrowser, setShowColorBrowser] = useState(false)
   const [colorBrowserTarget, setColorBrowserTarget] = useState<'add' | 'swap' | 'fill' | 'border'>('add')
-  const [colorBrowserSwapFrom, setColorBrowserSwapFrom] = useState<PaletteColor | null>(null)
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
@@ -905,7 +933,6 @@ function StudioPage() {
     if (!hasGeneratedPreview) return
     if (toolMode === 'paint') {
       setColorBrowserTarget('add')
-      setColorBrowserSwapFrom(null)
       setShowColorBrowser(true)
     } else if (toolMode === 'select' || toolMode === 'merge') {
       setShowColorBrowser(false)
@@ -1370,6 +1397,18 @@ function StudioPage() {
   const canResizeBlankCanvas = isBlankCanvas && !hasStitchedContent
   const isUnauthenticatedWithCanvas = !session && hasActiveCanvas
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
+  // Tracks whichever swatch is currently active, not just whichever one the
+  // "+" button was clicked on — so if you switch to a different color while
+  // the drawer is still open, "Nearby colors" follows along instead of
+  // staying pinned to the first color you opened it from.
+  const colorBrowserSwapFrom = useMemo(() => {
+    if (colorBrowserTarget !== 'swap' || !activePaintColor) return null
+    return (
+      displayPalette.find((c) => c.hex === activePaintColor) ??
+      allDmcColors.find((c) => c.hex === activePaintColor) ??
+      null
+    )
+  }, [colorBrowserTarget, activePaintColor, displayPalette, allDmcColors])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
   const currentDesignStitchCount = useMemo(
     () => Object.values(currentDesignColorCounts).reduce((total, count) => total + count, 0),
@@ -1425,49 +1464,6 @@ function StudioPage() {
 
     return count
   }, [activePaintColor, cells, selectedRegionBounds])
-  const selectionMergeSuggestions = useMemo(() => {
-    if (!activePaintColor || !selectedRegionBounds.length || !cells.length) return []
-
-    const neighborCounts = new Map<string, number>()
-    const directions: Array<[number, number]> = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ]
-    selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
-      for (let row = top; row <= bottom; row += 1) {
-        for (let col = left; col <= right; col += 1) {
-          if (cells[row]?.[col] !== activePaintColor) continue
-
-          directions.forEach(([rowOffset, colOffset]) => {
-            const nextRow = row + rowOffset
-            const nextCol = col + colOffset
-            if (nextRow < 0 || nextRow >= cells.length || nextCol < 0 || nextCol >= cells[nextRow].length) return
-
-            const neighborHex = cells[nextRow][nextCol]
-            if (neighborHex === activePaintColor) return
-            if (neighborHex === BLANK_CELL) return
-
-            neighborCounts.set(neighborHex, (neighborCounts.get(neighborHex) ?? 0) + 1)
-          })
-        }
-      }
-    })
-
-    const byHex = new Map<string, PaletteColor>()
-    ;[...displayPalette, ...allDmcColors].forEach((color) => {
-      if (!byHex.has(color.hex)) {
-        byHex.set(color.hex, color)
-      }
-    })
-
-    return Array.from(neighborCounts.entries())
-      .sort((left, right) => right[1] - left[1])
-      .map(([hex]) => byHex.get(hex))
-      .filter((color): color is PaletteColor => Boolean(color))
-      .slice(0, 6)
-  }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegionBounds])
   const selectedRegionColors = useMemo(() => {
     if (!cells.length || !selectedRegionBounds.length) return []
 
@@ -2388,16 +2384,38 @@ function StudioPage() {
     setViewMode('stitch')
   }
 
-  function handlePasteClipboard() {
-    if (!stampClipboard || !cells.length) return
-    const stampH = stampClipboard.length
-    const stampW = stampClipboard[0]?.length ?? 0
+  // Accepts an explicit source so importing a project can place it
+  // immediately — setStampClipboard's update wouldn't be visible yet to a
+  // handlePasteClipboard() call made in the same tick.
+  function handlePasteClipboard(source: (string | null)[][] | null = stampClipboard) {
+    if (!source || !cells.length) return
+    const stampH = source.length
+    const stampW = source[0]?.length ?? 0
     const anchorRow = Math.max(0, Math.round((cells.length - stampH) / 2))
     const anchorCol = Math.max(0, Math.round(((cells[0]?.length ?? 0) - stampW) / 2))
     stampCameFromCutRef.current = false
-    setFloatingStamp({ cells: stampClipboard, anchorRow, anchorCol })
+    setFloatingStamp({ cells: source, anchorRow, anchorCol })
     setSelectedRegions([])
     setViewMode('stitch')
+  }
+
+  function handleOpenImportProjectPicker() {
+    setShowImportProjectPicker(true)
+    if (importableProjects !== null || !session?.access_token) return
+    setImportProjectsLoading(true)
+    setImportProjectsError('')
+    listProjects(session.access_token)
+      .then((projects) => setImportableProjects(projects.filter((p) => p.id !== savedProjectId)))
+      .catch(() => setImportProjectsError('Could not load your projects.'))
+      .finally(() => setImportProjectsLoading(false))
+  }
+
+  function handleImportProject(project: Project) {
+    const cropped = cropCellsToContent(project.cells ?? [])
+    if (!cropped.length || !cropped[0]?.length) return
+    setStampClipboard(cropped)
+    setShowImportProjectPicker(false)
+    handlePasteClipboard(cropped)
   }
 
   const handleStampMove = useCallback((anchor: { row: number; col: number }) => {
@@ -4501,14 +4519,15 @@ function StudioPage() {
       onBrushDensityChange={setBrushDensity}
       hasSelectedRegion={selectedRegions.length > 0}
       selectedRegionCount={selectedRegionCount}
-      selectionMergeSuggestions={selectionMergeSuggestions}
       onApplyColorToSelection={handleApplyColorToSelection}
       onClearSelection={handleClearSelection}
       hasClipboard={Boolean(stampClipboard)}
       hasFloatingStamp={Boolean(floatingStamp)}
+      isImportPickerOpen={showImportProjectPicker}
       onCutSelection={handleCutSelection}
       onCopySelection={handleCopySelection}
-      onPasteClipboard={handlePasteClipboard}
+      onPasteClipboard={() => handlePasteClipboard()}
+      onImportProject={handleOpenImportProjectPicker}
       onStampNudge={handleStampNudge}
       onRotateStamp={handleRotateStamp}
       onFlipStamp={handleFlipStamp}
@@ -4526,10 +4545,10 @@ function StudioPage() {
       moreColors={allDmcColors.filter(
         (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
       )}
-      onOpenAddBrowser={() => { setColorBrowserTarget('add'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
-      onOpenSwapBrowser={(color) => { setColorBrowserTarget('swap'); setColorBrowserSwapFrom(color); setShowColorBrowser(true) }}
-      onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
-      onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setColorBrowserSwapFrom(null); setShowColorBrowser(true) }}
+      onOpenAddBrowser={() => { setColorBrowserTarget('add'); setShowColorBrowser(true) }}
+      onOpenSwapBrowser={() => { setColorBrowserTarget('swap'); setShowColorBrowser(true) }}
+      onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setShowColorBrowser(true) }}
+      onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setShowColorBrowser(true) }}
       onResetPalette={() => {
         const originalPalette = buildPaletteForCells(originalCells)
         setAllPalette(originalPalette)
@@ -5071,7 +5090,6 @@ function StudioPage() {
                     )
                     mergeColorsIntoTarget([colorBrowserSwapFrom.hex], color.hex)
                   }
-                  setColorBrowserSwapFrom(null)
                   setShowColorBrowser(false)
                 } else {
                   setActivePaintColor(color.hex)
@@ -5093,6 +5111,66 @@ function StudioPage() {
               }}
               onClose={() => setShowColorBrowser(false)}
             />
+          )}
+
+          {showImportProjectPicker && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
+              onClick={() => setShowImportProjectPicker(false)}
+            >
+              <div
+                onClick={(event) => event.stopPropagation()}
+                style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 480, maxWidth: '100%', maxHeight: '80vh', display: 'grid', gridTemplateRows: 'auto 1fr', gap: 14, boxSizing: 'border-box' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <h2 style={{ margin: 0 }}>Import a saved project</h2>
+                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13 }}>Pick a design to drop onto this canvas — you can move, rotate, and flip it before placing.</p>
+                  </div>
+                  <button type="button" onClick={() => setShowImportProjectPicker(false)} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#7f776d', lineHeight: 1, padding: 4 }}>✕</button>
+                </div>
+                <div style={{ overflow: 'auto', minHeight: 0 }}>
+                  {importProjectsLoading ? (
+                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>Loading your projects…</p>
+                  ) : importProjectsError ? (
+                    <p style={{ margin: 0, color: '#b0453a', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>{importProjectsError}</p>
+                  ) : !importableProjects || importableProjects.length === 0 ? (
+                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No other saved projects yet.</p>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                      {importableProjects.map((project) => {
+                        const thumbnailUrl = project.preview_image_url
+                          ? project.preview_image_url.startsWith('http')
+                            ? project.preview_image_url
+                            : assetUrl(project.preview_image_url)
+                          : null
+                        return (
+                          <button
+                            key={project.id}
+                            type="button"
+                            onClick={() => handleImportProject(project)}
+                            title={project.name}
+                            style={{ display: 'grid', gap: 5, border: '1px solid #e0d8cf', borderRadius: 8, padding: 6, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
+                          >
+                            <div style={{ width: '100%', aspectRatio: '1', borderRadius: 5, overflow: 'hidden', background: '#f8f4ec', display: 'grid', placeItems: 'center' }}>
+                              {thumbnailUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={thumbnailUrl} alt={project.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                              ) : (
+                                <span style={{ fontSize: 10, color: '#b0a89e' }}>No preview</span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#3f382f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           </div>
