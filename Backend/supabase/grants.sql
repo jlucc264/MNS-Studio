@@ -33,6 +33,9 @@ create table if not exists public.creator_signatures (
   updated_at timestamptz default now()
 );
 
+alter table public.creator_signatures
+add column if not exists grid_json jsonb;
+
 create table if not exists public.print_orders (
   id uuid default gen_random_uuid() primary key,
   created_at timestamptz default now(),

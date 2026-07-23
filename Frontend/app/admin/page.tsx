@@ -147,6 +147,7 @@ export default function AdminPage() {
   const [xOffsetInches, setXOffsetInches] = useState(0)
   const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
   const [yScale, setYScale] = useState(1.0)
+  const [includeAlignmentTest, setIncludeAlignmentTest] = useState(false)
   const [calibBusy, setCalibBusy] = useState(false)
   const [regBusy, setRegBusy] = useState(false)
   const [blankBusy, setBlankBusy] = useState(false)
@@ -211,11 +212,11 @@ export default function AdminPage() {
   }
 
   async function handleRollPrint() {
-    if (!session || selectedIds.length === 0) return
+    if (!session || (selectedIds.length === 0 && !includeAlignmentTest)) return
     setRollBusy(true)
     setRollError('')
     try {
-      await downloadRollPrintPdf(selectedIds, copies, session.access_token, xOffsetInches, skewCorrectionInches, yScale)
+      await downloadRollPrintPdf(selectedIds, copies, session.access_token, xOffsetInches, skewCorrectionInches, yScale, includeAlignmentTest)
     } catch (e: unknown) {
       setRollError(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -393,6 +394,18 @@ export default function AdminPage() {
           />
         </div>
 
+        <div style={styles.copiesRow}>
+          <label htmlFor="includeAlignmentTest" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              id="includeAlignmentTest"
+              type="checkbox"
+              checked={includeAlignmentTest}
+              onChange={e => setIncludeAlignmentTest(e.target.checked)}
+            />
+            Include alignment test strip (&quot;TEST&quot;, 18 mesh, 3&quot; wide, 1&quot; tall)
+          </label>
+        </div>
+
         {orderedDesigns && (
           <div style={styles.orderNote}>{orderedDesigns}</div>
         )}
@@ -401,10 +414,10 @@ export default function AdminPage() {
           <button
             style={{
               ...styles.btn,
-              ...((rollBusy || selectedIds.length === 0) ? styles.btnDisabled : {}),
+              ...((rollBusy || (selectedIds.length === 0 && !includeAlignmentTest)) ? styles.btnDisabled : {}),
             }}
             onClick={handleRollPrint}
-            disabled={rollBusy || selectedIds.length === 0}
+            disabled={rollBusy || (selectedIds.length === 0 && !includeAlignmentTest)}
           >
             {rollBusy ? 'Generating…' : 'Download Roll Print PDF'}
           </button>

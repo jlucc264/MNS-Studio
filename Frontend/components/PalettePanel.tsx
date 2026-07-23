@@ -12,6 +12,7 @@ type PaletteColor = {
 type Props = {
   colors: PaletteColor[]
   activeDesignColors: PaletteColor[]
+  selectionColors?: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
   toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'
@@ -96,6 +97,7 @@ function colorDistance(a: string, b: string) {
 export default function PalettePanel({
   colors,
   activeDesignColors,
+  selectionColors = [],
   activeColor,
   colorCountsByHex = {},
   toolMode,
@@ -1245,19 +1247,27 @@ export default function PalettePanel({
             </div>
           )}
 
-          {selectSubMode === 'color' && <div
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-              gap: 5,
-              alignContent: 'start',
-              overflow: 'auto',
-              paddingRight: 2,
-            }}
-          >
-            {orderedActiveDesignColors.map((color) => {
+          {selectSubMode === 'color' && (() => {
+            const showSelectionColors = hasSelectedRegion && selectionColors.length > 0
+            const colorsToList = showSelectionColors ? selectionColors : orderedActiveDesignColors
+            return (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ fontSize: 11, color: '#8a8177', flexShrink: 0 }}>
+              {showSelectionColors ? 'Colors in selection' : 'All colors in design'}
+            </div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                gap: 5,
+                alignContent: 'start',
+                overflow: 'auto',
+                paddingRight: 2,
+              }}
+            >
+            {colorsToList.map((color) => {
               const selected = activeColor === color.hex
               const visibleSuggestions =
                 selectionMergeSuggestions.length > 0 ? selectionMergeSuggestions : fallbackSelectionSuggestions
@@ -1341,19 +1351,35 @@ export default function PalettePanel({
                           <span style={{ width: 16, height: 9, borderRadius: 2, border: '1px solid #6f665b', background: 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)', transform: 'rotate(-18deg)', display: 'block', boxShadow: '0 1px 0 rgba(0,0,0,0.1)' }} />
                         </button>
                         {visibleSuggestions.map((suggestion) => (
-                          <button
-                            key={`suggestion-${suggestion.hex}`}
-                            type="button"
-                            title={`${suggestion.dmc_code} – ${suggestion.dmc_name}`}
-                            onClick={() => onApplyColorToSelection(suggestion.hex)}
-                            style={{
-                              height: 34,
-                              backgroundColor: suggestion.hex,
-                              border: '1px solid #bbb',
-                              borderRadius: 6,
-                              cursor: 'pointer',
-                            }}
-                          />
+                          <div key={`suggestion-${suggestion.hex}`} style={{ display: 'grid', gap: 2 }}>
+                            <button
+                              type="button"
+                              title={`${suggestion.dmc_code} – ${suggestion.dmc_name}`}
+                              onClick={() => onApplyColorToSelection(suggestion.hex)}
+                              style={{
+                                height: 34,
+                                width: '100%',
+                                backgroundColor: suggestion.hex,
+                                border: '1px solid #bbb',
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                                padding: 0,
+                              }}
+                            />
+                            <div
+                              style={{
+                                fontSize: 8,
+                                color: '#8a8177',
+                                lineHeight: 1,
+                                textAlign: 'center',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {suggestion.dmc_code}
+                            </div>
+                          </div>
                         ))}
                         <button
                           type="button"
@@ -1380,7 +1406,10 @@ export default function PalettePanel({
                 </div>
               )
             })}
-          </div>}
+            </div>
+          </div>
+            )
+          })()}
         </div>
       )}
     </div>

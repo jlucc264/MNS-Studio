@@ -25,6 +25,12 @@ type Props = {
   settings: PreviewSettings
   lockAspectRatio: boolean
   isBlankCanvas?: boolean
+  // Narrower than isBlankCanvas: true only for a from-scratch canvas with
+  // nothing painted yet (isBlankCanvas is also true for imported patterns
+  // and already-painted blank-origin designs, where changing width/height
+  // would silently rebuild the grid and wipe real content — see
+  // studio/page.tsx's canResizeBlankCanvas).
+  canResizeBlankCanvas?: boolean
   compact?: boolean
   onSettingsChange: (settings: PreviewSettings) => void
   onLockAspectRatioChange: (nextLocked: boolean) => void
@@ -36,6 +42,7 @@ export default function PreviewControls({
   settings,
   lockAspectRatio,
   isBlankCanvas = false,
+  canResizeBlankCanvas = false,
   compact = false,
   onSettingsChange,
   onLockAspectRatioChange,
@@ -135,8 +142,8 @@ export default function PreviewControls({
         </p>
       </div>
 
-      {/* Orientation toggle — blank canvas only */}
-      {isBlankCanvas && (
+      {/* Orientation toggle — blank canvas only, before anything's painted */}
+      {canResizeBlankCanvas && (
         <div style={{ display: 'grid', gap: 4 }}>
           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#8a8177', textTransform: 'uppercase' }}>Orientation</span>
           <div
@@ -194,7 +201,7 @@ export default function PreviewControls({
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
+        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas && !canResizeBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas && !canResizeBlankCanvas ? 'none' : undefined }}>
           <span>Import Width</span>
           <input
             type="number"
@@ -215,7 +222,7 @@ export default function PreviewControls({
           />
         </label>
 
-        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
+        <label style={{ display: 'grid', gap: 3, minWidth: 0, opacity: isBlankCanvas && !canResizeBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas && !canResizeBlankCanvas ? 'none' : undefined }}>
           <span>Import Height</span>
           <input
             type="number"
@@ -288,7 +295,7 @@ export default function PreviewControls({
           minWidth: 0,
         }}
       >
-        <label style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: compact ? 13 : 11.5, lineHeight: 1.2, minWidth: 0, opacity: isBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas ? 'none' : undefined }}>
+        <label style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: compact ? 13 : 11.5, lineHeight: 1.2, minWidth: 0, opacity: isBlankCanvas && !canResizeBlankCanvas ? 0.4 : 1, pointerEvents: isBlankCanvas && !canResizeBlankCanvas ? 'none' : undefined }}>
             <input
               type="checkbox"
               checked={lockAspectRatio}

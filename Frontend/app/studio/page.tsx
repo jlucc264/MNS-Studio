@@ -361,6 +361,8 @@ function clampBeltDimensions(w: number, h: number): { width_inches: number; heig
   return { width_inches: Number(clamped.toFixed(2)), height_inches: BELT_HEIGHT_INCHES }
 }
 
+const DEFAULT_BELT_PANT_SIZE = 34
+
 const DEFAULT_SETTINGS: PreviewSettings = {
   width_inches: 4,
   height_inches: 4,
@@ -572,6 +574,10 @@ function StudioPage() {
   // legitimate photo-import height down to 1", which would otherwise pass
   // isBeltDesign's own short-side check and misfire the belt settings panel.
   const [isBeltCanvas, setIsBeltCanvas] = useState(false)
+  // Step-1 sub-screen: "Design a belt" no longer creates a canvas directly —
+  // it swaps the Upload step into a belt-scoped version of the same
+  // blank-vs-import choice, so a photo can become a belt too.
+  const [beltEntryMode, setBeltEntryMode] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [previewImagePath, setPreviewImagePath] = useState<string | null>(null)
   const [originalPreviewImagePath, setOriginalPreviewImagePath] = useState<string | null>(null)
@@ -749,6 +755,7 @@ function StudioPage() {
     setFinishSizeInches(4)
     setHasGeneratedPreview(false)
     setActiveWorkflowStep(1)
+    setBeltEntryMode(false)
     setSavedProjectId(null)
     setDraftName('Untitled')
     setShowDraftNameModal(false)
@@ -1354,6 +1361,13 @@ function StudioPage() {
     () => cells.some((row) => row.some((cell) => cell !== BLANK_CELL)),
     [cells]
   )
+  // Resizing (width/height/orientation) rebuilds cells as a brand-new blank
+  // grid (see the draftSettings effect below) — safe for a from-scratch
+  // canvas with nothing painted yet, but would silently wipe an imported
+  // pattern or already-painted design, both of which also satisfy the
+  // broader isBlankCanvas check above. Only offer resize before any content
+  // exists.
+  const canResizeBlankCanvas = isBlankCanvas && !hasStitchedContent
   const isUnauthenticatedWithCanvas = !session && hasActiveCanvas
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   const currentDesignColorCounts = useMemo(() => countCellsByHex(cells), [cells])
@@ -1454,7 +1468,33 @@ function StudioPage() {
       .filter((color): color is PaletteColor => Boolean(color))
       .slice(0, 6)
   }, [activePaintColor, allDmcColors, cells, displayPalette, selectedRegionBounds])
-  const applyImportedImage = useCallback((url: string) => {
+  const selectedRegionColors = useMemo(() => {
+    if (!cells.length || !selectedRegionBounds.length) return []
+
+    const counts = new Map<string, number>()
+    selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
+      for (let row = top; row <= bottom; row += 1) {
+        for (let col = left; col <= right; col += 1) {
+          const hex = cells[row]?.[col]
+          if (!hex || hex === BLANK_CELL) continue
+          counts.set(hex, (counts.get(hex) ?? 0) + 1)
+        }
+      }
+    })
+
+    const byHex = new Map<string, PaletteColor>()
+    ;[...displayPalette, ...allDmcColors].forEach((color) => {
+      if (!byHex.has(color.hex)) {
+        byHex.set(color.hex, color)
+      }
+    })
+
+    return Array.from(counts.entries())
+      .sort((left, right) => right[1] - left[1])
+      .map(([hex]) => byHex.get(hex))
+      .filter((color): color is PaletteColor => Boolean(color))
+  }, [allDmcColors, cells, displayPalette, selectedRegionBounds])
+  const applyImportedImage = useCallback((url: string, belt: boolean = false) => {
     latestApplyRequestIdRef.current += 1
     setUploadError(null)
     setActiveImagePath(url)
@@ -1476,9 +1516,11 @@ function StudioPage() {
     setFinalPdfPath(null)
     setFinalPreviewImagePath(null)
     setLastSettings(null)
-    setDraftSettings(DEFAULT_SETTINGS)
-    setLockAspectRatio(true)
-    setIsBeltCanvas(false)
+    setDraftSettings(belt
+      ? { ...DEFAULT_SETTINGS, mesh_count: BELT_MESH_COUNT, height_inches: BELT_HEIGHT_INCHES, width_inches: beltLengthForPantSize(DEFAULT_BELT_PANT_SIZE) }
+      : DEFAULT_SETTINGS)
+    setLockAspectRatio(!belt)
+    setIsBeltCanvas(belt)
     setHasGeneratedPreview(false)
     setViewMode('original')
     setActiveWorkflowStep(2)
@@ -1492,7 +1534,7 @@ function StudioPage() {
 
     const img = new Image()
     img.onload = () => {
-      setImportedAspectRatio(img.width / img.height)
+      setImportedAspectRatio(belt ? beltLengthForPantSize(DEFAULT_BELT_PANT_SIZE) / BELT_HEIGHT_INCHES : img.width / img.height)
       setLoading(false)
     }
     img.onerror = () => {
@@ -1537,8 +1579,6 @@ function StudioPage() {
     setActiveWorkflowStep(2)
     markCurrentDesignClean()
   }
-
-  const DEFAULT_BELT_PANT_SIZE = 34
 
   function handleStartBelt() {
     const beltLength = beltLengthForPantSize(DEFAULT_BELT_PANT_SIZE)
@@ -3202,12 +3242,12 @@ function StudioPage() {
   }
 
 
-  async function handleChatUpload(file: File) {
+  async function handleChatUpload(file: File, belt: boolean = false) {
     setUploadError(null)
     setLoading(true)
     try {
       const result = await uploadImage(file)
-      applyImportedImage(result.active_image_url)
+      applyImportedImage(result.active_image_url, belt)
       return `Imported ${file.name}. You can generate a stitch preview when ready.`
     } catch (error) {
       setLoading(false)
@@ -3322,7 +3362,7 @@ function StudioPage() {
     }
   }
 
-  async function handleStagedUploadDrop(event: DragEvent<HTMLDivElement>) {
+  async function handleStagedUploadDrop(event: DragEvent<HTMLDivElement>, belt: boolean = false) {
     event.preventDefault()
     setStagedUploadDragActive(false)
     if (loading) return
@@ -3330,7 +3370,7 @@ function StudioPage() {
     const file = event.dataTransfer.files?.[0]
     if (!file || !file.type.startsWith('image/')) return
 
-    await handleChatUpload(file)
+    await handleChatUpload(file, belt)
   }
 
   async function handleFinalize(previousPdfUrl: string | null = null) {
@@ -3526,7 +3566,7 @@ function StudioPage() {
       )}
       {hasPendingPreviewSettings && !loading && (
         <p style={{ margin: 0, color: '#8a5a00' }}>
-          Settings changed. Waiting for the stitch preview to refresh before finalizing.
+          Settings changed. Waiting for the stitch preview to refresh before saving or finalizing.
         </p>
       )}
 
@@ -3610,6 +3650,7 @@ function StudioPage() {
           settings={draftSettings}
           lockAspectRatio={lockAspectRatio}
           isBlankCanvas={isBlankCanvas}
+          canResizeBlankCanvas={canResizeBlankCanvas}
           compact={isMobile}
           onSettingsChange={setDraftSettings}
           onLockAspectRatioChange={setLockAspectRatio}
@@ -3702,6 +3743,15 @@ function StudioPage() {
       setAuthPrompt('save')
       return
     }
+    // A resize (or any other draftSettings change) rebuilds `cells` on a
+    // 250ms debounce (see the effect that derives newW/newH from
+    // draftSettings). Saving before that settles sends the *new*
+    // width_inches/height_inches alongside the *stale*, still-old-sized
+    // cells grid — the mismatch this guards against is exactly what made
+    // the roll print (which derives its physical size from cells, not the
+    // stored width/height) come out at the pre-resize dimensions.
+    // handleFinalize already guards on this same flag; mirror it here.
+    if (hasPendingPreviewSettings) return
     setDraftSaveError('')
     setSaveStatus('saving')
     try {
@@ -3905,11 +3955,28 @@ function StudioPage() {
       return (
         <>
           <div>
+            {beltEntryMode && (
+              <button
+                type="button"
+                onClick={() => setBeltEntryMode(false)}
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  padding: 0,
+                  marginBottom: 10,
+                  color: '#8a8177',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back
+              </button>
+            )}
             <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.05, fontWeight: 700 }}>
-              Upload
+              {beltEntryMode ? 'Design a belt' : 'Upload'}
             </h2>
             <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
-              Start with a photo, screenshot, or artwork file.
+              {beltEntryMode ? 'Start with a photo, or begin from a blank belt.' : 'Start with a photo, screenshot, or artwork file.'}
             </p>
           </div>
 
@@ -3969,7 +4036,7 @@ function StudioPage() {
               if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
               setStagedUploadDragActive(false)
             }}
-            onDrop={(event) => void handleStagedUploadDrop(event)}
+            onDrop={(event) => void handleStagedUploadDrop(event, beltEntryMode)}
             style={{
               display: 'grid',
               gap: 12,
@@ -4011,7 +4078,7 @@ function StudioPage() {
                 hidden
                 onChange={(event) => {
                   const file = event.target.files?.[0]
-                  if (file) void handleChatUpload(file)
+                  if (file) void handleChatUpload(file, beltEntryMode)
                   event.target.value = ''
                 }}
               />
@@ -4025,56 +4092,69 @@ function StudioPage() {
             <span style={{ fontSize: 12, color: '#a09890' }}>or</span>
             <div style={{ flex: 1, height: 1, background: '#e7e1d8' }} />
           </div>
-          <button
-            type="button"
-            onClick={handleStartFresh}
-            disabled={loading}
-            style={btnSecondary}
-          >
-            Start with a blank canvas
-          </button>
-          <button
-            type="button"
-            onClick={handleStartBelt}
-            disabled={loading}
-            style={btnSecondary}
-          >
-            Design a belt
-          </button>
-          {/* Native <label> activation: JS input.click() is silently ignored
-              in installed-PWA WebKit, so the input lives inside the label. */}
-          <label
-            role="button"
-            tabIndex={loading ? -1 : 0}
-            aria-disabled={loading}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                patternImportInputRef.current?.click()
-              }
-            }}
-            style={{
-              ...btnSecondary,
-              display: 'block',
-              textAlign: 'center',
-              opacity: loading ? 0.6 : 1,
-              pointerEvents: loading ? 'none' : 'auto',
-            }}
-          >
-            <input
-              ref={patternImportInputRef}
-              type="file"
-              accept="image/*,.stitchly"
-              hidden
+          {beltEntryMode ? (
+            <button
+              type="button"
+              onClick={handleStartBelt}
               disabled={loading}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) void handlePatternImportFile(file)
-                event.target.value = ''
-              }}
-            />
-            Import from Stitchly (.stitchly or chart image)
-          </label>
+              style={btnSecondary}
+            >
+              Start with a blank belt
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleStartFresh}
+                disabled={loading}
+                style={btnSecondary}
+              >
+                Start with a blank canvas
+              </button>
+              <button
+                type="button"
+                onClick={() => setBeltEntryMode(true)}
+                disabled={loading}
+                style={btnSecondary}
+              >
+                Design a belt
+              </button>
+              {/* Native <label> activation: JS input.click() is silently ignored
+                  in installed-PWA WebKit, so the input lives inside the label. */}
+              <label
+                role="button"
+                tabIndex={loading ? -1 : 0}
+                aria-disabled={loading}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    patternImportInputRef.current?.click()
+                  }
+                }}
+                style={{
+                  ...btnSecondary,
+                  display: 'block',
+                  textAlign: 'center',
+                  opacity: loading ? 0.6 : 1,
+                  pointerEvents: loading ? 'none' : 'auto',
+                }}
+              >
+                <input
+                  ref={patternImportInputRef}
+                  type="file"
+                  accept="image/*,.stitchly"
+                  hidden
+                  disabled={loading}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) void handlePatternImportFile(file)
+                    event.target.value = ''
+                  }}
+                />
+                Import from Stitchly (.stitchly or chart image)
+              </label>
+            </>
+          )}
           {statusBlock}
           {activeImagePath && (
             <button
@@ -4384,6 +4464,7 @@ function StudioPage() {
       scrollWholePanel={isPhoneCanvasLandscape}
       colors={displayPalette}
       activeDesignColors={currentDesignPalette}
+      selectionColors={selectedRegionColors}
       activeColor={activePaintColor}
       colorCountsByHex={displayColorCounts}
       toolMode={toolMode}
@@ -4752,7 +4833,7 @@ function StudioPage() {
                     if (!session?.access_token) { setAuthPrompt('save'); return }
                     void handleSaveDraft()
                   }}
-                  disabled={(!activeImagePath && !isBlankCanvas) || saveStatus === 'saving'}
+                  disabled={(!activeImagePath && !isBlankCanvas) || saveStatus === 'saving' || hasPendingPreviewSettings}
                   style={{ ...btnSecondary, width: '100%', opacity: (!activeImagePath && !isBlankCanvas) ? 0.5 : 1 }}
                 >
                   {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'limit' ? 'Limit reached' : saveStatus === 'error' ? 'Error saving' : 'Save Draft'}

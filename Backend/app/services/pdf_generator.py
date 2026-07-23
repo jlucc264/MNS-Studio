@@ -1,5 +1,6 @@
 import logging
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from io import BytesIO
 from collections import Counter
@@ -11,7 +12,8 @@ from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
+import reportlab
 
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 
@@ -23,7 +25,7 @@ def _fmt_canvas(n: float) -> str:
     return str(int(n)) if n == int(n) else f"{n:.1f}"
 
 
-def _crop_to_content(cells: list[list[str]]) -> list[list[str]]:
+def crop_to_content(cells: list[list[str]]) -> list[list[str]]:
     """Crop cells to the bounding box of non-blank content."""
     if not cells or not cells[0]:
         return cells
@@ -46,10 +48,18 @@ CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
 
-# Signature placement: centered in the margin band beyond the design's own
-# bottom-right corner, 1" from both the design edge and the outer canvas
-# edge (so it never overlaps the stitches and never runs off the fabric).
-SIGNATURE_INSET_IN = 1.0
+# Bitstream Vera Bold ships as installed package data with reportlab (an
+# existing hard dependency), so this is available in every environment
+# without vendoring a font file into the backend ourselves.
+_ALIGNMENT_TEST_FONT_PATH = Path(reportlab.__file__).resolve().parent / "fonts" / "VeraBd.ttf"
+_ALIGNMENT_TEST_INK = "#211c15"
+
+# Signature placement: anchored to the printed canvas's own bottom-right
+# corner (not the design's edge), 1/2" in from it on each axis, so the gap
+# to the fabric corner stays fixed regardless of signature size. Clamped
+# in _render_preview_image_from_cells so an unusually large signature can
+# never creep into the design itself.
+SIGNATURE_CORNER_INSET_IN = 0.5
 SIGNATURE_MAX_WIDTH_IN = 1.5
 SIGNATURE_MAX_HEIGHT_IN = 1.0
 
@@ -60,12 +70,26 @@ def _resolve_asset_path(asset_url: str) -> Path:
     return ASSETS_DIR.parent / cleaned
 
 
-def load_signature_image(image_url: str | None) -> Image.Image | None:
-    """Load a creator signature from its stored URL (local `/assets/...` path
-    or an absolute Supabase storage URL). Returns None on any failure so a
-    missing/broken signature never blocks a print job."""
-    if not image_url:
+@dataclass
+class SignatureAsset:
+    image: "Image.Image | None" = None
+    # Present only for pixel-drawn signatures — the raw stitch grid (hex
+    # colors + BLANK_CELL), rendered stitch-for-stitch at print time instead
+    # of resampling `image`, so it lines up exactly with the design's own
+    # mesh regardless of what mesh the signature was originally drawn at.
+    grid: "list[list[str]] | None" = None
+
+
+def load_signature_image(signature: dict | None) -> SignatureAsset | None:
+    """Load a creator signature from the record returned by
+    `get_creator_signature` (`{"image_url": ..., "grid_json": ...}`). The
+    image is always loaded (used for profile display and as the drawn-
+    signature print source); grid_json, when present, takes priority for
+    printing. Returns None on any failure so a missing/broken signature
+    never blocks a print job."""
+    if not signature or not signature.get("image_url"):
         return None
+    image_url = signature["image_url"]
     try:
         if image_url.startswith("http://") or image_url.startswith("https://"):
             request = Request(image_url, headers={"User-Agent": "MNS/1.0"})
@@ -73,7 +97,8 @@ def load_signature_image(image_url: str | None) -> Image.Image | None:
                 data = response.read()
         else:
             data = _resolve_asset_path(image_url).read_bytes()
-        return Image.open(BytesIO(data)).convert("RGBA")
+        image = Image.open(BytesIO(data)).convert("RGBA")
+        return SignatureAsset(image=image, grid=signature.get("grid_json"))
     except (OSError, HTTPError, URLError, Image.UnidentifiedImageError) as exc:
         logger.warning("Failed to load signature image %s: %s", image_url, exc)
         return None
@@ -102,7 +127,7 @@ def _render_preview_image_from_cells(
     include_border: bool = True,
     grid_color: tuple = GRID_COLOR,
     grid_line_width: int = 1,
-    signature_image: Image.Image | None = None,
+    signature: SignatureAsset | None = None,
     border_inches: float = BORDER_INCHES,
 ) -> Image.Image:
     stitch_height = len(cells)
@@ -139,25 +164,60 @@ def _render_preview_image_from_cells(
         for y in range(0, display_h + 1, DISPLAY_CELL_SIZE):
             draw.line([(0, y), (display_w, y)], fill=grid_color, width=grid_line_width)
 
-    if include_border and signature_image and border_stitches > 0:
+    if include_border and signature and border_stitches > 0:
         px_per_inch = mesh_count * DISPLAY_CELL_SIZE
         design_right_px = border_stitches * DISPLAY_CELL_SIZE + stitch_width * DISPLAY_CELL_SIZE
         design_bottom_px = border_stitches * DISPLAY_CELL_SIZE + stitch_height * DISPLAY_CELL_SIZE
-        inset_px = SIGNATURE_INSET_IN * px_per_inch
-        center_x = design_right_px + inset_px
-        center_y = design_bottom_px + inset_px
+        # Anchor from the canvas's own bottom-right corner (display_w /
+        # display_h), not the design's edge — so the gap to the fabric
+        # corner is the same fixed 3/4" no matter how big the signature is.
+        corner_inset_px = SIGNATURE_CORNER_INSET_IN * px_per_inch
 
-        max_w_px = SIGNATURE_MAX_WIDTH_IN * px_per_inch
-        max_h_px = SIGNATURE_MAX_HEIGHT_IN * px_per_inch
-        sig_w, sig_h = signature_image.size
-        if sig_w and sig_h:
-            scale = min(max_w_px / sig_w, max_h_px / sig_h, 1.0)
-            box_w = max(1, round(sig_w * scale))
-            box_h = max(1, round(sig_h * scale))
-            sig_scaled = signature_image.resize((box_w, box_h), Image.Resampling.LANCZOS)
-            paste_x = round(center_x - box_w / 2)
-            paste_y = round(center_y - box_h / 2)
-            preview.paste(sig_scaled, (paste_x, paste_y), sig_scaled)
+        if signature.grid:
+            # Pixel signature: draw each authored stitch as one printed
+            # stitch at this design's own DISPLAY_CELL_SIZE — the same unit
+            # every other stitch in the canvas is rendered at — instead of
+            # resampling a raster image into a fixed inch box. That keeps it
+            # pixel-for-pixel/stitch-for-stitch exact regardless of mesh, at
+            # the cost of the signature's physical size varying slightly
+            # with mesh (true to the stitch count, not a fixed inch size).
+            grid = signature.grid
+            grid_rows = len(grid)
+            grid_cols = len(grid[0]) if grid_rows else 0
+            box_w = grid_cols * DISPLAY_CELL_SIZE
+            box_h = grid_rows * DISPLAY_CELL_SIZE
+            # Snap to the nearest whole stitch column/row, not just the
+            # nearest pixel — otherwise the corner inset can land mid-cell,
+            # splitting a drawn block across two real stitches instead of
+            # filling one. Clamp to the design's own edge so an unusually
+            # large signature can never creep into the stitches themselves.
+            raw_x = display_w - corner_inset_px - box_w
+            raw_y = display_h - corner_inset_px - box_h
+            paste_x = max(design_right_px, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            paste_y = max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            draw = ImageDraw.Draw(preview)
+            for r, row in enumerate(grid):
+                for c, hex_color in enumerate(row):
+                    if hex_color == BLANK_CELL:
+                        continue
+                    x0 = paste_x + c * DISPLAY_CELL_SIZE
+                    y0 = paste_y + r * DISPLAY_CELL_SIZE
+                    draw.rectangle(
+                        [x0, y0, x0 + DISPLAY_CELL_SIZE - 1, y0 + DISPLAY_CELL_SIZE - 1],
+                        fill=_hex_to_rgb(hex_color),
+                    )
+        elif signature.image:
+            max_w_px = SIGNATURE_MAX_WIDTH_IN * px_per_inch
+            max_h_px = SIGNATURE_MAX_HEIGHT_IN * px_per_inch
+            sig_w, sig_h = signature.image.size
+            if sig_w and sig_h:
+                scale = min(max_w_px / sig_w, max_h_px / sig_h, 1.0)
+                box_w = max(1, round(sig_w * scale))
+                box_h = max(1, round(sig_h * scale))
+                sig_scaled = signature.image.resize((box_w, box_h), Image.Resampling.LANCZOS)
+                paste_x = max(design_right_px, round(display_w - corner_inset_px - box_w))
+                paste_y = max(design_bottom_px, round(display_h - corner_inset_px - box_h))
+                preview.paste(sig_scaled, (paste_x, paste_y), sig_scaled)
 
     return preview
 
@@ -501,21 +561,21 @@ def generate_preview_pdf(
     show_grid: bool,
     palette: list[dict],
     cells: list[list[str]],
-    signature_image: Image.Image | None = None,
+    signature: SignatureAsset | None = None,
 ) -> tuple[str, Path, Path, str, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
     preview_path, preview_url = preview_output_path()
 
     # Derive authoritative design dimensions from cell content, not import settings
-    preview_cells = _crop_to_content(cells)
+    preview_cells = crop_to_content(cells)
     design_w = len(preview_cells[0]) / mesh_count if preview_cells and preview_cells[0] else width_inches
     design_h = len(preview_cells) / mesh_count if preview_cells else height_inches
 
     page_size = landscape(letter) if design_w > design_h else letter
     # Cover preview: design + 2" canvas margin on each side, with signature
     preview_image = _render_preview_image_from_cells(
-        preview_cells, mesh_count, show_grid, signature_image=signature_image, border_inches=2.0,
+        preview_cells, mesh_count, show_grid, signature=signature, border_inches=2.0,
     )
     preview_image.save(preview_path, format="PNG")
     # Report thumbnail: just the design (no canvas border) so it fills the small thumb area
@@ -829,28 +889,81 @@ def generate_registration_test_pdf(
     return output_path
 
 
-def _transpose_cells(cells: list[list[str]]) -> list[list[str]]:
+def _rotate_cells_90(cells: list[list[str]]) -> list[list[str]]:
+    """Rotate 90° clockwise. A plain transpose (zip(*cells)) mirrors
+    asymmetric content instead of rotating it — harmless for symmetric
+    designs but flips left/right-facing artwork (e.g. flags)."""
     if not cells or not cells[0]:
         return cells
-    return [list(row) for row in zip(*cells)]
+    return [list(row) for row in zip(*cells[::-1])]
+
+
+def generate_alignment_test_design(
+    mesh_count: int = 18,
+    width_inches: float = 3.0,
+    text_height_inches: float = 1.0,
+    text: str = "TEST",
+) -> dict:
+    """A small stitched word, sized to `text_height_inches` tall and padded
+    out to `width_inches` wide overall — meant to be dropped into a roll
+    print batch (same dict shape as `_build_roll_print_design`'s return
+    value) so an operator can visually check feed/registration alignment
+    against the real designs printed in the same run, through the exact
+    same render path (mesh, border, DISPLAY_CELL_SIZE) rather than a
+    disconnected vector overlay.
+
+    Parametrized rather than hardcoded to "TEST" at 18 mesh / 3" so the same
+    helper covers any future alignment strip (different mesh, wider strip,
+    other text) without changes here.
+    """
+    glyph_rows = max(1, round(text_height_inches * mesh_count))
+    total_cols = max(1, round(width_inches * mesh_count))
+
+    # Rasterize at a higher resolution than the final stitch grid, then
+    # downsample+threshold — same whole-string approach as
+    # Frontend/lib/fonts/rasterFonts.ts, just done here since the backend
+    # has no stitch-font system of its own.
+    render_scale = 10
+    font = ImageFont.truetype(str(_ALIGNMENT_TEST_FONT_PATH), glyph_rows * render_scale)
+    probe_draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    bbox = probe_draw.textbbox((0, 0), text, font=font)
+    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    rendered = Image.new("L", (max(1, text_w), max(1, text_h)), 0)
+    ImageDraw.Draw(rendered).text((-bbox[0], -bbox[1]), text, font=font, fill=255)
+
+    glyph_cols = min(total_cols, max(1, round(text_w / text_h * glyph_rows))) if text_h else 1
+    glyph = rendered.resize((glyph_cols, glyph_rows), Image.Resampling.LANCZOS)
+    glyph_px = glyph.load()
+
+    cells = [[BLANK_CELL] * total_cols for _ in range(glyph_rows)]
+    col_offset = (total_cols - glyph_cols) // 2
+    for r in range(glyph_rows):
+        for c in range(glyph_cols):
+            if glyph_px[c, r] >= 128:
+                cells[r][col_offset + c] = _ALIGNMENT_TEST_INK
+
+    return {
+        "cells": cells,
+        "mesh_count": mesh_count,
+        "label": f'Alignment test — "{text}", {mesh_count} mesh, {width_inches:.0f}" wide',
+        "signature": None,
+    }
 
 
 def generate_roll_print_pdf(
     designs: list[dict],
     roll_width_inches: float = 8.0,
-    gap_inches: float = 2.0,
+    gap_inches: float = 0.0,
     x_offset_pts: float = 0.0,
     skew_correction_pts: float = 0.0,
     y_scale: float = 1.0,
 ) -> Path:
-    """`designs` items may include an optional `signature_image` (PIL RGBA image,
+    """`designs` items may include an optional `signature` (a SignatureAsset,
     already resolved to the design's creator) drawn into the design's own 2"
     margin — see `_render_preview_image_from_cells`."""
     roll_width_pts = roll_width_inches * 72
     gap_pts = gap_inches * 72
-    top_margin_pts = 36.0
-    bottom_margin_pts = 72.0
-    label_h = 16.0
 
     rendered = []
     for design in designs:
@@ -865,31 +978,23 @@ def generate_roll_print_pdf(
         # direction instead — belts (38"+ long, 1.25" tall) are the case
         # that hits this; ordinary canvases never trigger it.
         if draw_w > roll_width_pts:
-            cells = _transpose_cells(cells)
+            cells = _rotate_cells_90(cells)
             stitch_h = len(cells)
             stitch_w = len(cells[0]) if stitch_h else 0
             draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
         draw_h = ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale
         img = _render_preview_image_from_cells(
             cells, mesh, show_grid=False, include_border=True, border_inches=2.0,
-            signature_image=design.get("signature_image"),
+            signature=design.get("signature"),
         )
         rendered.append({
             "img": img,
             "draw_w": draw_w,
             "draw_h": draw_h,
-            "label": design.get("label", ""),
             "mesh": mesh,
         })
 
-    total_h = top_margin_pts
-    for i, r in enumerate(rendered):
-        if r["label"]:
-            total_h += label_h
-        total_h += r["draw_h"]
-        if i < len(rendered) - 1:
-            total_h += gap_pts
-    total_h += bottom_margin_pts
+    total_h = sum(r["draw_h"] for r in rendered) + gap_pts * max(0, len(rendered) - 1)
 
     output_path = FINALIZED_DIR / "admin_roll_print.pdf"
     pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
@@ -901,16 +1006,9 @@ def generate_roll_print_pdf(
         skew_factor = skew_correction_pts / total_h
         pdf.transform(1, 0, skew_factor, 1, -skew_factor * total_h, 0)
 
-    y = total_h - top_margin_pts  # top of available area
+    y = total_h  # top of available area
 
     for i, r in enumerate(rendered):
-        if r["label"]:
-            pdf.setFont("Helvetica", 8)
-            pdf.setFillColor(colors.HexColor("#7A817A"))
-            label_x = (roll_width_pts - r["draw_w"]) / 2
-            pdf.drawString(label_x, y - label_h + 4, r["label"])
-            y -= label_h
-
         img_x = (roll_width_pts - r["draw_w"]) / 2 + x_offset_pts
         img_bottom = y - r["draw_h"]
 

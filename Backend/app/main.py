@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,7 +46,7 @@ from app.models import (
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
-from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, load_signature_image
+from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, generate_alignment_test_design, load_signature_image, crop_to_content
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import (
     send_contact_email,
@@ -349,7 +349,7 @@ def visualize(request: VisualizeRequest):
 @app.post("/finalize", response_model=FinalizeResponse)
 def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optional_user_id)):
     delete_finalized_output(request.previous_pdf_url)
-    signature_image = load_signature_image(get_creator_signature(user_id)) if user_id else None
+    signature = load_signature_image(get_creator_signature(user_id)) if user_id else None
     pdf_url, public_pdf_path, internal_pdf_path, preview_image_url, preview_image_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
@@ -360,7 +360,7 @@ def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optiona
         show_grid=request.show_grid,
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
-        signature_image=signature_image,
+        signature=signature,
     )
     supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
     if supabase_pdf_url:
@@ -662,18 +662,40 @@ def get_my_earnings(user_id: str = Depends(get_current_user_id)):
     return get_creator_earnings(user_id)
 
 
+# Mirrors Frontend/components/SignatureGridEditor.tsx's GRID_COLS/GRID_ROWS —
+# the frontend never sends a larger grid, this just guards the public endpoint.
+SIGNATURE_GRID_MAX_COLS = 27
+SIGNATURE_GRID_MAX_ROWS = 18
+
+
 @app.get("/profile/signature")
 def get_my_signature(user_id: str = Depends(get_current_user_id)):
-    return {"image_url": get_creator_signature(user_id)}
+    signature = get_creator_signature(user_id)
+    return {"image_url": signature["image_url"] if signature else None}
 
 
 @app.post("/profile/signature")
-def save_my_signature(file: UploadFile = File(...), user_id: str = Depends(get_current_user_id)):
+def save_my_signature(
+    file: UploadFile = File(...),
+    grid: str | None = Form(None),
+    user_id: str = Depends(get_current_user_id),
+):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Signature must be an image.")
 
+    grid_json = None
+    if grid:
+        try:
+            grid_json = json.loads(grid)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="Signature grid was not valid JSON.")
+        if not isinstance(grid_json, list) or len(grid_json) > SIGNATURE_GRID_MAX_ROWS or any(
+            not isinstance(row, list) or len(row) > SIGNATURE_GRID_MAX_COLS for row in grid_json
+        ):
+            raise HTTPException(status_code=422, detail="Signature grid exceeds the maximum pixel signature size.")
+
     image_url = durable_preview_url(save_upload(file), prefix="signatures")
-    if not upsert_creator_signature(user_id, image_url):
+    if not upsert_creator_signature(user_id, image_url, grid_json):
         raise HTTPException(status_code=502, detail="Could not save signature.")
     return {"image_url": image_url}
 
@@ -992,7 +1014,15 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
 
 
 def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None) -> dict:
-    cells = project.get("cells") or []
+    # A from-scratch canvas is a blank workspace sized to whatever the user
+    # set (e.g. 10x6) — the actual design only occupies whatever was
+    # stitched into it. Roll print (unlike the customer finalize preview,
+    # which already crops via crop_to_content) previously used the raw
+    # padded grid, so a small design on a big blank canvas printed at the
+    # full canvas size instead of its own content size. Cropping here makes
+    # roll print derive physical size from the stitched content itself —
+    # same as an import, where the grid already *is* the content.
+    cells = crop_to_content(project.get("cells") or [])
     mesh_count = project.get("mesh_count") or 18
     label = label_override or project.get("title") or project.get("name") or ""
 
@@ -1015,7 +1045,7 @@ def _build_roll_print_design(project: dict, project_id: str | None, signature_ca
         "cells": cells,
         "mesh_count": mesh_count,
         "label": label,
-        "signature_image": signature_cache[creator_id],
+        "signature": signature_cache[creator_id],
     }
 
 
@@ -1057,6 +1087,9 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             label_override=order.get("title"),
             known_gallery_item_id=order.get("gallery_item_id"),
         ))
+
+    if request.include_alignment_test:
+        designs.append(generate_alignment_test_design())
 
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72

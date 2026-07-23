@@ -266,12 +266,12 @@ export default function CreatorProfilePage() {
     }
   }
 
-  async function handleSaveSignature(blob: Blob) {
+  async function handleSaveSignature(blob: Blob, grid?: string[][]) {
     if (!session?.access_token) return
     setSavingSignature(true)
     setSignatureError('')
     try {
-      const res = await saveMySignature(blob, session.access_token)
+      const res = await saveMySignature(blob, session.access_token, grid)
       setSignatureUrl(res.image_url)
       setRedrawingSignature(false)
     } catch (err) {

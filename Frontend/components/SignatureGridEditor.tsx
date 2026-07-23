@@ -63,7 +63,10 @@ export function SignatureGridEditor({
   onSave,
   saving,
 }: {
-  onSave: (blob: Blob) => void | Promise<void>
+  // grid is the cropped stitch data (hex colors + BLANK_CELL), sent
+  // alongside the PNG so the print pipeline can render it stitch-for-stitch
+  // instead of resampling the image — see pdf_generator.py's SignatureAsset.
+  onSave: (blob: Blob, grid: string[][]) => void | Promise<void>
   saving?: boolean
 }) {
   const [cells, setCells] = useState<string[][]>(makeBlankGrid)
@@ -149,8 +152,9 @@ export function SignatureGridEditor({
         ctx.fillRect(c * EXPORT_CELL_PX, r * EXPORT_CELL_PX, EXPORT_CELL_PX, EXPORT_CELL_PX)
       }
     }
+    const croppedGrid = cells.slice(bounds.r1, bounds.r2 + 1).map((row) => row.slice(bounds.c1, bounds.c2 + 1))
     canvas.toBlob((blob) => {
-      if (blob) onSave(blob)
+      if (blob) onSave(blob, croppedGrid)
     }, 'image/png')
   }
 

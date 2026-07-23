@@ -70,26 +70,33 @@ def log_chat(user_message: str, assistant_reply: str, actions: list, context: di
     except Exception as exc:
         logger.warning("Chat log write failed: %s", exc)
 
-def get_creator_signature(user_id: str) -> str | None:
+def get_creator_signature(user_id: str) -> dict | None:
+    """Returns {"image_url": str, "grid_json": list[list[str]] | None}, or
+    None if the creator hasn't saved a signature. grid_json is only present
+    for pixel-drawn signatures — it lets the print pipeline render the
+    signature stitch-for-stitch instead of resampling the PNG."""
     encoded = quote(user_id, safe="")
-    result = _request("GET", "/creator_signatures", params=f"user_id=eq.{encoded}&select=image_url&limit=1")
+    result = _request("GET", "/creator_signatures", params=f"user_id=eq.{encoded}&select=image_url,grid_json&limit=1")
     rows = result if isinstance(result, list) else []
     if rows and rows[0].get("image_url"):
-        return rows[0]["image_url"]
+        return {"image_url": rows[0]["image_url"], "grid_json": rows[0].get("grid_json")}
     return None
 
 
-def upsert_creator_signature(user_id: str, image_url: str) -> bool:
+def upsert_creator_signature(user_id: str, image_url: str, grid_json: list[list[str]] | None = None) -> bool:
     encoded = quote(user_id, safe="")
-    updated = _request(
-        "PATCH",
-        "/creator_signatures",
-        body={"image_url": image_url, "updated_at": datetime.now(timezone.utc).isoformat()},
-        params=f"user_id=eq.{encoded}",
-    )
+    body = {
+        "image_url": image_url,
+        "grid_json": grid_json,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated = _request("PATCH", "/creator_signatures", body=body, params=f"user_id=eq.{encoded}")
     if isinstance(updated, list) and updated:
         return True
-    created = _request("POST", "/creator_signatures", body={"user_id": user_id, "image_url": image_url})
+    created = _request(
+        "POST", "/creator_signatures",
+        body={"user_id": user_id, "image_url": image_url, "grid_json": grid_json},
+    )
     return isinstance(created, list) and bool(created)
 
 

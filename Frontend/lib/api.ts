@@ -852,9 +852,10 @@ export async function getMySignature(accessToken: string): Promise<{ image_url: 
   return res.json()
 }
 
-export async function saveMySignature(blob: Blob, accessToken: string): Promise<{ image_url: string }> {
+export async function saveMySignature(blob: Blob, accessToken: string, grid?: string[][]): Promise<{ image_url: string }> {
   const form = new FormData()
   form.append('file', blob, 'signature.png')
+  if (grid) form.append('grid', JSON.stringify(grid))
   const res = await fetch(`${API_BASE}/profile/signature`, {
     method: 'POST',
     headers: authHeaders(accessToken),
@@ -969,11 +970,19 @@ export async function downloadRollPrintPdf(
   xOffsetInches: number = 0,
   skewCorrectionInches: number = 0,
   yScale: number = 1.0,
+  includeAlignmentTest: boolean = false,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/admin/roll-print`, {
     method: 'POST',
     headers: { ...jsonHeaders(accessToken) },
-    body: JSON.stringify({ project_ids: projectIds, copies, x_offset_inches: xOffsetInches, skew_correction_inches: skewCorrectionInches, y_scale: yScale }),
+    body: JSON.stringify({
+      project_ids: projectIds,
+      copies,
+      x_offset_inches: xOffsetInches,
+      skew_correction_inches: skewCorrectionInches,
+      y_scale: yScale,
+      include_alignment_test: includeAlignmentTest,
+    }),
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
