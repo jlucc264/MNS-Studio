@@ -25,7 +25,7 @@ export default function CheckoutModal({ clientSecret, onClose }: Props) {
       ref={overlayRef}
       onClick={(e) => { if (e.target === overlayRef.current) onClose() }}
       style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
+        position: 'fixed', inset: 0, zIndex: 11000,
         background: 'rgba(0,0,0,0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,

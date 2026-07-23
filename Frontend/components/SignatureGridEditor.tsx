@@ -165,13 +165,16 @@ export function SignatureGridEditor({
         onPointerLeave={stopPainting}
         style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${GRID_COLS}, ${CELL_PX}px)`,
-          gridTemplateRows: `repeat(${GRID_ROWS}, ${CELL_PX}px)`,
-          width: 'fit-content',
+          gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
+          gridTemplateRows: `repeat(${GRID_ROWS}, 1fr)`,
+          width: '100%',
+          maxWidth: GRID_COLS * CELL_PX,
+          aspectRatio: `${GRID_COLS} / ${GRID_ROWS}`,
           border: '1px solid #d7d0c8',
           borderRadius: 8,
           overflow: 'hidden',
           touchAction: 'none',
+          boxSizing: 'border-box',
           background:
             'repeating-conic-gradient(#f0ece5 0% 25%, #fffdf8 0% 50%) 0 0 / 12px 12px',
         }}
@@ -183,8 +186,6 @@ export function SignatureGridEditor({
               onPointerDown={() => handlePointerDown(r, c)}
               onPointerEnter={() => handlePointerEnter(r, c)}
               style={{
-                width: CELL_PX,
-                height: CELL_PX,
                 background: color === BLANK_CELL ? 'transparent' : color,
                 cursor: 'crosshair',
                 boxSizing: 'border-box',

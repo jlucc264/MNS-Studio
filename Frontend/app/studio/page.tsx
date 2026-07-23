@@ -5117,7 +5117,7 @@ function StudioPage() {
             <div
               role="dialog"
               aria-modal="true"
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
               onClick={() => setShowImportProjectPicker(false)}
             >
               <div
@@ -5271,7 +5271,7 @@ function StudioPage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
-            zIndex: 80,
+            zIndex: 10080,
             padding: 18,
           }}
           onClick={() => setAuthPrompt(null)}
@@ -5325,7 +5325,7 @@ function StudioPage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
-            zIndex: 31,
+            zIndex: 10031,
             padding: 18,
           }}
           onClick={() => setShowLogoutConfirm(false)}
@@ -5396,7 +5396,7 @@ function StudioPage() {
           <div
             role="dialog"
             aria-modal="true"
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
           >
             <div
               style={{ background: '#fffdf8', borderRadius: 12, width: 480, maxWidth: '100%', display: 'grid', gap: 0, boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8' }}
@@ -5477,7 +5477,7 @@ function StudioPage() {
         <div
           role="dialog"
           aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 25, padding: 18 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
           onClick={skipGalleryPublish}
         >
           <div
@@ -5590,7 +5590,7 @@ function StudioPage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
-            zIndex: 20,
+            zIndex: 10020,
           }}
         >
           <div
@@ -5658,7 +5658,8 @@ function StudioPage() {
             background: 'rgba(0,0,0,0.35)',
             display: 'grid',
             placeItems: 'center',
-            zIndex: 100,
+            zIndex: 10100,
+            padding: 18,
           }}
         >
           <div
@@ -5667,6 +5668,8 @@ function StudioPage() {
               padding: 24,
               borderRadius: 12,
               width: 360,
+              maxWidth: 'calc(100vw - 32px)',
+              boxSizing: 'border-box',
               display: 'grid',
               gap: 16,
             }}
@@ -5751,7 +5754,7 @@ function StudioPage() {
         <div
           role="dialog"
           aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 100, padding: 18 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10100, padding: 18 }}
         >
           <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
             <div style={{ display: 'grid', gap: 6 }}>
@@ -5795,7 +5798,7 @@ function StudioPage() {
           <div
             role="dialog"
             aria-modal="true"
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 30, padding: 18 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10030, padding: 18 }}
           >
             <div style={{ background: '#fffdf8', borderRadius: 14, width: 380, maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8', display: 'grid', gap: 0 }}>
               <div style={{ padding: '20px 22px 14px', borderBottom: '1px solid #e7e1d8' }}>
@@ -6044,7 +6047,7 @@ function StudioPage() {
         <div
           role="dialog"
           aria-modal="true"
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', zIndex: 9000, padding: 18 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', zIndex: 19000, padding: 18 }}
         >
           <div onClick={(e) => e.stopPropagation()} style={{ display: 'grid', gap: 12, width: 'min(460px, 100%)' }}>
             <AuthPanel

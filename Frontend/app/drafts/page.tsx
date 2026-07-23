@@ -436,7 +436,7 @@ export default function DraftsPage() {
         </div>
       </main>
       {showLogoutConfirm && (
-        <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+        <div role="dialog" aria-modal="true" onClick={() => setShowLogoutConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
           <div onClick={(event) => event.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 360, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Log out?</h2>
@@ -461,7 +461,7 @@ export default function DraftsPage() {
         </div>
       )}
       {showNewDraftConfirm && (
-        <div role="dialog" aria-modal="true" onClick={() => setShowNewDraftConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+        <div role="dialog" aria-modal="true" onClick={() => setShowNewDraftConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Start a new design?</h2>
@@ -485,7 +485,7 @@ export default function DraftsPage() {
       )}
 
       {pendingOpenProjectId && !showNamingModal && (
-        <div role="dialog" aria-modal="true" onClick={() => setPendingOpenProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+        <div role="dialog" aria-modal="true" onClick={() => setPendingOpenProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Open this design?</h2>
@@ -509,7 +509,7 @@ export default function DraftsPage() {
       )}
 
       {pendingReworkProjectId && (
-        <div role="dialog" aria-modal="true" onClick={() => setPendingReworkProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 40, padding: 18 }}>
+        <div role="dialog" aria-modal="true" onClick={() => setPendingReworkProjectId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Rework this design?</h2>
@@ -533,7 +533,7 @@ export default function DraftsPage() {
       )}
 
       {showNamingModal && (
-        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 18 }}>
+        <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
           <div style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 380, maxWidth: '100%', display: 'grid', gap: 14, boxSizing: 'border-box' }}>
             <div style={{ display: 'grid', gap: 6 }}>
               <h2 style={{ margin: 0 }}>Name your design</h2>
@@ -564,7 +564,7 @@ export default function DraftsPage() {
         const project = projects.find((p) => p.id === confirmDelete)
         const isFinalized = project ? Boolean(project.finalized || project.pdf_url) : false
         return (
-          <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 18 }}>
+          <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 96, padding: 18 }}>
             <div style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 400, maxWidth: '100%', display: 'grid', gap: 16, boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
               <div style={{ display: 'grid', gap: 6 }}>
                 <h2 style={{ margin: 0, fontSize: 20 }}>Delete this design?</h2>

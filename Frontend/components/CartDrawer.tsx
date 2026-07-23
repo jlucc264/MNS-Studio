@@ -86,7 +86,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
     <div
       role="dialog"
       aria-modal="true"
-      style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 10050, display: 'flex' }}
     >
       <div style={{ flex: 1, background: 'rgba(0,0,0,0.35)' }} onClick={onClose} />
       <div style={{

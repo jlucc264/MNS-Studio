@@ -13,7 +13,7 @@ export default function OrderConfirmationModal({ open, onClose }: Props) {
       role="dialog"
       aria-modal="true"
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 60, padding: 18 }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 10060, padding: 18 }}
     >
       <div
         onClick={(event) => event.stopPropagation()}
