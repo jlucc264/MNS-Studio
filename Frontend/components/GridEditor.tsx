@@ -50,6 +50,24 @@ const RULER_THICKNESS = 24
 const ZOOM_BUTTON_STEP = 10
 const MAX_ZOOM_PERCENT = 800
 const STAGE_SIZE_INCHES = 20
+
+// iOS/iPadOS Safari silently rasterizes a canvas as blank (no error, no
+// pixels) once its backing store crosses roughly this size per axis — not
+// documented anywhere, just an empirical WebKit ceiling. The stage's pixel
+// width scales directly with zoom and grows unbounded, so a wide design
+// (a belt) at a high-but-not-max zoom can cross it well before 800%. Scale
+// the device pixel ratio down instead of the CSS size so the canvas
+// degrades to a softer render rather than going blank.
+const MAX_CANVAS_DIMENSION_PX = 4096
+
+function getSafeDevicePixelRatio(width: number, height: number, baseDpr: number): number {
+  const overflowScale = Math.min(
+    1,
+    MAX_CANVAS_DIMENSION_PX / Math.max(width * baseDpr, 1),
+    MAX_CANVAS_DIMENSION_PX / Math.max(height * baseDpr, 1)
+  )
+  return baseDpr * overflowScale
+}
 const BLANK_CELL = '__BLANK__'
 const FINISH_OUTLINE_CELL = '__FINISH_OUTLINE__'
 
@@ -1793,7 +1811,8 @@ export default function GridEditor({
     const context = canvas.getContext('2d')
     if (!context) return
 
-    const devicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
+    const baseDevicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
+    const devicePixelRatio = getSafeDevicePixelRatio(wrapperWidth, wrapperHeight, baseDevicePixelRatio)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
@@ -1937,7 +1956,8 @@ export default function GridEditor({
     const overlayCanvas = overlayCanvasRef.current
     if (!overlayCanvas) return
 
-    const devicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
+    const baseDevicePixelRatio = isZooming ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
+    const devicePixelRatio = getSafeDevicePixelRatio(wrapperWidth, wrapperHeight, baseDevicePixelRatio)
     const nextCanvasWidth = Math.round(wrapperWidth * devicePixelRatio)
     const nextCanvasHeight = Math.round(wrapperHeight * devicePixelRatio)
     const canvasSizeChanged =
