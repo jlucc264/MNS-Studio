@@ -58,8 +58,6 @@ export function ColorBrowserModal({ mode, allColors, paletteHexes, swapFromColor
         background: '#fffdf8',
         borderLeft: '1px solid #d8d0c4',
         overflow: 'hidden',
-        userSelect: 'none',
-        WebkitUserSelect: 'none',
       }}
     >
       {/* Header */}

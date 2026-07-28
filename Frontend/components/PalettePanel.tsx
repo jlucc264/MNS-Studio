@@ -213,8 +213,8 @@ export default function PalettePanel({
     <div
       style={
         scrollWholePanel
-          ? { display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%', userSelect: 'none', WebkitUserSelect: 'none' }
-          : { display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0, overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' }
+          ? { display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }
+          : { display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0, overflow: 'hidden' }
       }
     >
       {/* Top-level tab row: Create | Select */}
@@ -804,7 +804,7 @@ export default function PalettePanel({
 
           {/* Shape sub-tab content */}
           {isShapeTab && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflow: 'auto' }}>
               <div
                 style={{
                   display: 'grid',

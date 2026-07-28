@@ -438,7 +438,7 @@ function GalleryPage() {
             onClick={() => setShowCartDrawer(true)}
             aria-label="Open cart"
             title="Cart"
-            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
+            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, padding: 0, lineHeight: 1, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >
             🛒
             {cartCount > 0 && (

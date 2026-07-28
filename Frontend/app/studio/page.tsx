@@ -726,6 +726,19 @@ function StudioPage() {
   const [draftSaveError, setDraftSaveError] = useState('')
   const [showColorBrowser, setShowColorBrowser] = useState(false)
   const [colorBrowserTarget, setColorBrowserTarget] = useState<'add' | 'swap' | 'fill' | 'border'>('add')
+
+  // On mobile the color browser overlay renders inside the canvas section,
+  // behind the fixed-position, higher-z-index Tools & Colors sheet — so it's
+  // invisible unless the sheet is closed first. Route every open/close through
+  // these so the sheet and browser never fight for the screen.
+  function openColorBrowser() {
+    if (isMobile) setShowMobilePanel(false)
+    setShowColorBrowser(true)
+  }
+  function closeColorBrowser() {
+    setShowColorBrowser(false)
+    if (isMobile) setShowMobilePanel(true)
+  }
   const [, startPaletteTransition] = useTransition()
   const deferredCells = useDeferredValue(cells)
   const latestApplyRequestIdRef = useRef(0)
@@ -934,9 +947,9 @@ function StudioPage() {
     if (!hasGeneratedPreview) return
     if (toolMode === 'paint') {
       setColorBrowserTarget('add')
-      setShowColorBrowser(true)
+      openColorBrowser()
     } else if (toolMode === 'select' || toolMode === 'merge') {
-      setShowColorBrowser(false)
+      closeColorBrowser()
     }
   }, [toolMode, hasGeneratedPreview])
 
@@ -4574,10 +4587,10 @@ function StudioPage() {
       moreColors={allDmcColors.filter(
         (color) => !displayPalette.some((previewColor) => previewColor.hex === color.hex)
       )}
-      onOpenAddBrowser={() => { setColorBrowserTarget('add'); setShowColorBrowser(true) }}
-      onOpenSwapBrowser={() => { setColorBrowserTarget('swap'); setShowColorBrowser(true) }}
-      onOpenFillBrowser={() => { setColorBrowserTarget('fill'); setShowColorBrowser(true) }}
-      onOpenBorderBrowser={() => { setColorBrowserTarget('border'); setShowColorBrowser(true) }}
+      onOpenAddBrowser={() => { setColorBrowserTarget('add'); openColorBrowser() }}
+      onOpenSwapBrowser={() => { setColorBrowserTarget('swap'); openColorBrowser() }}
+      onOpenFillBrowser={() => { setColorBrowserTarget('fill'); openColorBrowser() }}
+      onOpenBorderBrowser={() => { setColorBrowserTarget('border'); openColorBrowser() }}
       onResetPalette={() => {
         const originalPalette = buildPaletteForCells(originalCells)
         setAllPalette(originalPalette)
@@ -5123,7 +5136,7 @@ function StudioPage() {
                     )
                     mergeColorsIntoTarget([colorBrowserSwapFrom.hex], color.hex)
                   }
-                  setShowColorBrowser(false)
+                  closeColorBrowser()
                 } else {
                   setActivePaintColor(color.hex)
                   setPreviewPalette((prev) =>
@@ -5134,76 +5147,16 @@ function StudioPage() {
                     setColorBrowserTarget('border')
                   } else if (colorBrowserTarget === 'border') {
                     setShapeBorderColor(color.hex)
-                    setShowColorBrowser(false)
+                    closeColorBrowser()
                   } else if (colorBrowserTarget === 'add') {
                     setShowColorBrowser(true)
                   } else {
-                    setShowColorBrowser(false)
+                    closeColorBrowser()
                   }
                 }
               }}
-              onClose={() => setShowColorBrowser(false)}
+              onClose={closeColorBrowser}
             />
-            </div>
-          )}
-
-          {showImportProjectPicker && (
-            <div
-              role="dialog"
-              aria-modal="true"
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
-              onClick={() => setShowImportProjectPicker(false)}
-            >
-              <div
-                onClick={(event) => event.stopPropagation()}
-                style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 480, maxWidth: '100%', maxHeight: '80vh', display: 'grid', gridTemplateRows: 'auto 1fr', gap: 14, boxSizing: 'border-box' }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-                  <div style={{ display: 'grid', gap: 4 }}>
-                    <h2 style={{ margin: 0 }}>Import a saved project</h2>
-                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13 }}>Pick a design to drop onto this canvas — you can move, rotate, and flip it before placing.</p>
-                  </div>
-                  <button type="button" onClick={() => setShowImportProjectPicker(false)} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#7f776d', lineHeight: 1, padding: 4 }}>✕</button>
-                </div>
-                <div style={{ overflow: 'auto', minHeight: 0 }}>
-                  {importProjectsLoading ? (
-                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>Loading your projects…</p>
-                  ) : importProjectsError ? (
-                    <p style={{ margin: 0, color: '#b0453a', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>{importProjectsError}</p>
-                  ) : !importableProjects || importableProjects.length === 0 ? (
-                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No other saved projects yet.</p>
-                  ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                      {importableProjects.map((project) => {
-                        const thumbnailUrl = project.preview_image_url
-                          ? project.preview_image_url.startsWith('http')
-                            ? project.preview_image_url
-                            : assetUrl(project.preview_image_url)
-                          : null
-                        return (
-                          <button
-                            key={project.id}
-                            type="button"
-                            onClick={() => handleImportProject(project)}
-                            title={project.name}
-                            style={{ display: 'grid', gap: 5, border: '1px solid #e0d8cf', borderRadius: 8, padding: 6, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
-                          >
-                            <div style={{ width: '100%', aspectRatio: '1', borderRadius: 5, overflow: 'hidden', background: '#f8f4ec', display: 'grid', placeItems: 'center' }}>
-                              {thumbnailUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={thumbnailUrl} alt={project.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                              ) : (
-                                <span style={{ fontSize: 10, color: '#b0a89e' }}>No preview</span>
-                              )}
-                            </div>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: '#3f382f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
             </div>
           )}
 
@@ -5268,6 +5221,71 @@ function StudioPage() {
             )
           )}
         </section>
+
+        {/* Rendered as a sibling of <section>, not nested inside it — the section
+            establishes its own stacking context (position:relative + zIndex:0), which
+            would trap this dialog behind the palette <aside> (zIndex:30) regardless of
+            the dialog's own zIndex, since a descendant's z-index can never outrank an
+            ancestor's stacking context from outside it. */}
+        {showImportProjectPicker && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
+            onClick={() => setShowImportProjectPicker(false)}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 480, maxWidth: '100%', maxHeight: '80vh', display: 'grid', gridTemplateRows: 'auto 1fr', gap: 14, boxSizing: 'border-box' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <h2 style={{ margin: 0 }}>Import a saved project</h2>
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13 }}>Pick a design to drop onto this canvas — you can move, rotate, and flip it before placing.</p>
+                </div>
+                <button type="button" onClick={() => setShowImportProjectPicker(false)} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#7f776d', lineHeight: 1, padding: 4 }}>✕</button>
+              </div>
+              <div style={{ overflow: 'auto', minHeight: 0 }}>
+                {importProjectsLoading ? (
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>Loading your projects…</p>
+                ) : importProjectsError ? (
+                  <p style={{ margin: 0, color: '#b0453a', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>{importProjectsError}</p>
+                ) : !importableProjects || importableProjects.length === 0 ? (
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No other saved projects yet.</p>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                    {importableProjects.map((project) => {
+                      const thumbnailUrl = project.preview_image_url
+                        ? project.preview_image_url.startsWith('http')
+                          ? project.preview_image_url
+                          : assetUrl(project.preview_image_url)
+                        : null
+                      return (
+                        <button
+                          key={project.id}
+                          type="button"
+                          onClick={() => handleImportProject(project)}
+                          title={project.name}
+                          style={{ display: 'grid', gap: 5, border: '1px solid #e0d8cf', borderRadius: 8, padding: 6, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
+                        >
+                          <div style={{ width: '100%', aspectRatio: '1', borderRadius: 5, overflow: 'hidden', background: '#f8f4ec', display: 'grid', placeItems: 'center' }}>
+                            {thumbnailUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={thumbnailUrl} alt={project.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                            ) : (
+                              <span style={{ fontSize: 10, color: '#b0a89e' }}>No preview</span>
+                            )}
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#3f382f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {(!isMobile || isPhoneCanvasLandscape) && activeWorkflowStep === 2 && !isFinalizeReview && (
           <aside
