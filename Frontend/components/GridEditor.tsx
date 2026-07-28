@@ -618,6 +618,9 @@ export default function GridEditor({
   const pinchStartZoomRef = useRef<number>(100)
   const pinchStartMidpointRef = useRef<{ x: number; y: number } | null>(null)
   const pinchStartScrollRef = useRef<{ left: number; top: number } | null>(null)
+  // Last cursor position over the canvas, so the +/− zoom buttons can anchor on
+  // the cursor (like ctrl+wheel does) instead of the viewport center.
+  const lastPointerClientRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const zoomPercentRef = useRef(100)
   const activeColorRef = useRef<string | null>(activeColor)
   const brushDensityRef = useRef(brushDensity)
@@ -1689,10 +1692,14 @@ export default function GridEditor({
       const direction = event.deltaY < 0 ? 1 : -1
       const magnitude = Math.min(54, Math.max(12, Math.abs(event.deltaY) * 0.14))
       const currentTarget = pendingZoomRef.current?.zoom ?? zoomPercentRef.current
-      scheduleZoom(currentTarget + direction * magnitude, {
-        clientX: event.clientX,
-        clientY: event.clientY,
-      })
+      // Trackpad pinch arrives as a ctrl+wheel event, but on some platforms
+      // (notably Chrome on Windows) its clientX/clientY report the viewport
+      // origin rather than the cursor, which anchored zoom at the top-left. The
+      // cursor is stationary during a pinch, so the last real pointer position
+      // over the canvas is the dependable anchor; fall back to the event's own
+      // coords for a physical mouse wheel with no prior pointer move.
+      const anchor = lastPointerClientRef.current ?? { clientX: event.clientX, clientY: event.clientY }
+      scheduleZoom(currentTarget + direction * magnitude, anchor)
     }
 
     const handleViewportPointerDown = (event: PointerEvent) => {
@@ -1717,6 +1724,7 @@ export default function GridEditor({
     }
 
     const handleViewportPointerMove = (event: PointerEvent) => {
+      lastPointerClientRef.current = { clientX: event.clientX, clientY: event.clientY }
       if (event.pointerType !== 'touch') return
       if (!pinchPointersRef.current.has(event.pointerId)) return
       pinchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
@@ -1777,11 +1785,16 @@ export default function GridEditor({
       }
     }
 
+    const handleViewportPointerLeave = () => {
+      lastPointerClientRef.current = null
+    }
+
     viewport.addEventListener('wheel', handleWheel, { passive: false })
     viewport.addEventListener('pointerdown', handleViewportPointerDown)
     viewport.addEventListener('pointermove', handleViewportPointerMove, { passive: false })
     viewport.addEventListener('pointerup', handleViewportPointerUp)
     viewport.addEventListener('pointercancel', handleViewportPointerUp)
+    viewport.addEventListener('pointerleave', handleViewportPointerLeave)
 
     return () => {
       viewport.removeEventListener('wheel', handleWheel)
@@ -1789,6 +1802,7 @@ export default function GridEditor({
       viewport.removeEventListener('pointermove', handleViewportPointerMove)
       viewport.removeEventListener('pointerup', handleViewportPointerUp)
       viewport.removeEventListener('pointercancel', handleViewportPointerUp)
+      viewport.removeEventListener('pointerleave', handleViewportPointerLeave)
     }
   }, [cancelActiveTouchEdit, clearPendingTouchEdit, getZoomMetrics, scheduleZoom, setZoomWithStageAnchor])
 
@@ -2294,7 +2308,7 @@ export default function GridEditor({
           >
             <button
               type="button"
-              onClick={() => scheduleZoom(Math.ceil((zoomPercentRef.current - ZOOM_BUTTON_STEP) / 10) * 10)}
+              onClick={() => scheduleZoom(Math.ceil((zoomPercentRef.current - ZOOM_BUTTON_STEP) / 10) * 10, lastPointerClientRef.current ?? undefined)}
               disabled={zoomPercentRef.current <= 100}
               style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
             >
@@ -2305,7 +2319,7 @@ export default function GridEditor({
             </span>
             <button
               type="button"
-              onClick={() => scheduleZoom(Math.floor((zoomPercentRef.current + ZOOM_BUTTON_STEP) / 10) * 10)}
+              onClick={() => scheduleZoom(Math.floor((zoomPercentRef.current + ZOOM_BUTTON_STEP) / 10) * 10, lastPointerClientRef.current ?? undefined)}
               disabled={zoomPercentRef.current >= MAX_ZOOM_PERCENT}
               style={{ padding: toolbarButtonPadding, border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
             >

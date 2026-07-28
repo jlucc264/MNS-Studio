@@ -153,7 +153,9 @@ export default function PalettePanel({
 
 
   const fallbackSelectionSuggestions = useMemo(() => {
-    if (!activeColor) return []
+    // Blank isn't a real color, so distance-based "nearest shade" doesn't
+    // apply — Browse all colors is the only sensible way to fill it.
+    if (!activeColor || activeColor === BLANK_CELL) return []
     return [...colors]
       .filter((color) => color.hex !== activeColor)
       .sort((a, b) => colorDistance(activeColor, a.hex) - colorDistance(activeColor, b.hex))
@@ -211,8 +213,8 @@ export default function PalettePanel({
     <div
       style={
         scrollWholePanel
-          ? { display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%' }
-          : { display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0, overflow: 'hidden' }
+          ? { display: 'flex', flexDirection: 'column', gap: 10, minHeight: '100%', userSelect: 'none', WebkitUserSelect: 'none' }
+          : { display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0, overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' }
       }
     >
       {/* Top-level tab row: Create | Select */}
@@ -1275,6 +1277,7 @@ export default function PalettePanel({
             >
             {colorsToList.map((color) => {
               const selected = activeColor === color.hex
+              const isBlank = color.hex === BLANK_CELL
               const visibleSuggestions = fallbackSelectionSuggestions
               const hovered = hoveredSwatchHex === color.hex
 
@@ -1297,41 +1300,46 @@ export default function PalettePanel({
                     <button
                       type="button"
                       onClick={() => onSelect(color)}
-                      title={`${color.dmc_code} – ${color.dmc_name}`}
+                      title={isBlank ? 'Blank cells' : `${color.dmc_code} – ${color.dmc_name}`}
                       style={{
                         flex: 1,
                         height: 26,
-                        backgroundColor: color.hex,
+                        backgroundColor: isBlank ? '#fffdf8' : color.hex,
+                        backgroundImage: isBlank
+                          ? 'linear-gradient(90deg, #f1b7b0 0 45%, #f7f2ea 45% 100%)'
+                          : undefined,
                         border: selected ? '2px solid #111' : '1px solid #ccc',
                         borderRadius: 5,
                         cursor: 'pointer',
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); hasSelectedRegion ? onMergeColorInSelection(color) : onMergeColor(color) }}
-                      title={hasSelectedRegion ? 'Merge selected stitches into nearest color' : 'Merge all into nearest color'}
-                      style={{
-                        flexShrink: 0,
-                        width: 18,
-                        height: 26,
-                        border: '1px solid #d5cec6',
-                        borderRadius: 4,
-                        background: hovered ? '#f0ece4' : 'transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 11,
-                        color: hovered ? '#3f382f' : 'transparent',
-                        transition: 'color 0.1s, background 0.1s',
-                        padding: 0,
-                      }}
-                    >
-                      ⊕
-                    </button>
+                    {!isBlank && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); hasSelectedRegion ? onMergeColorInSelection(color) : onMergeColor(color) }}
+                        title={hasSelectedRegion ? 'Merge selected stitches into nearest color' : 'Merge all into nearest color'}
+                        style={{
+                          flexShrink: 0,
+                          width: 18,
+                          height: 26,
+                          border: '1px solid #d5cec6',
+                          borderRadius: 4,
+                          background: hovered ? '#f0ece4' : 'transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 11,
+                          color: hovered ? '#3f382f' : 'transparent',
+                          transition: 'color 0.1s, background 0.1s',
+                          padding: 0,
+                        }}
+                      >
+                        ⊕
+                      </button>
+                    )}
                   </div>
-                  <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>{color.dmc_code}</div>
+                  <div style={{ fontSize: 10, color: '#8a8177', lineHeight: 1 }}>{isBlank ? 'Blank' : color.dmc_code}</div>
 
                   {selected && (
                     <div style={{ display: 'grid', gap: 5, paddingTop: 4, borderTop: '1px solid rgba(0,0,0,0.08)' }}>

@@ -81,6 +81,7 @@ type ColorEditSnapshot = {
   removalMode: 'fill' | 'blank'
   manualCellOverrides: Record<string, string>
   finishOutlineBackups: Record<string, string>
+  finishApplied: boolean
   paletteReductionTarget: number
   manuallyDisabledHexes: string[]
 }
@@ -1403,6 +1404,9 @@ function StudioPage() {
   // staying pinned to the first color you opened it from.
   const colorBrowserSwapFrom = useMemo(() => {
     if (colorBrowserTarget !== 'swap' || !activePaintColor) return null
+    if (activePaintColor === BLANK_CELL) {
+      return { hex: BLANK_CELL, dmc_code: '—', dmc_name: 'Blank' }
+    }
     return (
       displayPalette.find((c) => c.hex === activePaintColor) ??
       allDmcColors.find((c) => c.hex === activePaintColor) ??
@@ -1468,11 +1472,16 @@ function StudioPage() {
     if (!cells.length || !selectedRegionBounds.length) return []
 
     const counts = new Map<string, number>()
+    let blankCount = 0
     selectedRegionBounds.forEach(({ top, bottom, left, right }) => {
       for (let row = top; row <= bottom; row += 1) {
         for (let col = left; col <= right; col += 1) {
           const hex = cells[row]?.[col]
-          if (!hex || hex === BLANK_CELL) continue
+          if (!hex) continue
+          if (hex === BLANK_CELL) {
+            blankCount += 1
+            continue
+          }
           counts.set(hex, (counts.get(hex) ?? 0) + 1)
         }
       }
@@ -1485,10 +1494,21 @@ function StudioPage() {
       }
     })
 
-    return Array.from(counts.entries())
+    const colors = Array.from(counts.entries())
       .sort((left, right) => right[1] - left[1])
       .map(([hex]) => byHex.get(hex))
       .filter((color): color is PaletteColor => Boolean(color))
+
+    // Blank isn't a real thread color, but "fill the empty area in my
+    // selection" is a common need — surface a pseudo-swatch so the existing
+    // select → replace-with flow also works for blank cells, even when
+    // they're scattered across multiple non-contiguous selected regions
+    // (the paint-tool eraser only fills one connected blob at a time).
+    if (blankCount > 0) {
+      colors.unshift({ hex: BLANK_CELL, dmc_code: '—', dmc_name: 'Blank' })
+    }
+
+    return colors
   }, [allDmcColors, cells, displayPalette, selectedRegionBounds])
   const applyImportedImage = useCallback((url: string, belt: boolean = false) => {
     latestApplyRequestIdRef.current += 1
@@ -1680,11 +1700,16 @@ function StudioPage() {
         removalMode,
         manualCellOverrides: { ...manualCellOverrides },
         finishOutlineBackups: { ...finishOutlineBackups },
+        finishApplied,
         paletteReductionTarget,
         manuallyDisabledHexes: [...manuallyDisabledHexes],
       },
     ])
     setRedoStack([])
+    // Any edit invalidates a live finish crop, so the reported (finish) dimensions
+    // no longer apply. The finish functions re-assert this flag right after their
+    // own pushUndoSnapshot() call, so applying a finish is unaffected.
+    setFinishApplied(false)
   }
 
   async function handleApply(settings: PreviewSettings) {
@@ -2682,6 +2707,7 @@ function StudioPage() {
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
           finishOutlineBackups: { ...finishOutlineBackups },
+          finishApplied,
           paletteReductionTarget,
           manuallyDisabledHexes: [...manuallyDisabledHexes],
         },
@@ -2693,6 +2719,7 @@ function StudioPage() {
       setRemovalMode(previous.removalMode)
       setManualCellOverrides(previous.manualCellOverrides)
       setFinishOutlineBackups(previous.finishOutlineBackups)
+      setFinishApplied(previous.finishApplied ?? false)
       setPaletteReductionTarget(previous.paletteReductionTarget)
       setManuallyDisabledHexes(previous.manuallyDisabledHexes)
       setFinalPdfPath(null)
@@ -2717,6 +2744,7 @@ function StudioPage() {
           removalMode,
           manualCellOverrides: { ...manualCellOverrides },
           finishOutlineBackups: { ...finishOutlineBackups },
+          finishApplied,
           paletteReductionTarget,
           manuallyDisabledHexes: [...manuallyDisabledHexes],
         },
@@ -2728,6 +2756,7 @@ function StudioPage() {
       setRemovalMode(next.removalMode)
       setManualCellOverrides(next.manualCellOverrides)
       setFinishOutlineBackups(next.finishOutlineBackups)
+      setFinishApplied(next.finishApplied ?? false)
       setPaletteReductionTarget(next.paletteReductionTarget)
       setManuallyDisabledHexes(next.manuallyDisabledHexes)
       setFinalPdfPath(null)
@@ -4694,14 +4723,14 @@ function StudioPage() {
             onClick={tutorial.open}
             aria-label="Show tutorial"
             title="Tutorial"
-            style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
+            style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, padding: 0, lineHeight: 1, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >?</button>
           <button
             type="button"
             onClick={() => setShowCartDrawer(true)}
             aria-label="Open cart"
             title="Cart"
-            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
+            style={{ position: 'relative', border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, padding: 0, lineHeight: 1, background: '#fffdf8', cursor: 'pointer', fontSize: 15, display: 'grid', placeItems: 'center', flexShrink: 0 }}
           >
             🛒
             {cartCount > 0 && (
@@ -4935,7 +4964,7 @@ function StudioPage() {
         >
           {previewToolbar}
 
-          <div style={{ display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
           <div
             style={{
               flex: 1,
@@ -5073,6 +5102,10 @@ function StudioPage() {
           <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
 
           {showColorBrowser && activeWorkflowStep === 2 && !isFinalizeReview && (
+            // Float the browser over the canvas instead of as a flex sibling, so
+            // opening/closing it (e.g. toggling paint↔select) doesn't resize the
+            // canvas viewport and force a fit-scale/recenter of the stitch preview.
+            <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex' }}>
             <ColorBrowserModal
               mode={colorBrowserTarget === 'swap' ? 'swap' : 'add'}
               allColors={allDmcColors}
@@ -5111,6 +5144,7 @@ function StudioPage() {
               }}
               onClose={() => setShowColorBrowser(false)}
             />
+            </div>
           )}
 
           {showImportProjectPicker && (
