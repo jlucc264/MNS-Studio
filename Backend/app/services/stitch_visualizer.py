@@ -147,16 +147,34 @@ def flatten_transparency_to_white(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 
+# A stitch preview never needs more source resolution than a few multiples of
+# the target grid (largest legit grid ~1200 cells per side), yet raw phone
+# photos are routinely 12-48MP. Downsampling the source to this cap on open
+# bounds every downstream full-resolution array (resize_linear_light builds
+# several float64 copies): a 12MP photo at float64 is ~279MB *per array*, which
+# is what was OOM-killing the 2GB backend. Only oversized images are touched.
+MAX_SOURCE_DIMENSION = 2400
+
+
+def _cap_source_resolution(img: Image.Image) -> Image.Image:
+    longest = max(img.size)
+    if longest <= MAX_SOURCE_DIMENSION:
+        return img
+    scale = MAX_SOURCE_DIMENSION / longest
+    new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
 def open_source_image(src_path: Path | str) -> Image.Image:
     if isinstance(src_path, str) and src_path.startswith(("http://", "https://")):
         request = Request(src_path, headers={"User-Agent": "MNS/1.0"})
         with urlopen(request, timeout=30) as response:
             image_bytes = BytesIO(response.read())
         with Image.open(image_bytes) as img:
-            return flatten_transparency_to_white(ImageOps.exif_transpose(img))
+            return _cap_source_resolution(flatten_transparency_to_white(ImageOps.exif_transpose(img)))
 
     with Image.open(src_path) as img:
-        return flatten_transparency_to_white(ImageOps.exif_transpose(img))
+        return _cap_source_resolution(flatten_transparency_to_white(ImageOps.exif_transpose(img)))
 
 
 def source_transparency_mask(src_path: Path | str, size: tuple[int, int]) -> set[tuple[int, int]]:
@@ -500,21 +518,35 @@ def resize_linear_light(
     # "added-to" value instead of the original. Every operand that gets read
     # more than once here is given its own .copy() immediately beforehand so
     # each read starts from an untouched buffer.
+    # Each of these is a full source-resolution float64 array. They are freed
+    # (via del, right after each one's last read) as the computation walks
+    # forward so the whole set never stays resident at once — otherwise all ~10
+    # pile up until the function returns and a normal phone photo alone blows
+    # past the 2GB cap. del only shortens lifetime; it does not change any value
+    # or operand, so the aliasing safeguard above is unaffected.
     mask = (arr.copy() <= 0.04045).astype(arr.dtype)
     low = arr.copy() / 12.92
     plus_055 = arr.copy() + 0.055
+    del arr
     div_1055 = plus_055 / 1.055
+    del plus_055
     high = div_1055 ** 2.4
+    del div_1055
     mask_low = mask * low
+    del low
     inv_mask = 1.0 - mask
+    del mask
     inv_mask_high = inv_mask * high
+    del inv_mask, high
     lin = mask_low + inv_mask_high
+    del mask_low, inv_mask_high
     channels = [
         np.asarray(
             Image.fromarray(lin[:, :, c].astype(np.float32), mode="F").resize(size, resampling)
         )
         for c in range(3)
     ]
+    del lin
     lin_small = np.stack(channels, axis=-1)
     # Inlined rather than calling _linear_to_srgb_array — see the comment in
     # _srgb_to_oklab_array. See the comment above for why every reused

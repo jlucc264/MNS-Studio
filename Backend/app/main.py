@@ -97,6 +97,29 @@ logger = logging.getLogger(__name__)
 
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "")
 
+# Upper bounds on the requested stitch grid. The largest legitimate design is a
+# 60"×~1.3" belt at 18ct (~1080×24 cells) or a ~360×234 regular canvas, so these
+# caps sit well above real use while preventing a stray/oversized request from
+# allocating multi-GB intermediate arrays in the quantization pass and OOM-ing
+# the (2GB, single-worker) backend. Kept in sync with the frontend's own limits.
+MAX_STITCH_DIMENSION = 1200
+MAX_STITCH_CELLS = 150_000
+
+
+def _validate_stitch_dimensions(stitch_width: int, stitch_height: int) -> None:
+    if stitch_width <= 0 or stitch_height <= 0:
+        raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
+    if stitch_width > MAX_STITCH_DIMENSION or stitch_height > MAX_STITCH_DIMENSION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stitch dimensions must be at most {MAX_STITCH_DIMENSION} each.",
+        )
+    if stitch_width * stitch_height > MAX_STITCH_CELLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Design is too large — at most {MAX_STITCH_CELLS:,} total stitches.",
+        )
+
 
 def _require_admin(user_id: str) -> None:
     if not ADMIN_USER_ID or user_id != ADMIN_USER_ID:
@@ -314,8 +337,7 @@ def import_url(request: ImportUrlRequest):
 
 @app.post("/visualize")
 def visualize(request: VisualizeRequest):
-    if request.stitch_width <= 0 or request.stitch_height <= 0:
-        raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
+    _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
 
     preview_url, palette, cells = generate_stitch_preview(
         image_url=request.image_url,
@@ -386,8 +408,7 @@ def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optiona
 
 @app.post("/recolor", response_model=RecolorResponse)
 def recolor(request: RecolorRequest):
-    if request.stitch_width <= 0 or request.stitch_height <= 0:
-        raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
+    _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
 
     if len(request.selected_palette) < 1:
         raise HTTPException(status_code=400, detail="At least one color must be selected.")
@@ -476,8 +497,7 @@ def import_pattern(request: ImportPatternRequest):
 
 @app.post("/grid-render", response_model=GridRenderResponse)
 def grid_render(request: GridRenderRequest):
-    if request.stitch_width <= 0 or request.stitch_height <= 0:
-        raise HTTPException(status_code=400, detail="Stitch dimensions must be positive.")
+    _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
     if len(request.palette) < 1:
         raise HTTPException(status_code=400, detail="At least one palette color required.")
 
