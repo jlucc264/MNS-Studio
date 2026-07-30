@@ -2,6 +2,7 @@ import json
 import logging
 import mimetypes
 import os
+import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
 from dotenv import load_dotenv
@@ -104,6 +105,16 @@ ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "")
 # the (2GB, single-worker) backend. Kept in sync with the frontend's own limits.
 MAX_STITCH_DIMENSION = 1200
 MAX_STITCH_CELLS = 150_000
+
+# Cap how many heavy image-processing ops (/visualize, /recolor, /grid-render)
+# run at once *per worker process*. Each transiently allocates a few hundred MB,
+# and because these handlers are sync `def` served on a thread pool while numpy
+# releases the GIL, a burst of parallel requests otherwise runs genuinely in
+# parallel and stacks that memory until the box OOMs (observed: ~6 concurrent
+# /visualize ≈ 3.4GB). Bursts now queue on this gate instead of piling up in RAM.
+# Total concurrency across the service is this value × WEB_CONCURRENCY workers.
+_IMAGE_OP_LIMIT = max(1, int(os.getenv("IMAGE_OP_CONCURRENCY", "2")))
+_image_op_gate = threading.Semaphore(_IMAGE_OP_LIMIT)
 
 
 def _validate_stitch_dimensions(stitch_width: int, stitch_height: int) -> None:
@@ -339,20 +350,21 @@ def import_url(request: ImportUrlRequest):
 def visualize(request: VisualizeRequest):
     _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
 
-    preview_url, palette, cells = generate_stitch_preview(
-        image_url=request.image_url,
-        stitch_width=request.stitch_width,
-        stitch_height=request.stitch_height,
-        color_count=request.color_count,
-        show_grid=request.show_grid,
-        clean_background=request.clean_background,
-        simplify_colors=request.simplify_colors,
-        strengthen_dark_detail=request.strengthen_dark_detail,
-        preserve_accents=request.preserve_accents,
-        mesh_count=request.mesh_count,
-        contrast_level=request.contrast_level,
-        source_type=request.source_type,
-    )
+    with _image_op_gate:
+        preview_url, palette, cells = generate_stitch_preview(
+            image_url=request.image_url,
+            stitch_width=request.stitch_width,
+            stitch_height=request.stitch_height,
+            color_count=request.color_count,
+            show_grid=request.show_grid,
+            clean_background=request.clean_background,
+            simplify_colors=request.simplify_colors,
+            strengthen_dark_detail=request.strengthen_dark_detail,
+            preserve_accents=request.preserve_accents,
+            mesh_count=request.mesh_count,
+            contrast_level=request.contrast_level,
+            source_type=request.source_type,
+        )
     preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
     width_inches = request.stitch_width / request.mesh_count
@@ -413,14 +425,15 @@ def recolor(request: RecolorRequest):
     if len(request.selected_palette) < 1:
         raise HTTPException(status_code=400, detail="At least one color must be selected.")
 
-    preview_url, palette, cells = recolor_stitch_preview(
-        image_url=request.image_url,
-        stitch_width=request.stitch_width,
-        stitch_height=request.stitch_height,
-        mesh_count=request.mesh_count,
-        show_grid=request.show_grid,
-        selected_palette=[color.model_dump() for color in request.selected_palette],
-    )
+    with _image_op_gate:
+        preview_url, palette, cells = recolor_stitch_preview(
+            image_url=request.image_url,
+            stitch_width=request.stitch_width,
+            stitch_height=request.stitch_height,
+            mesh_count=request.mesh_count,
+            show_grid=request.show_grid,
+            selected_palette=[color.model_dump() for color in request.selected_palette],
+        )
     preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
     return RecolorResponse(
@@ -501,14 +514,15 @@ def grid_render(request: GridRenderRequest):
     if len(request.palette) < 1:
         raise HTTPException(status_code=400, detail="At least one palette color required.")
 
-    preview_url, cells, used_palette = grid_first_render(
-        image_url=request.image_url,
-        stitch_width=request.stitch_width,
-        stitch_height=request.stitch_height,
-        mesh_count=request.mesh_count,
-        show_grid=request.show_grid,
-        palette=[c.model_dump() for c in request.palette],
-    )
+    with _image_op_gate:
+        preview_url, cells, used_palette = grid_first_render(
+            image_url=request.image_url,
+            stitch_width=request.stitch_width,
+            stitch_height=request.stitch_height,
+            mesh_count=request.mesh_count,
+            show_grid=request.show_grid,
+            palette=[c.model_dump() for c in request.palette],
+        )
     preview_url = durable_preview_url(preview_url, prefix="draft-previews")
 
     return GridRenderResponse(
