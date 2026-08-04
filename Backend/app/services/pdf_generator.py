@@ -63,6 +63,13 @@ SIGNATURE_CORNER_INSET_IN = 0.5
 SIGNATURE_MAX_WIDTH_IN = 1.5
 SIGNATURE_MAX_HEIGHT_IN = 1.0
 
+# SKU placement: same mechanics as the signature above, mirrored to the
+# canvas's own bottom-left corner instead of bottom-right. Per-project (not
+# per-creator) — see load_sku_asset.
+SKU_CORNER_INSET_IN = 0.5
+SKU_MAX_WIDTH_IN = 1.5
+SKU_MAX_HEIGHT_IN = 1.0
+
 
 
 def _resolve_asset_path(asset_url: str) -> Path:
@@ -104,6 +111,36 @@ def load_signature_image(signature: dict | None) -> SignatureAsset | None:
         return None
 
 
+@dataclass
+class SkuAsset:
+    image: "Image.Image | None" = None
+    # Present only for pixel-drawn/imported SKUs — see SignatureAsset.grid.
+    grid: "list[list[str]] | None" = None
+
+
+def load_sku_asset(sku: dict | None) -> SkuAsset | None:
+    """Load a project's SKU mark from the record returned by
+    `get_project_sku` (`{"image_url": ..., "grid_json": ...}`). Mirrors
+    `load_signature_image` exactly, just per-project instead of per-creator —
+    returns None on any failure so a missing/broken SKU never blocks a print
+    job."""
+    if not sku or not sku.get("image_url"):
+        return None
+    image_url = sku["image_url"]
+    try:
+        if image_url.startswith("http://") or image_url.startswith("https://"):
+            request = Request(image_url, headers={"User-Agent": "MNS/1.0"})
+            with urlopen(request, timeout=15) as response:
+                data = response.read()
+        else:
+            data = _resolve_asset_path(image_url).read_bytes()
+        image = Image.open(BytesIO(data)).convert("RGBA")
+        return SkuAsset(image=image, grid=sku.get("grid_json"))
+    except (OSError, HTTPError, URLError, Image.UnidentifiedImageError) as exc:
+        logger.warning("Failed to load SKU image %s: %s", image_url, exc)
+        return None
+
+
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     cleaned = hex_color.lstrip("#")
     return tuple(int(cleaned[i:i+2], 16) for i in (0, 2, 4))
@@ -128,6 +165,7 @@ def _render_preview_image_from_cells(
     grid_color: tuple = GRID_COLOR,
     grid_line_width: int = 1,
     signature: SignatureAsset | None = None,
+    sku: SkuAsset | None = None,
     border_inches: float = BORDER_INCHES,
 ) -> Image.Image:
     stitch_height = len(cells)
@@ -218,6 +256,50 @@ def _render_preview_image_from_cells(
                 paste_x = max(design_right_px, round(display_w - corner_inset_px - box_w))
                 paste_y = max(design_bottom_px, round(display_h - corner_inset_px - box_h))
                 preview.paste(sig_scaled, (paste_x, paste_y), sig_scaled)
+
+    if include_border and sku and border_stitches > 0:
+        px_per_inch = mesh_count * DISPLAY_CELL_SIZE
+        design_left_px = border_stitches * DISPLAY_CELL_SIZE
+        design_bottom_px = border_stitches * DISPLAY_CELL_SIZE + stitch_height * DISPLAY_CELL_SIZE
+        # Mirror of the signature block above, anchored to the canvas's own
+        # bottom-left corner instead of bottom-right.
+        corner_inset_px = SKU_CORNER_INSET_IN * px_per_inch
+
+        if sku.grid:
+            grid = sku.grid
+            grid_rows = len(grid)
+            grid_cols = len(grid[0]) if grid_rows else 0
+            box_w = grid_cols * DISPLAY_CELL_SIZE
+            box_h = grid_rows * DISPLAY_CELL_SIZE
+            raw_x = corner_inset_px
+            raw_y = display_h - corner_inset_px - box_h
+            # Clamp so an unusually large SKU can never creep right into the
+            # stitches themselves (mirrors the design_right_px clamp above).
+            paste_x = min(design_left_px - box_w, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            paste_y = max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            draw = ImageDraw.Draw(preview)
+            for r, row in enumerate(grid):
+                for c, hex_color in enumerate(row):
+                    if hex_color == BLANK_CELL:
+                        continue
+                    x0 = paste_x + c * DISPLAY_CELL_SIZE
+                    y0 = paste_y + r * DISPLAY_CELL_SIZE
+                    draw.rectangle(
+                        [x0, y0, x0 + DISPLAY_CELL_SIZE - 1, y0 + DISPLAY_CELL_SIZE - 1],
+                        fill=_hex_to_rgb(hex_color),
+                    )
+        elif sku.image:
+            max_w_px = SKU_MAX_WIDTH_IN * px_per_inch
+            max_h_px = SKU_MAX_HEIGHT_IN * px_per_inch
+            sku_w, sku_h = sku.image.size
+            if sku_w and sku_h:
+                scale = min(max_w_px / sku_w, max_h_px / sku_h, 1.0)
+                box_w = max(1, round(sku_w * scale))
+                box_h = max(1, round(sku_h * scale))
+                sku_scaled = sku.image.resize((box_w, box_h), Image.Resampling.LANCZOS)
+                paste_x = min(design_left_px - box_w, round(corner_inset_px))
+                paste_y = max(design_bottom_px, round(display_h - corner_inset_px - box_h))
+                preview.paste(sku_scaled, (paste_x, paste_y), sku_scaled)
 
     return preview
 
@@ -562,6 +644,7 @@ def generate_preview_pdf(
     palette: list[dict],
     cells: list[list[str]],
     signature: SignatureAsset | None = None,
+    sku: SkuAsset | None = None,
 ) -> tuple[str, Path, Path, str, Path]:
     public_path, public_url = finalized_output_path("finalized")
     internal_path, _ = finalized_output_path("internal_finalized")
@@ -575,7 +658,7 @@ def generate_preview_pdf(
     page_size = landscape(letter) if design_w > design_h else letter
     # Cover preview: design + 2" canvas margin on each side, with signature
     preview_image = _render_preview_image_from_cells(
-        preview_cells, mesh_count, show_grid, signature=signature, border_inches=2.0,
+        preview_cells, mesh_count, show_grid, signature=signature, sku=sku, border_inches=2.0,
     )
     preview_image.save(preview_path, format="PNG")
     # Report thumbnail: just the design (no canvas border) so it fills the small thumb area
@@ -960,8 +1043,9 @@ def generate_roll_print_pdf(
     y_scale: float = 1.0,
 ) -> Path:
     """`designs` items may include an optional `signature` (a SignatureAsset,
-    already resolved to the design's creator) drawn into the design's own 2"
-    margin — see `_render_preview_image_from_cells`."""
+    already resolved to the design's creator) and/or `sku` (a SkuAsset, read
+    directly off the project) drawn into the design's own 2" margin — see
+    `_render_preview_image_from_cells`."""
     roll_width_pts = roll_width_inches * 72
     gap_pts = gap_inches * 72
 
@@ -985,7 +1069,7 @@ def generate_roll_print_pdf(
         draw_h = ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale
         img = _render_preview_image_from_cells(
             cells, mesh, show_grid=False, include_border=True, border_inches=2.0,
-            signature=design.get("signature"),
+            signature=design.get("signature"), sku=design.get("sku"),
         )
         rendered.append({
             "img": img,

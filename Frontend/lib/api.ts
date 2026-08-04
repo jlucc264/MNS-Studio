@@ -269,6 +269,7 @@ export type FinalizePayload = {
   palette: PaletteColor[]
   cells: string[][]
   previous_pdf_url?: string | null
+  project_id?: string | null
 }
 
 export type FinalizeResponse = {
@@ -864,6 +865,33 @@ export async function saveMySignature(blob: Blob, accessToken: string, grid?: st
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error((data as { detail?: string }).detail ?? 'Could not save signature')
+  }
+  return res.json()
+}
+
+export async function getProjectSku(projectId: string, accessToken: string): Promise<{ image_url: string | null }> {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/sku`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not load SKU')
+  }
+  return res.json()
+}
+
+export async function saveProjectSku(projectId: string, blob: Blob, accessToken: string, grid?: string[][]): Promise<{ image_url: string }> {
+  const form = new FormData()
+  form.append('file', blob, 'sku.png')
+  if (grid) form.append('grid', JSON.stringify(grid))
+  const res = await fetch(`${API_BASE}/projects/${projectId}/sku`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: form,
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Could not save SKU')
   }
   return res.json()
 }

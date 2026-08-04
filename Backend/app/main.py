@@ -47,7 +47,7 @@ from app.models import (
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
-from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, generate_alignment_test_design, load_signature_image, crop_to_content
+from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, generate_alignment_test_design, load_signature_image, load_sku_asset, crop_to_content
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import (
     send_contact_email,
@@ -83,6 +83,8 @@ from app.services.supabase_db import (
     log_chat,
     get_creator_signature,
     upsert_creator_signature,
+    get_project_sku,
+    upsert_project_sku,
     resolve_root_creator_id,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
@@ -384,6 +386,7 @@ def visualize(request: VisualizeRequest):
 def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optional_user_id)):
     delete_finalized_output(request.previous_pdf_url)
     signature = load_signature_image(get_creator_signature(user_id)) if user_id else None
+    sku = load_sku_asset(get_project_sku(request.project_id)) if request.project_id else None
     pdf_url, public_pdf_path, internal_pdf_path, preview_image_url, preview_image_path = generate_preview_pdf(
         preview_url=request.preview_url,
         width_inches=request.width_inches,
@@ -395,6 +398,7 @@ def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optiona
         palette=[color.model_dump() for color in request.palette],
         cells=request.cells,
         signature=signature,
+        sku=sku,
     )
     supabase_pdf_url = upload_pdf_to_supabase(public_pdf_path, prefix="public-finalized")
     if supabase_pdf_url:
@@ -697,9 +701,11 @@ def get_my_earnings(user_id: str = Depends(get_current_user_id)):
 
 
 # Mirrors Frontend/components/SignatureGridEditor.tsx's GRID_COLS/GRID_ROWS —
-# the frontend never sends a larger grid, this just guards the public endpoint.
-SIGNATURE_GRID_MAX_COLS = 27
-SIGNATURE_GRID_MAX_ROWS = 18
+# the frontend never sends a larger grid, this just guards the public
+# endpoint. Shared by both corner-mark features (signature and SKU), which
+# both use SignatureGridEditor for pixel authoring.
+CORNER_MARK_GRID_MAX_COLS = 27
+CORNER_MARK_GRID_MAX_ROWS = 18
 
 
 @app.get("/profile/signature")
@@ -723,14 +729,54 @@ def save_my_signature(
             grid_json = json.loads(grid)
         except json.JSONDecodeError:
             raise HTTPException(status_code=422, detail="Signature grid was not valid JSON.")
-        if not isinstance(grid_json, list) or len(grid_json) > SIGNATURE_GRID_MAX_ROWS or any(
-            not isinstance(row, list) or len(row) > SIGNATURE_GRID_MAX_COLS for row in grid_json
+        if not isinstance(grid_json, list) or len(grid_json) > CORNER_MARK_GRID_MAX_ROWS or any(
+            not isinstance(row, list) or len(row) > CORNER_MARK_GRID_MAX_COLS for row in grid_json
         ):
             raise HTTPException(status_code=422, detail="Signature grid exceeds the maximum pixel signature size.")
 
     image_url = durable_preview_url(save_upload(file), prefix="signatures")
     if not upsert_creator_signature(user_id, image_url, grid_json):
         raise HTTPException(status_code=502, detail="Could not save signature.")
+    return {"image_url": image_url}
+
+
+@app.get("/projects/{project_id}/sku")
+def get_project_sku_endpoint(project_id: str, user_id: str = Depends(get_current_user_id)):
+    from app.services.supabase_db import get_project as db_get_project
+    if db_get_project(project_id, user_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    sku = get_project_sku(project_id)
+    return {"image_url": sku["image_url"] if sku else None}
+
+
+@app.post("/projects/{project_id}/sku")
+def save_project_sku(
+    project_id: str,
+    file: UploadFile = File(...),
+    grid: str | None = Form(None),
+    user_id: str = Depends(get_current_user_id),
+):
+    from app.services.supabase_db import get_project as db_get_project
+    if db_get_project(project_id, user_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="SKU must be an image.")
+
+    grid_json = None
+    if grid:
+        try:
+            grid_json = json.loads(grid)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="SKU grid was not valid JSON.")
+        if not isinstance(grid_json, list) or len(grid_json) > CORNER_MARK_GRID_MAX_ROWS or any(
+            not isinstance(row, list) or len(row) > CORNER_MARK_GRID_MAX_COLS for row in grid_json
+        ):
+            raise HTTPException(status_code=422, detail="SKU grid exceeds the maximum pixel size.")
+
+    image_url = durable_preview_url(save_upload(file), prefix="sku")
+    if not upsert_project_sku(project_id, image_url, grid_json):
+        raise HTTPException(status_code=502, detail="Could not save SKU.")
     return {"image_url": image_url}
 
 
@@ -1051,7 +1097,7 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
     )
 
 
-def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None) -> dict:
+def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, sku_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None) -> dict:
     # A from-scratch canvas is a blank workspace sized to whatever the user
     # set (e.g. 10x6) — the actual design only occupies whatever was
     # stitched into it. Roll print (unlike the customer finalize preview,
@@ -1079,11 +1125,18 @@ def _build_roll_print_design(project: dict, project_id: str | None, signature_ca
     if creator_id not in signature_cache:
         signature_cache[creator_id] = load_signature_image(get_creator_signature(creator_id)) if creator_id else None
 
+    # SKU is per-project (not attributed through the royalty/creator chain
+    # like the signature above) — read straight off whichever project is
+    # actually being printed.
+    if project_id not in sku_cache:
+        sku_cache[project_id] = load_sku_asset(get_project_sku(project_id)) if project_id else None
+
     return {
         "cells": cells,
         "mesh_count": mesh_count,
         "label": label,
         "signature": signature_cache[creator_id],
+        "sku": sku_cache[project_id],
     }
 
 
@@ -1099,12 +1152,13 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
 
     designs = []
     signature_cache: dict[str, object] = {}
+    sku_cache: dict[str, object] = {}
 
     for pid in request.project_ids * request.copies:
         project = db_get_project(pid, user_id)
         if not project:
             raise HTTPException(status_code=404, detail=f"Project {pid} not found.")
-        designs.append(_build_roll_print_design(project, pid, signature_cache))
+        designs.append(_build_roll_print_design(project, pid, signature_cache, sku_cache))
 
     for order_id in request.print_order_ids * request.copies:
         order = get_print_order(order_id)
@@ -1121,7 +1175,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             raise HTTPException(status_code=404, detail=f"Could not resolve design for print order {order_id}.")
 
         designs.append(_build_roll_print_design(
-            project, project_id, signature_cache,
+            project, project_id, signature_cache, sku_cache,
             label_override=order.get("title"),
             known_gallery_item_id=order.get("gallery_item_id"),
         ))

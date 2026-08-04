@@ -100,6 +100,36 @@ def upsert_creator_signature(user_id: str, image_url: str, grid_json: list[list[
     return isinstance(created, list) and bool(created)
 
 
+def get_project_sku(project_id: str) -> dict | None:
+    """Mirrors get_creator_signature, but per-project instead of per-creator
+    — a SKU identifies a specific print job, not a person. Returns
+    {"image_url": str, "grid_json": list[list[str]] | None}, or None if the
+    project has no SKU set."""
+    encoded = quote(project_id, safe="")
+    result = _request("GET", "/project_skus", params=f"project_id=eq.{encoded}&select=image_url,grid_json&limit=1")
+    rows = result if isinstance(result, list) else []
+    if rows and rows[0].get("image_url"):
+        return {"image_url": rows[0]["image_url"], "grid_json": rows[0].get("grid_json")}
+    return None
+
+
+def upsert_project_sku(project_id: str, image_url: str, grid_json: list[list[str]] | None = None) -> bool:
+    encoded = quote(project_id, safe="")
+    body = {
+        "image_url": image_url,
+        "grid_json": grid_json,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated = _request("PATCH", "/project_skus", body=body, params=f"project_id=eq.{encoded}")
+    if isinstance(updated, list) and updated:
+        return True
+    created = _request(
+        "POST", "/project_skus",
+        body={"project_id": project_id, "image_url": image_url, "grid_json": grid_json},
+    )
+    return isinstance(created, list) and bool(created)
+
+
 def list_projects(user_id: str) -> list[dict]:
     encoded_user_id = quote(user_id, safe="")
     result = _request(

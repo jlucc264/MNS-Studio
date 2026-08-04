@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type FontSize, type FontFamily, type TextOrientation, type TextStyle, getCaretPlacement, getTextCells } from '../lib/bitmapFonts'
 import { useIsPhoneDevice, useIsTouch } from '../lib/useViewport'
 
@@ -39,10 +39,22 @@ type Props = {
   onStampMove?: (anchor: { row: number; col: number }) => void
   clearSelectionSignal?: number
   signatureUrl?: string | null
+  skuUrl?: string | null
   // Phone landscape has so little horizontal room in this toolbar that the
   // Trace slider (last in the row) gets pushed off since the row does not
   // wrap. Compact everything else so it stays reachable without wrapping.
   isPhoneLandscape?: boolean
+  // Parent-driven "Place"/"Cancel" for the active text box (a Palette panel
+  // button pair, mirroring the floating-stamp Place/Cancel) — incrementing
+  // counters rather than a direct call since the box's state lives here.
+  placeTextSignal?: number
+  cancelTextSignal?: number
+  onTextBoxActiveChange?: (active: boolean) => void
+  // Rendered inside GridEditor's own canvas row (below the toolbar), not as
+  // an external sibling — so an overlay like the color browser is confined
+  // to the canvas area by the grid layout itself and can never cover the
+  // toolbar, instead of needing to out-rank it with a guessed pixel offset.
+  canvasOverlay?: ReactNode
 }
 
 const PAINTBRUSH_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M15.6 3.2l5.2 5.2-7.8 7.8-5.2-5.2z' fill='%23222'/%3E%3Cpath d='M6.8 11.9l5.3 5.3-1.1 2.7c-.3.8-1 1.4-1.9 1.6-2 .5-4-.4-4.8-2.3-.4-.9-.4-1.8 0-2.7l1.1-2.6z' fill='%23c43b3b'/%3E%3Cpath d='M15.1 2.7l6.2 6.2' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 20, crosshair`
@@ -542,6 +554,11 @@ export default function GridEditor({
   clearSelectionSignal = 0,
   isPhoneLandscape = false,
   signatureUrl = null,
+  skuUrl = null,
+  placeTextSignal = 0,
+  cancelTextSignal = 0,
+  onTextBoxActiveChange,
+  canvasOverlay,
 }: Props) {
   if (!cells.length) return null
 
@@ -751,6 +768,24 @@ export default function GridEditor({
     input.setSelectionRange(cursorPosition, cursorPosition)
   }, [])
 
+  // Shared by Enter, the "Place" button, and the "Cancel" button — the three
+  // ways to end a text box — so all of them agree on what counts as a commit.
+  const commitTextBox = useCallback(() => {
+    if (textAnchorCell && textInput.trim() && activeColor) {
+      const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
+      onApplyShapeCells?.(stampCells)
+    }
+    setTextAnchorCell(null)
+    setTextBoxEnd(null)
+    setTextInput('')
+  }, [textAnchorCell, textInput, activeColor, textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, onApplyShapeCells])
+
+  const discardTextBox = useCallback(() => {
+    setTextAnchorCell(null)
+    setTextBoxEnd(null)
+    setTextInput('')
+  }, [])
+
   useEffect(() => {
     if (toolMode !== 'text' || !textAnchorCell) { setTextCursorVisible(true); return }
     setTextCursorVisible(true)
@@ -793,6 +828,25 @@ export default function GridEditor({
     setSelectionRects([])
     liveSelectionRectRef.current = null
   }, [clearSelectionSignal])
+
+  // Parent-driven "Place"/"Cancel" buttons for the active text box
+  const lastPlaceTextSignalRef = useRef(placeTextSignal)
+  useEffect(() => {
+    if (placeTextSignal === lastPlaceTextSignalRef.current) return
+    lastPlaceTextSignalRef.current = placeTextSignal
+    commitTextBox()
+  }, [placeTextSignal, commitTextBox])
+
+  const lastCancelTextSignalRef = useRef(cancelTextSignal)
+  useEffect(() => {
+    if (cancelTextSignal === lastCancelTextSignalRef.current) return
+    lastCancelTextSignalRef.current = cancelTextSignal
+    discardTextBox()
+  }, [cancelTextSignal, discardTextBox])
+
+  useEffect(() => {
+    onTextBoxActiveChange?.(Boolean(textAnchorCell && textBoxEnd))
+  }, [textAnchorCell, textBoxEnd, onTextBoxActiveChange])
 
   useEffect(() => {
     const stopPainting = (event: PointerEvent) => {
@@ -1492,13 +1546,13 @@ export default function GridEditor({
             }
             return
           }
-          // Click outside: stamp current text then start new box
-          if (textInput.trim() && activeColor) {
-            const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
-            onApplyShapeCells?.(stampCells)
-          }
+          // Click outside a box with typed content: leave it as-is (deselected,
+          // not stamped) so clicking back inside resumes editing instead of
+          // silently committing it. An empty box has nothing to lose, so it's
+          // discarded to make room for the new one being started below.
+          if (textInput.trim()) return
           setTextAnchorCell(null)
-          setTextInput('')
+          setTextBoxEnd(null)
         }
         // Start drawing a new box
         textBoxStartRef.current = { row: hit.row, col: hit.col }
@@ -2410,6 +2464,7 @@ export default function GridEditor({
           justifyItems: 'center',
           alignItems: 'start',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
         <div
@@ -2621,6 +2676,10 @@ export default function GridEditor({
                 <input
                   ref={textInputRef}
                   value={textInput}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  spellCheck={false}
                   onChange={(e) => {
                     if (toolMode === 'text' && textAnchorCell && textBoxEnd) setTextInput(e.target.value)
                   }}
@@ -2628,17 +2687,9 @@ export default function GridEditor({
                     if (toolMode !== 'text' || !textAnchorCell || !textBoxEnd) return
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      if (textInput.trim() && activeColor) {
-                        const stampCells = getTextCells(textInput, textAnchorCell.row, textAnchorCell.col, textFontSize, textFontFamily, activeColor, { bold: textBold, italic: textItalic, outline: textOutline }, textOrientation)
-                        onApplyShapeCells?.(stampCells)
-                      }
-                      setTextAnchorCell(null)
-                      setTextBoxEnd(null)
-                      setTextInput('')
+                      commitTextBox()
                     } else if (e.key === 'Escape') {
-                      setTextAnchorCell(null)
-                      setTextBoxEnd(null)
-                      setTextInput('')
+                      discardTextBox()
                     }
                   }}
                   style={{
@@ -2682,9 +2733,34 @@ export default function GridEditor({
                   />
                 </div>
               )}
+              {skuUrl && (
+                // Mirror of the signature badge above, bottom-left instead
+                // of bottom-right — same peek-outside-the-corner caveat.
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: -14,
+                    bottom: -14,
+                    pointerEvents: 'none',
+                    background: '#fffdf8',
+                    border: '1px solid #d7d0c8',
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    padding: 4,
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={skuUrl}
+                    alt="Project SKU"
+                    style={{ display: 'block', maxWidth: 64, maxHeight: 44, objectFit: 'contain' }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
+        {canvasOverlay}
       </div>
     </div>
   )

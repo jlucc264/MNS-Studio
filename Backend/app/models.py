@@ -123,6 +123,7 @@ class FinalizeRequest(BaseModel):
     palette: list[PaletteColor]
     cells: list[list[str]]
     previous_pdf_url: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class FinalizeResponse(BaseModel):

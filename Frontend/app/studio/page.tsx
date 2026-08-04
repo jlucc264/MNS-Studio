@@ -13,6 +13,8 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import ChatPanel from '../../components/ChatPanel'
+import { SignaturePad } from '../../components/SignaturePad'
+import { SignatureGridEditor } from '../../components/SignatureGridEditor'
 import GridEditor, { computeShapeCells, type DesignSelectionRect } from '../../components/GridEditor'
 import { getTextCells, ensureFontLoaded, type FontFamily, type TextOrientation } from '../../lib/bitmapFonts'
 import ImagePanel from '../../components/ImagePanel'
@@ -46,6 +48,8 @@ import {
   getCanvasForDesign,
   getMyCreatorProfile,
   getMySignature,
+  getProjectSku,
+  saveProjectSku,
   getProject,
   listProjects,
   type Project,
@@ -593,6 +597,14 @@ function StudioPage() {
   const router = useRouter()
   const tutorial = useTutorial()
   const [signatureUrl, setSignatureUrl] = useState<string | null>(null)
+  // SKU spot: same mechanics as the signature above (dual image/grid asset,
+  // same editor components), but per-project instead of per-creator — a SKU
+  // identifies a specific print job, not a person.
+  const [skuUrl, setSkuUrl] = useState<string | null>(null)
+  const [savingSku, setSavingSku] = useState(false)
+  const [skuError, setSkuError] = useState('')
+  const [redrawingSku, setRedrawingSku] = useState(false)
+  const [skuMode, setSkuMode] = useState<'draw' | 'pixel'>('draw')
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
@@ -644,6 +656,9 @@ function StudioPage() {
   const [brushDensity, setBrushDensity] = useState(1)
   const [selectedRegions, setSelectedRegions] = useState<DesignSelectionRect[]>([])
   const [clearSelectionSignal, setClearSelectionSignal] = useState(0)
+  const [placeTextSignal, setPlaceTextSignal] = useState(0)
+  const [cancelTextSignal, setCancelTextSignal] = useState(0)
+  const [hasActiveTextBox, setHasActiveTextBox] = useState(false)
   const [settingsGuardAccepted, setSettingsGuardAccepted] = useState(false)
   const [showSettingsGuardModal, setShowSettingsGuardModal] = useState(false)
   const [stampClipboard, setStampClipboard] = useState<(string | null)[][] | null>(null)
@@ -709,6 +724,7 @@ function StudioPage() {
   const { count: cartCount } = useCart()
   const pendingCents = useCanvasCredit(session?.access_token)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
@@ -942,6 +958,38 @@ function StudioPage() {
       .then((res) => setSignatureUrl(res.image_url))
       .catch(() => { /* non-critical */ })
   }, [session?.access_token])
+
+  useEffect(() => {
+    const projectId = savedProjectId ?? searchParams.get('project')
+    // Clear immediately on every change (not just when there's no project) —
+    // otherwise switching from a project with a SKU to one without (or a
+    // different one) briefly shows the previous project's SKU. `cancelled`
+    // additionally guards against an earlier fetch resolving after a later
+    // one if project switches happen faster than the request round-trip.
+    setSkuUrl(null)
+    if (!session?.access_token || !projectId) return
+    let cancelled = false
+    getProjectSku(projectId, session.access_token)
+      .then((res) => { if (!cancelled) setSkuUrl(res.image_url) })
+      .catch(() => { /* non-critical */ })
+    return () => { cancelled = true }
+  }, [session?.access_token, savedProjectId, searchParams])
+
+  async function handleSaveSku(blob: Blob, grid?: string[][]) {
+    const projectId = savedProjectId ?? searchParams.get('project')
+    if (!session?.access_token || !projectId) return
+    setSavingSku(true)
+    setSkuError('')
+    try {
+      const res = await saveProjectSku(projectId, blob, session.access_token, grid)
+      setSkuUrl(res.image_url)
+      setRedrawingSku(false)
+    } catch (err) {
+      setSkuError(err instanceof Error ? err.message : 'Could not save SKU.')
+    } finally {
+      setSavingSku(false)
+    }
+  }
 
   useEffect(() => {
     if (!hasGeneratedPreview) return
@@ -3459,6 +3507,7 @@ function StudioPage() {
         palette: currentDesignPalette,
         cells,
         previous_pdf_url: previousPdfUrl,
+        project_id: activeDraftProjectId,
       }, session.access_token)
 
       const existingId = activeDraftProjectId
@@ -4495,6 +4544,68 @@ function StudioPage() {
             Draw 1-stitch black outline
           </button>
         </div>
+        <div
+          style={{
+            display: 'grid',
+            gap: 10,
+            padding: 16,
+            border: '1px solid #e8e2d7',
+            borderRadius: 14,
+            background: '#fff',
+            fontSize: 14,
+          }}
+        >
+          <strong>SKU (optional)</strong>
+          <div style={{ color: '#8a8177', lineHeight: 1.35 }}>
+            Printed in the bottom-left corner of this project's canvas — separate from your signature, which prints bottom-right.
+          </div>
+          {!session?.access_token || !activeDraftProjectId ? (
+            <div style={{ color: '#8a8177' }}>Save a draft first to add a SKU.</div>
+          ) : skuUrl && !redrawingSku ? (
+            <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={skuUrl}
+                alt="Project SKU"
+                style={{ maxWidth: 200, maxHeight: 100, border: '1px solid #d7d0c8', borderRadius: 8, background: '#fffdf8' }}
+              />
+              <button type="button" onClick={() => setRedrawingSku(true)} style={btnSecondary}>
+                Redraw
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ display: 'inline-flex', border: '1px solid #d7d0c8', borderRadius: 999, padding: 3, width: 'fit-content' }}>
+                {(['draw', 'pixel'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setSkuMode(mode)}
+                    style={{
+                      padding: '5px 14px',
+                      borderRadius: 999,
+                      border: 'none',
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      background: skuMode === mode ? '#3f382f' : 'transparent',
+                      color: skuMode === mode ? '#fff' : '#8a8177',
+                    }}
+                  >
+                    {mode === 'draw' ? 'Draw' : 'Pixel'}
+                  </button>
+                ))}
+              </div>
+              {skuMode === 'draw' ? (
+                <SignaturePad onSave={handleSaveSku} saving={savingSku} />
+              ) : (
+                <SignatureGridEditor onSave={handleSaveSku} saving={savingSku} />
+              )}
+            </div>
+          )}
+          {skuError && <p style={{ margin: 0, fontSize: 13, color: '#b0453a' }}>{skuError}</p>}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -4575,6 +4686,9 @@ function StudioPage() {
       onFlipStamp={handleFlipStamp}
       onPlaceStamp={handlePlaceStamp}
       onCancelStamp={handleCancelStamp}
+      hasActiveTextBox={hasActiveTextBox}
+      onPlaceText={() => setPlaceTextSignal((v) => v + 1)}
+      onCancelText={() => setCancelTextSignal((v) => v + 1)}
       onSelect={(color) => {
         setActivePaintColor(color.hex)
         if (toolMode !== 'select') {
@@ -5005,10 +5119,14 @@ function StudioPage() {
                 <GridEditor
                   centerKey={gridKey}
                   signatureUrl={signatureUrl}
+                  skuUrl={skuUrl}
                   isPhoneLandscape={isPhoneCanvasLandscape}
                   traceImageUrl={activeImagePath ? assetUrl(activeImagePath) : null}
                   traceOpacity={traceOpacity}
                   onTraceOpacityChange={setTraceOpacity}
+                  placeTextSignal={placeTextSignal}
+                  cancelTextSignal={cancelTextSignal}
+                  onTextBoxActiveChange={setHasActiveTextBox}
                   cells={cells}
                   activeColor={shouldAllowCanvasEditing ? activePaintColor : null}
                   toolMode={toolMode}
@@ -5056,6 +5174,53 @@ function StudioPage() {
                   floatingStamp={floatingStamp}
                   onStampMove={handleStampMove}
                   clearSelectionSignal={clearSelectionSignal}
+                  canvasOverlay={showColorBrowser && activeWorkflowStep === 2 && !isFinalizeReview && (
+                    // Rendered inside GridEditor's own canvas row (below its
+                    // toolbar) via the canvasOverlay prop — top: 0 here means
+                    // the top of that row, i.e. right under the toolbar, not
+                    // the top of the whole component. No manual height/offset
+                    // math needed; the grid row boundary does it for free.
+                    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex' }}>
+                      <ColorBrowserModal
+                        mode={colorBrowserTarget === 'swap' ? 'swap' : 'add'}
+                        allColors={allDmcColors}
+                        paletteHexes={new Set(displayPalette.map((c) => c.hex))}
+                        swapFromColor={colorBrowserSwapFrom ?? undefined}
+                        onSelect={(color) => {
+                          if (colorBrowserTarget === 'swap' && colorBrowserSwapFrom) {
+                            if (toolMode === 'select') {
+                              handleApplyColorToSelection(color.hex)
+                            } else {
+                              setAllPalette((prev) =>
+                                prev.some((c) => c.hex === color.hex)
+                                  ? prev.filter((c) => c.hex !== colorBrowserSwapFrom.hex)
+                                  : prev.map((c) => (c.hex === colorBrowserSwapFrom.hex ? color : c))
+                              )
+                              mergeColorsIntoTarget([colorBrowserSwapFrom.hex], color.hex)
+                            }
+                            closeColorBrowser()
+                          } else {
+                            setActivePaintColor(color.hex)
+                            setPreviewPalette((prev) =>
+                              prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
+                            )
+                            if (colorBrowserTarget === 'fill') {
+                              setShapeFillColor(color.hex)
+                              setColorBrowserTarget('border')
+                            } else if (colorBrowserTarget === 'border') {
+                              setShapeBorderColor(color.hex)
+                              closeColorBrowser()
+                            } else if (colorBrowserTarget === 'add') {
+                              setShowColorBrowser(true)
+                            } else {
+                              closeColorBrowser()
+                            }
+                          }
+                        }}
+                        onClose={closeColorBrowser}
+                      />
+                    </div>
+                  )}
                 />
               </div>
             )}
@@ -5114,52 +5279,6 @@ function StudioPage() {
           </div>
           <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
 
-          {showColorBrowser && activeWorkflowStep === 2 && !isFinalizeReview && (
-            // Float the browser over the canvas instead of as a flex sibling, so
-            // opening/closing it (e.g. toggling paint↔select) doesn't resize the
-            // canvas viewport and force a fit-scale/recenter of the stitch preview.
-            <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex' }}>
-            <ColorBrowserModal
-              mode={colorBrowserTarget === 'swap' ? 'swap' : 'add'}
-              allColors={allDmcColors}
-              paletteHexes={new Set(displayPalette.map((c) => c.hex))}
-              swapFromColor={colorBrowserSwapFrom ?? undefined}
-              onSelect={(color) => {
-                if (colorBrowserTarget === 'swap' && colorBrowserSwapFrom) {
-                  if (toolMode === 'select') {
-                    handleApplyColorToSelection(color.hex)
-                  } else {
-                    setAllPalette((prev) =>
-                      prev.some((c) => c.hex === color.hex)
-                        ? prev.filter((c) => c.hex !== colorBrowserSwapFrom.hex)
-                        : prev.map((c) => (c.hex === colorBrowserSwapFrom.hex ? color : c))
-                    )
-                    mergeColorsIntoTarget([colorBrowserSwapFrom.hex], color.hex)
-                  }
-                  closeColorBrowser()
-                } else {
-                  setActivePaintColor(color.hex)
-                  setPreviewPalette((prev) =>
-                    prev.some((c) => c.hex === color.hex) ? prev : [...prev, color]
-                  )
-                  if (colorBrowserTarget === 'fill') {
-                    setShapeFillColor(color.hex)
-                    setColorBrowserTarget('border')
-                  } else if (colorBrowserTarget === 'border') {
-                    setShapeBorderColor(color.hex)
-                    closeColorBrowser()
-                  } else if (colorBrowserTarget === 'add') {
-                    setShowColorBrowser(true)
-                  } else {
-                    closeColorBrowser()
-                  }
-                }
-              }}
-              onClose={closeColorBrowser}
-            />
-            </div>
-          )}
-
           </div>
 
           {isPhoneCanvasLandscape && !isFinalizeReview && (
@@ -5216,7 +5335,7 @@ function StudioPage() {
               >
                 <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={btnSecondary}>Undo</button>
                 <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={btnSecondary}>Redo</button>
-                <button type="button" onClick={handleResetColorChanges} disabled={!originalCells.length} style={btnSecondary}>Reset</button>
+                <button type="button" onClick={() => setShowResetConfirm(true)} disabled={!originalCells.length} style={btnSecondary}>Reset</button>
               </div>
             )
           )}
@@ -5833,6 +5952,39 @@ function StudioPage() {
                 style={btnPrimary}
               >
                 {loading ? 'Generating...' : 'Regenerate PDF'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showResetConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10100, padding: 18 }}
+        >
+          <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Reset all color changes?</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                This reverts every paint, fill, and palette edit back to the original design. Undo history will be cleared and this can't be undone.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                style={btnSecondary}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => { handleResetColorChanges(); setShowResetConfirm(false) }}
+                style={btnPrimary}
+              >
+                Reset
               </button>
             </div>
           </div>

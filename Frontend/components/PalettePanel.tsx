@@ -48,6 +48,9 @@ type Props = {
   onFlipStamp: (axis: 'horizontal' | 'vertical') => void
   onPlaceStamp: () => void
   onCancelStamp: () => void
+  hasActiveTextBox: boolean
+  onPlaceText: () => void
+  onCancelText: () => void
   onSelect: (color: PaletteColor) => void
   onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
@@ -119,6 +122,9 @@ export default function PalettePanel({
   onFlipStamp,
   onPlaceStamp,
   onCancelStamp,
+  hasActiveTextBox,
+  onPlaceText,
+  onCancelText,
   onSelect,
   onSelectBlankCanvas,
   moreColors,
@@ -489,6 +495,44 @@ export default function PalettePanel({
                 </div>
               </div>
 
+              {hasActiveTextBox && (
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 5 }}>
+                  <button
+                    type="button"
+                    onClick={onPlaceText}
+                    style={{
+                      border: '1px solid #5c7856',
+                      borderRadius: 8,
+                      background: '#6e8d67',
+                      color: '#fff',
+                      padding: '10px 8px',
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✓ Place
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCancelText}
+                    style={{
+                      border: '1px solid #d5cec6',
+                      borderRadius: 8,
+                      background: '#fff',
+                      color: '#6f665b',
+                      padding: '10px 8px',
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✕ Cancel
+                  </button>
+                </div>
+              )}
+
               {/* Instructions */}
               <div
                 style={{
@@ -497,7 +541,7 @@ export default function PalettePanel({
                   lineHeight: 1.5,
                 }}
               >
-                <strong>Drag</strong> on canvas to define the box, then type. <strong>Drag the box</strong> to reposition before stamping. Press <strong>Enter</strong> to stamp or <strong>Esc</strong> to cancel.
+                <strong>Drag</strong> on canvas to define the box, then type. <strong>Drag the box</strong> to reposition, or click outside and back in to keep editing. Press <strong>Enter</strong> or <strong>Place</strong> to stamp, <strong>Esc</strong> or <strong>Cancel</strong> to discard.
               </div>
             </div>
           )}
