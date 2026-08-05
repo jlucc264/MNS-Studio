@@ -1,11 +1,34 @@
+# NOT AUTHORITATIVE. mns-backend was created by hand in the Render dashboard,
+# not from this Blueprint, so Render never reads this file — the live config is
+# whatever the dashboard says. This is kept as documentation of *intended*
+# config only. If you change something here, make the same change in the
+# dashboard (Settings for the start/build command, Environment for env vars) or
+# it will not take effect. Letting this file drift from the dashboard is part
+# of why the silent 2-worker setup that caused the 2026-07-30 OOM went unseen.
 services:
   - type: web
     name: mns-backend
     runtime: python
     rootDir: Backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # --workers is pinned explicitly rather than left to default. Uvicorn's
+    # default worker count is the $WEB_CONCURRENCY env var, which Render sets
+    # from the instance CPU count — on this 2-CPU box that silently ran 2
+    # worker processes. That doubled the baseline heap AND doubled the real
+    # ceiling of the per-process image-op gate below (2 per worker = 4 heavy
+    # ops at once), which is what OOM-killed the 4GB instance on 2026-07-30.
+    # An explicit flag also beats any stray WEB_CONCURRENCY set in the
+    # dashboard. One worker is not a throughput loss here: the heavy handlers
+    # are sync `def`, so they run on a threadpool, and numpy releases the GIL —
+    # a single worker still uses both cores.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     envVars:
+      # Heavy image ops (/visualize, /recolor, /grid-render) allowed to run at
+      # once *per worker process* — see _IMAGE_OP_LIMIT in Backend/app/main.py.
+      # With --workers 1 above, this is also the service-wide total. Raising
+      # either number multiplies peak memory; tune this one, not the workers.
+      - key: IMAGE_OP_CONCURRENCY
+        value: "2"
       - key: ALLOWED_ORIGINS
         value: https://mns.studio,https://www.mns.studio,https://app.mns.studio
       - key: RESEND_API_KEY

@@ -1936,10 +1936,39 @@ function StudioPage() {
     }
   }
 
+  // Serialize background previews. The 250ms debounce below is far shorter
+  // than a real /visualize (5-11s on prod), so dragging a slider used to fire
+  // several overlapping requests — each one doing the full quantization
+  // server-side, and each holding a few hundred MB while it ran. That is what
+  // OOM-killed the 4GB backend on 2026-07-30: one drag session produced ~45
+  // requests, several landing in the same second. The stale-result check in
+  // handleApply only discarded the *answer*; the work had already happened.
+  // Now at most one is in flight and the newest settings seen while it runs
+  // are coalesced into a single follow-up.
+  const previewInFlightRef = useRef(false)
+  const pendingPreviewSettingsRef = useRef<PreviewSettings | null>(null)
+
   function applyPreviewInBackground(settings: PreviewSettings) {
-    void handleApply(settings).catch((error) => {
-      setUploadError(error instanceof Error ? error.message : 'Preview generation failed.')
-    })
+    if (previewInFlightRef.current) {
+      pendingPreviewSettingsRef.current = settings
+      return
+    }
+    previewInFlightRef.current = true
+    void handleApply(settings)
+      .catch((error) => {
+        setUploadError(error instanceof Error ? error.message : 'Preview generation failed.')
+      })
+      .finally(() => {
+        previewInFlightRef.current = false
+        const pending = pendingPreviewSettingsRef.current
+        pendingPreviewSettingsRef.current = null
+        // Skip when the queued settings are what we just rendered (e.g. the
+        // user dragged away and back) — otherwise run the newest state now
+        // rather than waiting for another debounce tick.
+        if (pending && getSettingsKey(pending) !== getSettingsKey(settings)) {
+          applyPreviewInBackground(pending)
+        }
+      })
   }
 
   useEffect(() => {

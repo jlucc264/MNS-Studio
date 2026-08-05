@@ -148,12 +148,20 @@ def flatten_transparency_to_white(img: Image.Image) -> Image.Image:
 
 
 # A stitch preview never needs more source resolution than a few multiples of
-# the target grid (largest legit grid ~1200 cells per side), yet raw phone
-# photos are routinely 12-48MP. Downsampling the source to this cap on open
-# bounds every downstream full-resolution array (resize_linear_light builds
-# several float64 copies): a 12MP photo at float64 is ~279MB *per array*, which
-# is what was OOM-killing the 2GB backend. Only oversized images are touched.
-MAX_SOURCE_DIMENSION = 2400
+# the target grid, yet raw phone photos are routinely 12-48MP. Downsampling the
+# source to this cap on open bounds every downstream full-resolution array
+# (resize_linear_light builds several float64 copies): a 12MP photo at float64
+# is ~279MB *per array*, which is what was OOM-killing the 2GB backend. Only
+# oversized images are touched.
+#
+# Lowered 2400 -> 1600 after the 2026-07-30 OOM on the 4GB backend: 2400px is
+# ~138MB per float64 RGB array vs ~61MB at 1600, and the extra pixels buy
+# nothing. MAX_STITCH_DIMENSION is 1200 per side, but MAX_STITCH_CELLS (150k)
+# means a square design tops out near 387 per side — 1600 is still ~4x
+# oversampled there. The tightest real case is a belt (up to ~1080 stitches on
+# the long axis at 18 mesh), which keeps ~1.5x. Going much below 1600 would
+# start starving that case of source pixels to average per stitch.
+MAX_SOURCE_DIMENSION = 1600
 
 
 def _cap_source_resolution(img: Image.Image) -> Image.Image:
