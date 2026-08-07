@@ -8,7 +8,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, printGalleryTotalCents, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
@@ -623,7 +623,7 @@ function GalleryPage() {
                           ].filter(Boolean).join(' · ')}
                         </div>
                       ) : null}
-                      {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
+                      {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                         <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
                           Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
                         </div>
@@ -775,7 +775,7 @@ function GalleryPage() {
                         ].filter(Boolean).join(' · ')}
                       </span>
                     ) : null}
-                    {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
+                    {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                       <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
                         Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
                       </span>
@@ -1180,7 +1180,7 @@ function GalleryPage() {
                     </div>
                     {(() => {
                       const printable = selectedPreview.width_inches && selectedPreview.height_inches
-                        ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                        ? isStandardOrder(selectedPreview.width_inches, selectedPreview.height_inches)
                         : false
                       const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                         ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
@@ -1210,8 +1210,8 @@ function GalleryPage() {
                             <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                               <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                               <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
-                              <div>Printing &amp; fulfillment — {formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}</div>
-                              <div>Shipping — {formatCents(700)}</div>
+                              <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
+                              <div>Creator credit (20%) — {formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))}</div>
                             </div>
                           )}
                           {canvas && printPrice && (
@@ -1325,7 +1325,7 @@ function GalleryPage() {
                   </button>
                   {(() => {
                     const printable = selectedPreview.width_inches && selectedPreview.height_inches
-                      ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                      ? isStandardOrder(selectedPreview.width_inches, selectedPreview.height_inches)
                       : false
                     const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                       ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
@@ -1352,7 +1352,7 @@ function GalleryPage() {
                 </div>
                 {(() => {
                   const printable = selectedPreview.width_inches && selectedPreview.height_inches
-                    ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                    ? isStandardOrder(selectedPreview.width_inches, selectedPreview.height_inches)
                     : false
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
@@ -1362,7 +1362,7 @@ function GalleryPage() {
                     <>
                       <div style={{ margin: '0 16px 6px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
                         <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
-                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}) + shipping ({formatCents(700)})
+                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(PRINT_OWN_BASE_CENTS)}) + creator credit ({formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))})
                       </div>
                       <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Ships within 5–7 business days</div>
                     </>

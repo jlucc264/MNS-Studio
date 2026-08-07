@@ -8,7 +8,7 @@ import CheckoutModal from '../../../components/CheckoutModal'
 import { NavAccountControls } from '../../../components/NavAccountControls'
 import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
-import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isDesignPrintable, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -655,7 +655,7 @@ export default function CreatorProfilePage() {
                 </button>
                 {(() => {
                   const printable = selectedPreview.width_inches && selectedPreview.height_inches
-                    ? isDesignPrintable(selectedPreview.width_inches, selectedPreview.height_inches)
+                    ? isStandardOrder(selectedPreview.width_inches, selectedPreview.height_inches)
                     : false
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
@@ -682,7 +682,8 @@ export default function CreatorProfilePage() {
                         <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                           <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                           <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
-                          <div>Printing &amp; fulfillment — {formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}</div>
+                          <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
+                          <div>Creator credit (20%) — {formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))}</div>
                         </div>
                       )}
                       {canvas && printPrice && (

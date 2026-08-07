@@ -60,7 +60,13 @@ from app.services.stripe_service import (
     create_gallery_print_checkout,
     create_cart_checkout,
 )
-from app.services.canvas_pricing import get_canvas_for_design, is_design_printable
+from app.services.canvas_pricing import (
+    get_canvas_for_design,
+    is_design_printable,
+    is_standard_order,
+    STANDARD_MAX_LONG_IN,
+    STANDARD_MAX_SHORT_IN,
+)
 from app.services.auth import get_current_user_id, get_optional_user_id
 from app.services.supabase_storage import download_from_supabase_storage, upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
@@ -137,6 +143,27 @@ def _validate_stitch_dimensions(stitch_width: int, stitch_height: int) -> None:
 def _require_admin(user_id: str) -> None:
     if not ADMIN_USER_ID or user_id != ADMIN_USER_ID:
         raise HTTPException(status_code=403, detail="Admin only.")
+
+
+def _fmt_in(value: float) -> str:
+    return f"{value:g}"
+
+
+# One message for every gate so the copy can't drift between checkout, cart and
+# gallery. 422 rather than 403: the design is valid, the size is not self-serve.
+LARGE_PRINT_DETAIL = (
+    f"Designs larger than {_fmt_in(STANDARD_MAX_LONG_IN)}\" × "
+    f"{_fmt_in(STANDARD_MAX_SHORT_IN)}\" are printed to order — "
+    "contact us for a quote on large prints."
+)
+
+
+def _require_standard_order(width_inches: float, height_inches: float) -> None:
+    """Reject sizes that can't be sold self-serve. Physical printability is a
+    separate, wider check (is_design_printable) — a design can be printable on
+    the roll and still need a hand-quoted shipping cost."""
+    if not is_standard_order(width_inches, height_inches):
+        raise HTTPException(status_code=422, detail=LARGE_PRINT_DETAIL)
 
 
 def parse_allowed_origins() -> list[str]:
@@ -638,6 +665,11 @@ def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(g
     if not title:
         raise HTTPException(status_code=422, detail="Gallery title is required.")
 
+    # Nobody should be able to post something no one else can buy. Dimensions
+    # are optional on the request, so only gate when both are present.
+    if request.width_inches and request.height_inches:
+        _require_standard_order(request.width_inches, request.height_inches)
+
     tags = []
     seen_tags = set()
     for tag in request.tags:
@@ -801,6 +833,10 @@ def patch_gallery_item(item_id: str, request: GalleryCreateRequest, user_id: str
     data = {k: v for k, v in request.model_dump(exclude_none=True).items()
             if k in {"preview_image_url", "pdf_url", "width_inches", "height_inches",
                      "color_count", "palette", "has_outline"}}
+    # This endpoint can rewrite dimensions, so it needs the same gate as publish
+    # — otherwise a 10x6 item could be posted and then patched to any size.
+    if data.get("width_inches") and data.get("height_inches"):
+        _require_standard_order(data["width_inches"], data["height_inches"])
     result = update_gallery_item(item_id, data)
     if result is None:
         raise HTTPException(status_code=502, detail="Could not update gallery item.")
@@ -820,7 +856,8 @@ def get_gallery_item_project(item_id: str):
 @app.post("/checkout/print-own", response_model=CheckoutResponse)
 def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(get_current_user_id)):
     if not is_design_printable(request.width_inches, request.height_inches):
-        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size (6\" × 10\").")
+        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size.")
+    _require_standard_order(request.width_inches, request.height_inches)
 
     creator_user_id = None
     if request.parent_gallery_item_id:
@@ -873,7 +910,8 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
     if not width or not height:
         raise HTTPException(status_code=422, detail="This design does not have dimension data for printing.")
     if not is_design_printable(width, height):
-        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size (6\" × 10\").")
+        raise HTTPException(status_code=422, detail="Design exceeds maximum printable size.")
+    _require_standard_order(width, height)
     canvas = get_canvas_for_design(width, height)
     try:
         url = create_gallery_print_checkout(
@@ -900,6 +938,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
     for item in request.items:
         if not is_design_printable(item.width_inches, item.height_inches):
             raise HTTPException(status_code=422, detail=f"A design ({item.width_inches}\" × {item.height_inches}\") exceeds maximum printable size.")
+        _require_standard_order(item.width_inches, item.height_inches)
         creator_user_id = None
         creator_gallery_item_id = item.gallery_item_id or item.parent_gallery_item_id
         if creator_gallery_item_id:

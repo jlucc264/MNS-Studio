@@ -78,6 +78,12 @@ MIN_CANVAS_MARGIN_IN = 1.0
 _MAX_PRINT_SHORT_IN = MAX_ROLL_WIDTH_IN - 2 * MIN_CANVAS_MARGIN_IN  # 15.0
 _MAX_PRINT_LONG_IN = 20.0
 
+# Self-serve envelope — see is_standard_order. A 10x6 design is a 14x10 canvas,
+# which is what the flat $7 shipping is sized to cover. Anything larger still
+# prints, but is quoted by hand and cannot be posted to the gallery.
+STANDARD_MAX_SHORT_IN = 6.0
+STANDARD_MAX_LONG_IN = 10.0
+
 # Belt mode: a long, narrow strip that doesn't fit the normal short/long
 # envelope above. Mirrors the frontend's belt constants (studio/page.tsx) —
 # geometry-only, so any belt-shaped design clears the same printability gate
@@ -91,9 +97,13 @@ _BELT_SHORT_MAX_IN = 1.75  # headroom above BELT_HEIGHT_INCHES for float drift
 
 
 def is_belt_design(width_inches: float, height_inches: float) -> bool:
+    """A belt is narrow *and* long. The minimum length matters: without it any
+    small narrow design — a 1.5"x5" strip — was billed at belt rates, which cost
+    $21.59 of canvas instead of $10.50 and made it dearer than designs twice its
+    size. Keep this in step with isBeltDesign in Frontend/lib/api.ts."""
     short = min(width_inches, height_inches)
     long = max(width_inches, height_inches)
-    return short <= _BELT_SHORT_MAX_IN and long <= BELT_MAX_LENGTH_IN
+    return short <= _BELT_SHORT_MAX_IN and BELT_MIN_LENGTH_IN <= long <= BELT_MAX_LENGTH_IN
 
 
 def is_design_printable(width_inches: float, height_inches: float) -> bool:
@@ -102,6 +112,27 @@ def is_design_printable(width_inches: float, height_inches: float) -> bool:
     short = min(width_inches, height_inches)
     long = max(width_inches, height_inches)
     return short <= _MAX_PRINT_SHORT_IN and long <= _MAX_PRINT_LONG_IN
+
+
+def is_standard_order(width_inches: float, height_inches: float) -> bool:
+    """Whether a design can be bought self-serve and posted to the gallery.
+
+    Narrower than is_design_printable, which only asks whether the roll can
+    physically print it. The flat $7 shipping is sized for a 14x10 canvas
+    (a 10x6 design); past that the parcel costs more than the buyer is charged,
+    so large prints are quoted and invoiced by hand instead. This was the whole
+    printable envelope until 2026-07-12, when the Stitchly importer raised
+    is_design_printable to 13x20 and unintentionally opened self-serve checkout
+    with it.
+
+    Belts are exempt: they are long but narrow, ship in the same tube, and are
+    priced off their own curve.
+    """
+    if is_belt_design(width_inches, height_inches):
+        return True
+    short = min(width_inches, height_inches)
+    long = max(width_inches, height_inches)
+    return short <= STANDARD_MAX_SHORT_IN and long <= STANDARD_MAX_LONG_IN
 
 
 def canvas_margin_inches(width_inches: float, height_inches: float) -> float:
@@ -122,10 +153,18 @@ def canvas_margin_inches(width_inches: float, height_inches: float) -> float:
 
 
 def canvas_price_cents(sq_in: float) -> int:
-    """Material charge for a canvas of `sq_in`, at TARGET_MATERIAL_MARGIN.
+    """The canvas line on the invoice: the whole item at TARGET_MATERIAL_MARGIN,
+    less the printing-and-fulfillment fee that print_own_total_cents adds back.
 
-    Flat per-square-inch by construction — see PRICE_PER_SQ_IN_CENTS. The
-    per-order base fee is added by print_own_total_cents / print_gallery_total_cents.
+    TARGET_MATERIAL_MARGIN applies to the *bundle* of canvas plus fulfillment,
+    not to the canvas alone (owner's call, 2026-08). Charging a full-margin
+    canvas and then adding $7 of pure contribution on top put the real margin at
+    82-87%, not 80. Subtracting the fee here means print_own_total_cents lands on
+    exactly PRICE_PER_SQ_IN_CENTS * sq_in — i.e. 5x material cost, an even 80% —
+    while the invoice still shows an honest canvas + fulfillment split.
+
+    The floor is applied after the subtraction, so the smallest canvases still
+    total $12 (a $5 canvas line plus the $7 fee) exactly as before.
 
     Rounds half UP via floor(x + 0.5) rather than using round(), which is
     banker's rounding and would disagree with JavaScript's Math.round on exact
@@ -133,7 +172,8 @@ def canvas_price_cents(sq_in: float) -> int:
     function to quote prices in the editor, so any divergence shows the user
     one price and charges another at checkout.
     """
-    return max(MIN_CANVAS_PRICE_CENTS, math.floor(PRICE_PER_SQ_IN_CENTS * sq_in + 0.5))
+    item_total = math.floor(PRICE_PER_SQ_IN_CENTS * sq_in + 0.5)
+    return max(MIN_CANVAS_PRICE_CENTS, item_total - PRINT_OWN_BASE_CENTS)
 
 
 def _legacy_anchor_price_cents(sq_in: float) -> int:

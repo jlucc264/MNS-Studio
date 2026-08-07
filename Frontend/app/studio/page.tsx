@@ -57,6 +57,8 @@ import {
   type Project,
   gridRender,
   isDesignPrintable,
+  isStandardOrder,
+  LARGE_PRINT_MESSAGE,
   samplePixel,
   PaletteColor,
   publishGalleryItem,
@@ -4092,6 +4094,15 @@ function StudioPage() {
     </div>
   )
 
+  // Two separate questions: can the roll print it at all, and can it be bought
+  // self-serve. A design can be printable and still need a hand-quoted shipping
+  // cost — see isStandardOrder. Measured off the cropped content bounds when we
+  // have them, since that's what actually gets printed.
+  const sizedWidthInches = contentBounds?.width_inches ?? designWidthInches
+  const sizedHeightInches = contentBounds?.height_inches ?? designHeightInches
+  const printableSize = isDesignPrintable(sizedWidthInches, sizedHeightInches)
+  const orderableSize = printableSize && isStandardOrder(sizedWidthInches, sizedHeightInches)
+
   const leftPanelContent = (() => {
     if (activeWorkflowStep === 1) {
       return (
@@ -4443,19 +4454,27 @@ function StudioPage() {
               Working from a gallery template · print includes 20% creator credit
             </div>
           )}
-          {!isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches) && (
-            <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds 8×12 canvas limit (max 6″×10″).</p>
+          {!orderableSize && (
+            <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
+              {printableSize ? LARGE_PRINT_MESSAGE : 'Print unavailable — design exceeds the maximum printable size.'}
+            </p>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
             <button
               type="button"
               onClick={() => setShowPriceBreakdownModal(true)}
-              disabled={!lastSettings || printCheckoutLoading || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)}
-              style={{ ...btnSecondary, opacity: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 0.55 : 1, cursor: (!lastSettings || !isDesignPrintable(contentBounds?.width_inches ?? designWidthInches, contentBounds?.height_inches ?? designHeightInches)) ? 'not-allowed' : 'pointer' }}
+              disabled={!lastSettings || printCheckoutLoading || !orderableSize}
+              style={{ ...btnSecondary, opacity: (!lastSettings || !orderableSize) ? 0.55 : 1, cursor: (!lastSettings || !orderableSize) ? 'not-allowed' : 'pointer' }}
             >
-              Review order
+              {orderableSize ? 'Review order' : 'Contact us for large prints'}
             </button>
-            <button type="button" onClick={openGalleryPublishModal} style={btnSecondary}>
+            <button
+              type="button"
+              onClick={openGalleryPublishModal}
+              disabled={!orderableSize}
+              title={orderableSize ? undefined : LARGE_PRINT_MESSAGE}
+              style={{ ...btnSecondary, opacity: orderableSize ? 1 : 0.55, cursor: orderableSize ? 'pointer' : 'not-allowed' }}
+            >
               Share to gallery
             </button>
           </div>

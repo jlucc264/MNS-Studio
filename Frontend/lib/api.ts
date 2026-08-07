@@ -668,6 +668,7 @@ export const PRINT_OWN_BASE_CENTS = 700
 // Markup and creator share are equal only because the share is taken off the
 // print-own base, not the marked-up total. See canvas_pricing.py.
 export const GALLERY_MARKUP = 0.20
+export const CREATOR_SHARE_OF_PRINT_OWN = 0.20
 
 // Belts price off the legacy anchor curve x1.5, not the per-sq-in rate: the 2"
 // margin per side turns a 1.25" strap into a 5" canvas, so a flat-rate belt
@@ -675,8 +676,14 @@ export const GALLERY_MARKUP = 0.20
 const BELT_PRICE_MULTIPLIER = 1.5
 const _LEGACY_ANCHORS: [number, number][] = [[30, 900], [48, 1200], [96, 1400]]
 
+// The canvas line on the invoice: the whole item at TARGET_MATERIAL_MARGIN,
+// less the fulfillment fee printOwnTotalCents adds back. The margin applies to
+// canvas + fulfillment together, not the canvas alone — see canvas_price_cents
+// in canvas_pricing.py. Floor applied after the subtraction so the smallest
+// canvases still total $12.
 function _canvasPriceCents(sqIn: number): number {
-  return Math.max(MIN_CANVAS_PRICE_CENTS, Math.round(PRICE_PER_SQ_IN_CENTS * sqIn))
+  const itemTotal = Math.round(PRICE_PER_SQ_IN_CENTS * sqIn)
+  return Math.max(MIN_CANVAS_PRICE_CENTS, itemTotal - PRINT_OWN_BASE_CENTS)
 }
 
 function _legacyAnchorPriceCents(sqIn: number): number {
@@ -733,6 +740,13 @@ export function printGalleryTotalCents(canvas: CanvasSize): number {
   return Math.round(printOwnTotalCents(canvas) * (1 + GALLERY_MARKUP))
 }
 
+/** What the original designer earns on a gallery print. Mirrors
+ *  creator_earnings_cents in canvas_pricing.py — taken off the print-own base,
+ *  not the marked-up total, which is what makes the markup self-funding. */
+export function creatorEarningsCents(galleryTotalCents: number): number {
+  return Math.round((galleryTotalCents / (1 + GALLERY_MARKUP)) * CREATOR_SHARE_OF_PRINT_OWN)
+}
+
 // Widest roll the printer can feed. Mirrors MAX_ROLL_WIDTH_IN in canvas_pricing.py.
 export const MAX_ROLL_WIDTH_INCHES = 17
 
@@ -762,11 +776,34 @@ export function beltLengthForPantSize(pantSize: number): number {
   return pantSize - BELT_TAIL_INCHES
 }
 
+/** A belt is narrow *and* long. Without the minimum length any small narrow
+ *  design — a 1.5"x5" strip — was billed at belt rates, making it dearer than
+ *  designs twice its size. Mirrors is_belt_design in canvas_pricing.py. */
 export function isBeltDesign(widthInches: number, heightInches: number): boolean {
   const short = Math.min(widthInches, heightInches)
   const long = Math.max(widthInches, heightInches)
-  return short <= BELT_SHORT_MAX_IN && long <= BELT_MAX_LENGTH_IN
+  return short <= BELT_SHORT_MAX_IN && long >= BELT_MIN_LENGTH_IN && long <= BELT_MAX_LENGTH_IN
 }
+
+// Self-serve envelope. A 10×6 design is a 14×10 canvas, which is what the flat
+// $7 shipping is sized to cover. Larger designs still print and can still be
+// designed and saved — they just can't be checked out or posted to the gallery.
+// Mirrors STANDARD_MAX_* / is_standard_order in canvas_pricing.py.
+export const STANDARD_MAX_SHORT_SIDE = 6
+export const STANDARD_MAX_LONG_SIDE = 10
+
+/** Whether a design can be bought self-serve and posted to the gallery.
+ *  Narrower than isDesignPrintable, which only asks whether the roll can print
+ *  it. Belts are exempt — long but narrow, and they ship in the same tube. */
+export function isStandardOrder(widthInches: number, heightInches: number): boolean {
+  if (isBeltDesign(widthInches, heightInches)) return true
+  const short = Math.min(widthInches, heightInches)
+  const long = Math.max(widthInches, heightInches)
+  return short <= STANDARD_MAX_SHORT_SIDE && long <= STANDARD_MAX_LONG_SIDE
+}
+
+export const LARGE_PRINT_MESSAGE =
+  `Designs larger than ${STANDARD_MAX_LONG_SIDE}" × ${STANDARD_MAX_SHORT_SIDE}" are printed to order — contact us for a quote on large prints.`
 
 export function isDesignPrintable(widthInches: number, heightInches: number): boolean {
   if (isBeltDesign(widthInches, heightInches)) return true
