@@ -374,7 +374,7 @@ TOOLS = [
     {
         "name": "generate_source_image",
         "description": (
-            "Generate a new source image from a text description using AI image generation (DALL-E 3). "
+            "Generate a new source image from a text description using AI image generation (gpt-image-1). "
             "The generated image will be loaded as the source image for stitching. "
             "Recommend clear, graphic, illustration styles for best needlepoint results."
         ),
@@ -695,7 +695,13 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
             local_path = f"/assets/uploads/{out_path.name}"
             return (
                 f"Generated image for '{prompt}'.",
-                {"type": "set_source_image", "url": local_path},
+                # Generated images are always forced into a flat illustration
+                # style (see the wrapped prompt above), so tag them graphic_art
+                # — that path skips Floyd-Steinberg dithering and photo-feature
+                # enhancement, which would otherwise re-speckle the flat art and
+                # wreck the stitch preview. Defaulting to "photo" was why
+                # generated images quantized poorly.
+                {"type": "set_source_image", "url": local_path, "source_type": "graphic_art"},
             )
         except Exception as exc:
             logger.exception("Image generation failed: %s", exc)

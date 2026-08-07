@@ -571,6 +571,52 @@ def resize_linear_light(
     return Image.fromarray(np.clip(srgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
+def dominant_downsample(img: Image.Image, size: tuple[int, int], levels: int = 8) -> Image.Image:
+    """Downsample a flat/illustrated image by taking the most common color in
+    each target cell, instead of averaging (resize_linear_light).
+
+    At the high downsample ratios needlepoint uses (a 2400px photo into a ~52px
+    grid), averaging blends every edge — a black outline meeting a tan fill
+    meeting a white background averages to mud, and the resulting in-between
+    colors then get spent as distinct threads. For flat art we instead want each
+    stitch to take the dominant color of its region, so outlines and flat fields
+    stay crisp and the render collapses to the design's true palette on its own.
+
+    Only meaningful for flat/graphic content — photos still want the averaging
+    path so their gradients survive.
+    """
+    rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    h, w = rgb.shape[:2]
+    target_w, target_h = size
+    levels = max(2, levels)
+    step = 256 // levels
+    # Posterize each channel into `levels` bands and encode the band triple as a
+    # single small integer label (0 .. levels**3-1) directly. Encoding avoids
+    # np.unique(axis=0), which sorts millions of pixels and is far too slow on a
+    # multi-megapixel source. "Most common color" is only meaningful after this
+    # banding, since anti-aliasing and gpt-image-1's faint background noise mean
+    # exact 8-bit colors rarely repeat.
+    bands = np.minimum(rgb.astype(np.int32) // step, levels - 1)  # h x w x 3, each 0..levels-1
+    del rgb
+    labels = (bands[:, :, 0] * levels + bands[:, :, 1]) * levels + bands[:, :, 2]
+    del bands
+    n_labels = levels ** 3
+    # Representative RGB (band center) for every possible label, precomputed.
+    ids = np.arange(n_labels)
+    palette = np.stack([ids // (levels * levels), (ids // levels) % levels, ids % levels], axis=1)
+    palette = (palette * step + step // 2).clip(0, 255).astype(np.uint8)
+    ys = np.linspace(0, h, target_h + 1).astype(int)
+    xs = np.linspace(0, w, target_w + 1).astype(int)
+    out = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    for r in range(target_h):
+        row = labels[ys[r]:ys[r + 1]]
+        for c in range(target_w):
+            cell = row[:, xs[c]:xs[c + 1]].ravel()
+            if cell.size:
+                out[r, c] = palette[np.bincount(cell, minlength=n_labels).argmax()]
+    return Image.fromarray(out, "RGB")
+
+
 # TEMPORARY diagnostic for the 2026-07 Render resize corruption (see the
 # comment above _verify_numeric_environment). Mirrors resize_linear_light
 # step by step so /debug/numeric can report where a solid color first goes

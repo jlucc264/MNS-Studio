@@ -8,7 +8,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
-import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, fetchGalleryItemProject, formatCents, getCanvasForDesign, printGalleryTotalCents, incrementGalleryShare, isDesignPrintable, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
@@ -342,7 +342,7 @@ function GalleryPage() {
       title: item.title || `${canvas.label} canvas`,
       canvas_label: canvas.label,
       canvas_price_cents: canvas.priceCents,
-      base_price_cents: 1200,
+      base_price_cents: printGalleryTotalCents(canvas) - canvas.priceCents,
       gallery_item_id: item.id,
       parent_gallery_item_id: null,
       project_id: null,
@@ -625,7 +625,7 @@ function GalleryPage() {
                       ) : null}
                       {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
                         <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
-                          Print from {formatCents(1200 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
+                          Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
                         </div>
                       )}
                     </div>
@@ -777,7 +777,7 @@ function GalleryPage() {
                     ) : null}
                     {item.width_inches && item.height_inches && isDesignPrintable(item.width_inches, item.height_inches) && (
                       <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
-                        Print from {formatCents(1200 + getCanvasForDesign(item.width_inches, item.height_inches).priceCents)}
+                        Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
                       </span>
                     )}
                   </div>
@@ -1185,7 +1185,7 @@ function GalleryPage() {
                       const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                         ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                         : null
-                      const printPrice = canvas ? formatCents(1200 + canvas.priceCents) : null
+                      const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
                       return (
                         <>
                           <button
@@ -1210,7 +1210,7 @@ function GalleryPage() {
                             <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                               <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                               <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
-                              <div>Printing &amp; fulfillment — {formatCents(1200)}</div>
+                              <div>Printing &amp; fulfillment — {formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}</div>
                               <div>Shipping — {formatCents(700)}</div>
                             </div>
                           )}
@@ -1330,7 +1330,7 @@ function GalleryPage() {
                     const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                       ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                       : null
-                    const printPrice = canvas ? formatCents(1200 + canvas.priceCents) : null
+                    const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
                     return (
                       <button
                         type="button"
@@ -1357,12 +1357,12 @@ function GalleryPage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const printPrice = canvas ? formatCents(1200 + canvas.priceCents) : null
+                  const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
                   return canvas && printPrice ? (
                     <>
                       <div style={{ margin: '0 16px 6px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
                         <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
-                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(1200)}) + shipping ({formatCents(700)})
+                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}) + shipping ({formatCents(700)})
                       </div>
                       <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Ships within 5–7 business days</div>
                     </>

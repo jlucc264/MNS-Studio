@@ -46,6 +46,8 @@ import {
   finalizePreview,
   formatCents,
   getCanvasForDesign,
+  printOwnTotalCents,
+  printGalleryTotalCents,
   getMyCreatorProfile,
   getMySignature,
   getProjectSku,
@@ -1571,7 +1573,7 @@ function StudioPage() {
 
     return colors
   }, [allDmcColors, cells, displayPalette, selectedRegionBounds])
-  const applyImportedImage = useCallback((url: string, belt: boolean = false) => {
+  const applyImportedImage = useCallback((url: string, belt: boolean = false, sourceType?: 'photo' | 'stitched_photo' | 'graphic_art') => {
     latestApplyRequestIdRef.current += 1
     setUploadError(null)
     setActiveImagePath(url)
@@ -1595,7 +1597,9 @@ function StudioPage() {
     setLastSettings(null)
     setDraftSettings(belt
       ? { ...DEFAULT_SETTINGS, mesh_count: BELT_MESH_COUNT, height_inches: BELT_HEIGHT_INCHES, width_inches: beltLengthForPantSize(DEFAULT_BELT_PANT_SIZE) }
-      : DEFAULT_SETTINGS)
+      : sourceType
+        ? applySourceTypeDefaults(DEFAULT_SETTINGS, sourceType)
+        : DEFAULT_SETTINGS)
     setLockAspectRatio(!belt)
     setIsBeltCanvas(belt)
     setHasGeneratedPreview(false)
@@ -3358,7 +3362,7 @@ function StudioPage() {
         break
       }
       case 'set_source_image':
-        if (action.url) applyImportedImage(action.url)
+        if (action.url) applyImportedImage(action.url, false, action.source_type)
         break
       case 'expand_preview':
         setIsPreviewExpanded(action.value as boolean)
@@ -5590,8 +5594,9 @@ function StudioPage() {
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
         const printable = isDesignPrintable(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
-        const printBase = parentGalleryItemId ? 1200 : 700
-        const printTotal = canvas ? printBase + canvas.priceCents : null
+        const printTotal = canvas
+          ? (parentGalleryItemId ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas))
+          : null
         return (
           <div
             role="dialog"
@@ -6024,8 +6029,12 @@ function StudioPage() {
         const bW = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0)
         const bH = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0)
         const bCanvas = lastSettings ? getCanvasForDesign(bW, bH) : null
-        const bBase = parentGalleryItemId ? 1200 : 700
         const bShipping = 700
+        // Everything above the canvas material charge: the print-own base fee,
+        // plus the creator markup when this is a gallery remix.
+        const bBase = bCanvas
+          ? (parentGalleryItemId ? printGalleryTotalCents(bCanvas) : printOwnTotalCents(bCanvas)) - bCanvas.priceCents
+          : 0
         const bTotal = bCanvas ? bBase + bCanvas.priceCents + bShipping : null
         return (
           <div

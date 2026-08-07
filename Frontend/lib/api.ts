@@ -78,6 +78,7 @@ export type ChatActionItem = {
   to_code?: string
   setting?: string
   url?: string
+  source_type?: 'photo' | 'stitched_photo' | 'graphic_art'
   width_inches?: number | null
   height_inches?: number | null
   mesh_count?: number | null
@@ -647,29 +648,56 @@ export async function updateGalleryItem(
 
 // ── Canvas pricing (mirrors backend canvas_pricing.py) ────────────────────────
 
-const _PRICING_ANCHORS: [number, number][] = [
-  [30, 900],   // 5×6  = $9
-  [48, 1200],  // 6×8  = $12
-  [96, 1400],  // 8×12 = $14
-]
+// Canvas price is derived from a target gross margin on material rather than
+// hand-set anchors — see Backend/app/services/canvas_pricing.py for the full
+// rationale. ROLL_SELLABLE_SQ_IN already nets out the ~25% reprint loss, so
+// cost per sellable sq in is simply cost / sellable area; do not re-apply it.
+// Keep these three constants in sync with the backend.
+const ROLL_COST_CENTS = 34_350        // $343.50 per 40" x 270" roll
+const ROLL_SELLABLE_SQ_IN = 8_100     // 75% of gross; reprint loss removed
+const TARGET_MATERIAL_MARGIN = 0.80
 
-function _interpolatePriceCents(sqIn: number): number {
-  if (sqIn <= _PRICING_ANCHORS[0][0]) {
-    const slope = (_PRICING_ANCHORS[1][1] - _PRICING_ANCHORS[0][1]) / (_PRICING_ANCHORS[1][0] - _PRICING_ANCHORS[0][0])
-    return Math.max(500, Math.round(_PRICING_ANCHORS[0][1] + slope * (sqIn - _PRICING_ANCHORS[0][0])))
+const PRICE_PER_SQ_IN_CENTS =
+  (ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN) / (1 - TARGET_MATERIAL_MARGIN)
+const MIN_CANVAS_PRICE_CENTS = 500
+
+export const PRINT_OWN_BASE_CENTS = 700
+
+// A gallery print costs this much more than printing your own, and the markup
+// is passed to the creator 1:1 — so the business nets the same either way.
+// Markup and creator share are equal only because the share is taken off the
+// print-own base, not the marked-up total. See canvas_pricing.py.
+export const GALLERY_MARKUP = 0.20
+
+// Belts price off the legacy anchor curve x1.5, not the per-sq-in rate: the 2"
+// margin per side turns a 1.25" strap into a 5" canvas, so a flat-rate belt
+// would be ~80% margin the customer never sees.
+const BELT_PRICE_MULTIPLIER = 1.5
+const _LEGACY_ANCHORS: [number, number][] = [[30, 900], [48, 1200], [96, 1400]]
+
+function _canvasPriceCents(sqIn: number): number {
+  return Math.max(MIN_CANVAS_PRICE_CENTS, Math.round(PRICE_PER_SQ_IN_CENTS * sqIn))
+}
+
+function _legacyAnchorPriceCents(sqIn: number): number {
+  if (sqIn <= _LEGACY_ANCHORS[0][0]) {
+    const slope = (_LEGACY_ANCHORS[1][1] - _LEGACY_ANCHORS[0][1]) / (_LEGACY_ANCHORS[1][0] - _LEGACY_ANCHORS[0][0])
+    return Math.max(MIN_CANVAS_PRICE_CENTS, Math.round(_LEGACY_ANCHORS[0][1] + slope * (sqIn - _LEGACY_ANCHORS[0][0])))
   }
-  for (let i = 0; i < _PRICING_ANCHORS.length - 1; i++) {
-    const [a1sq, a1p] = _PRICING_ANCHORS[i]
-    const [a2sq, a2p] = _PRICING_ANCHORS[i + 1]
-    if (sqIn <= a2sq) {
-      const t = (sqIn - a1sq) / (a2sq - a1sq)
-      return Math.round(a1p + t * (a2p - a1p))
-    }
+  for (let i = 0; i < _LEGACY_ANCHORS.length - 1; i++) {
+    const [a1sq, a1p] = _LEGACY_ANCHORS[i]
+    const [a2sq, a2p] = _LEGACY_ANCHORS[i + 1]
+    if (sqIn <= a2sq) return Math.round(a1p + ((sqIn - a1sq) / (a2sq - a1sq)) * (a2p - a1p))
   }
-  const [a1sq, a1p] = _PRICING_ANCHORS[_PRICING_ANCHORS.length - 2]
-  const [a2sq, a2p] = _PRICING_ANCHORS[_PRICING_ANCHORS.length - 1]
-  const slope = (a2p - a1p) / (a2sq - a1sq)
-  return Math.round(a2p + slope * (sqIn - a2sq))
+  const [a1sq, a1p] = _LEGACY_ANCHORS[_LEGACY_ANCHORS.length - 2]
+  const [a2sq, a2p] = _LEGACY_ANCHORS[_LEGACY_ANCHORS.length - 1]
+  return Math.round(a2p + ((a2p - a1p) / (a2sq - a1sq)) * (sqIn - a2sq))
+}
+
+function _beltCanvasPriceCents(sqIn: number): number {
+  return Math.round(
+    BELT_PRICE_MULTIPLIER * _legacyAnchorPriceCents(sqIn) + (BELT_PRICE_MULTIPLIER - 1) * PRINT_OWN_BASE_CENTS
+  )
 }
 
 export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
@@ -677,13 +705,24 @@ export type CanvasSize = { label: string; canvasW: number; canvasH: number; pric
 export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
   const canvasW = Math.round((widthInches + 4) * 2) / 2
   const canvasH = Math.round((heightInches + 4) * 2) / 2
+  const sqIn = canvasW * canvasH
   const fmt = (n: number) => n % 1 === 0 ? `${n}` : `${n.toFixed(1)}`
   return {
     label: `${fmt(canvasW)}×${fmt(canvasH)}"`,
     canvasW,
     canvasH,
-    priceCents: _interpolatePriceCents(canvasW * canvasH),
+    priceCents: isBeltDesign(widthInches, heightInches) ? _beltCanvasPriceCents(sqIn) : _canvasPriceCents(sqIn),
   }
+}
+
+export function printOwnTotalCents(canvas: CanvasSize): number {
+  return PRINT_OWN_BASE_CENTS + canvas.priceCents
+}
+
+/** Print-own plus the creator markup. Derived from the print-own total so the
+ *  two can never drift apart — do not reintroduce a separate gallery base fee. */
+export function printGalleryTotalCents(canvas: CanvasSize): number {
+  return Math.round(printOwnTotalCents(canvas) * (1 + GALLERY_MARKUP))
 }
 
 // Max printable: short side ≤ 13" (roll width), long side ≤ 20" (editor stage)

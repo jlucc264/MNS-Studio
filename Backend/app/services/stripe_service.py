@@ -8,7 +8,6 @@ from .canvas_pricing import (
     print_gallery_total_cents,
     TEMPLATE_PRICE_CENTS,
     PRINT_OWN_BASE_CENTS,
-    PRINT_GALLERY_BASE_CENTS,
 )
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
@@ -126,6 +125,9 @@ def create_template_checkout(
         "creator_user_id": creator_user_id,
         "pdf_url": pdf_url,
         "title": gallery_item_title,
+        # Creator earnings are a share of THIS item, so record it explicitly.
+        # Stripe's amount_total includes shipping and any other line items.
+        "item_total_cents": str(TEMPLATE_PRICE_CENTS),
     }
     coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, TEMPLATE_PRICE_CENTS)
     if applied_cents:
@@ -177,6 +179,10 @@ def create_gallery_print_checkout(
         "title": gallery_item_title,
         "width_inches": str(width_inches),
         "height_inches": str(height_inches),
+        # Creator earnings are a share of THIS item, so record it explicitly.
+        # Stripe's amount_total includes the $7 shipping, and paying the creator
+        # a share of shipping was ~$1.40 per order going out the door.
+        "item_total_cents": str(total),
     }
     coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, total)
     if applied_cents:
@@ -220,9 +226,13 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
     for i, item in enumerate(items):
         canvas = get_canvas_for_design(item["width_inches"], item["height_inches"])
         has_creator = bool(item.get("creator_user_id"))
-        base = PRINT_GALLERY_BASE_CENTS if has_creator else PRINT_OWN_BASE_CENTS
         qty = item.get("quantity", 1)
-        unit = base + canvas["price_cents"]
+        # Gallery pricing is now a markup on the print-own total rather than a
+        # separate base fee, so derive `unit` from the same helpers the
+        # single-item paths use. `b` is kept in the metadata only so that the
+        # webhook's `b + cv` still reconstructs the unit price exactly.
+        unit = print_gallery_total_cents(canvas) if has_creator else print_own_total_cents(canvas)
+        base = unit - canvas["price_cents"]
         subtotal_for_credit += unit * qty
 
         line_items.append({

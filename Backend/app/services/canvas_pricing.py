@@ -1,16 +1,62 @@
 import math
 
-# Three known price points: (canvas_sq_in, price_cents)
-_ANCHORS = [
+# Canvas price is derived from a target gross margin on material, not from
+# hand-set anchors. The previous three-anchor curve interpolated between
+# 30/48/96 sq in and then extrapolated flat, so the effective rate collapsed
+# with size — ~30c/sq in at 30 sq in down to ~5.5c at 680. In margin terms
+# that was 90%+ on small canvases and ~35% on large ones, i.e. the biggest
+# orders were the least profitable.
+#
+# Roll economics (owner's sizing sheet, 2026-08):
+#   A 40" x 270" roll is 10,800 sq in gross and costs $343.50. Roughly 25% is
+#   lost to reprints, so ~8,100 sq in is actually sellable. ROLL_SELLABLE_SQ_IN
+#   is that post-loss figure — the reprint allowance is ALREADY baked in, so do
+#   not apply it a second time when reasoning about cost per square inch.
+ROLL_COST_CENTS = 34_350          # $343.50 per roll
+ROLL_SELLABLE_SQ_IN = 8_100       # 75% of a 40" x 270" roll; reprint loss removed
+TARGET_MATERIAL_MARGIN = 0.80
+
+# price = cost / (1 - margin) holds the margin at every size, which makes the
+# canvas charge a flat per-square-inch rate. Small orders stay viable because
+# the per-order base fee (PRINT_OWN_BASE_CENTS / PRINT_GALLERY_BASE_CENTS) is
+# added on top: that covers payment processing, packaging and handling, none of
+# which are in ROLL_COST_CENTS. Margin on the *total* therefore lands above the
+# target at small sizes and converges down toward it as area grows.
+_MATERIAL_COST_PER_SQ_IN_CENTS = ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN
+PRICE_PER_SQ_IN_CENTS = _MATERIAL_COST_PER_SQ_IN_CENTS / (1 - TARGET_MATERIAL_MARGIN)
+
+# Floor for pathologically small canvases (the smallest design the editor
+# allows is 0.5", i.e. a 4.5x4.5 canvas at ~20 sq in). Retained from the
+# previous model so a canvas is never priced at a couple of dollars.
+MIN_CANVAS_PRICE_CENTS = 500
+
+PRINT_OWN_BASE_CENTS = 700        # $7
+TEMPLATE_PRICE_CENTS = 500        # $5
+
+# A gallery print costs this much more than printing your own design. The
+# markup is not profit — it is passed through to the creator 1:1 (see
+# creator_earnings_cents), so the business nets the same either way and the
+# premium is what nudges people toward designing their own.
+#
+# Note the markup and the creator's share are the SAME number by design. That
+# only works because the share is taken off the print-own base, not off the
+# marked-up gallery total: 20% of the marked-up price would exceed the 20% the
+# buyer paid, and the difference would come out of the business. (Replaces the
+# old flat $5 PRINT_GALLERY_BASE_CENTS adder, which fell further behind the
+# creator payout as canvases got bigger — at 13x20 it was a ~$15 subsidy.)
+GALLERY_MARKUP = 0.20
+CREATOR_SHARE_OF_PRINT_OWN = 0.20
+
+# Belts are priced off the legacy anchor curve rather than the per-sq-in rate.
+# The canvas math adds 2" of margin per side, so a 1.25"-tall strap becomes a
+# 5"-tall canvas and ~80% of a flat-rate belt charge would be margin the
+# customer never sees. Owner's call (2026-08): 1.5x the previous belt price.
+BELT_PRICE_MULTIPLIER = 1.5
+_LEGACY_ANCHORS = [
     (30, 900),    # 5×6  = $9
     (48, 1200),   # 6×8  = $12
     (96, 1400),   # 8×12 = $14
 ]
-
-PRINT_OWN_BASE_CENTS = 700        # $7
-PRINT_GALLERY_BASE_CENTS = 1200   # $12
-TEMPLATE_PRICE_CENTS = 500        # $5
-# Creator earnings: 20% of sale amount_total, recorded in main.py _record_creator_earnings
 
 # Maximum printable design dimensions (short side × long side).
 # Short side bounded by the 13" print roll; long side by the editor's
@@ -44,20 +90,49 @@ def is_design_printable(width_inches: float, height_inches: float) -> bool:
     return short <= _MAX_PRINT_SHORT_IN and long <= _MAX_PRINT_LONG_IN
 
 
-def _interpolate_price_cents(sq_in: float) -> int:
-    if sq_in <= _ANCHORS[0][0]:
-        slope = (_ANCHORS[1][1] - _ANCHORS[0][1]) / (_ANCHORS[1][0] - _ANCHORS[0][0])
-        return max(500, round(_ANCHORS[0][1] + slope * (sq_in - _ANCHORS[0][0])))
-    for i in range(len(_ANCHORS) - 1):
-        a1_sq, a1_p = _ANCHORS[i]
-        a2_sq, a2_p = _ANCHORS[i + 1]
+def canvas_price_cents(sq_in: float) -> int:
+    """Material charge for a canvas of `sq_in`, at TARGET_MATERIAL_MARGIN.
+
+    Flat per-square-inch by construction — see PRICE_PER_SQ_IN_CENTS. The
+    per-order base fee is added by print_own_total_cents / print_gallery_total_cents.
+
+    Rounds half UP via floor(x + 0.5) rather than using round(), which is
+    banker's rounding and would disagree with JavaScript's Math.round on exact
+    .5 values (783 sq in lands on exactly 16602.5). The frontend mirrors this
+    function to quote prices in the editor, so any divergence shows the user
+    one price and charges another at checkout.
+    """
+    return max(MIN_CANVAS_PRICE_CENTS, math.floor(PRICE_PER_SQ_IN_CENTS * sq_in + 0.5))
+
+
+def _legacy_anchor_price_cents(sq_in: float) -> int:
+    """The pre-2026-08 interpolated anchor curve. Retained only as the basis for
+    belt pricing (see belt_canvas_price_cents) — everything else uses the flat
+    per-sq-in rate."""
+    if sq_in <= _LEGACY_ANCHORS[0][0]:
+        slope = (_LEGACY_ANCHORS[1][1] - _LEGACY_ANCHORS[0][1]) / (_LEGACY_ANCHORS[1][0] - _LEGACY_ANCHORS[0][0])
+        return max(MIN_CANVAS_PRICE_CENTS, math.floor(_LEGACY_ANCHORS[0][1] + slope * (sq_in - _LEGACY_ANCHORS[0][0]) + 0.5))
+    for i in range(len(_LEGACY_ANCHORS) - 1):
+        a1_sq, a1_p = _LEGACY_ANCHORS[i]
+        a2_sq, a2_p = _LEGACY_ANCHORS[i + 1]
         if sq_in <= a2_sq:
             t = (sq_in - a1_sq) / (a2_sq - a1_sq)
-            return round(a1_p + t * (a2_p - a1_p))
-    a1_sq, a1_p = _ANCHORS[-2]
-    a2_sq, a2_p = _ANCHORS[-1]
+            return math.floor(a1_p + t * (a2_p - a1_p) + 0.5)
+    a1_sq, a1_p = _LEGACY_ANCHORS[-2]
+    a2_sq, a2_p = _LEGACY_ANCHORS[-1]
     slope = (a2_p - a1_p) / (a2_sq - a1_sq)
-    return round(a2_p + slope * (sq_in - a2_sq))
+    return math.floor(a2_p + slope * (sq_in - a2_sq) + 0.5)
+
+
+def belt_canvas_price_cents(sq_in: float) -> int:
+    """Belt material charge, set so the print-own TOTAL comes out at exactly
+    BELT_PRICE_MULTIPLIER x the old total (base fee included, which is what the
+    customer actually sees). Solving base + price = mult * (base + legacy) gives
+    price = mult * legacy + (mult - 1) * base."""
+    legacy = _legacy_anchor_price_cents(sq_in)
+    return math.floor(
+        BELT_PRICE_MULTIPLIER * legacy + (BELT_PRICE_MULTIPLIER - 1) * PRINT_OWN_BASE_CENTS + 0.5
+    )
 
 
 def _fmt_canvas(n: float) -> str:
@@ -65,10 +140,15 @@ def _fmt_canvas(n: float) -> str:
 
 
 def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
-    """Compute canvas dimensions (2" waste on each side, rounded to nearest 0.5") and interpolated price."""
+    """Compute canvas dimensions (2" waste on each side, rounded to nearest 0.5") and its material price."""
     canvas_w = round((width_inches + 4) * 2) / 2
     canvas_h = round((height_inches + 4) * 2) / 2
-    price = _interpolate_price_cents(canvas_w * canvas_h)
+    sq_in = canvas_w * canvas_h
+    price = (
+        belt_canvas_price_cents(sq_in)
+        if is_belt_design(width_inches, height_inches)
+        else canvas_price_cents(sq_in)
+    )
     return {
         "label": f"{_fmt_canvas(canvas_w)}×{_fmt_canvas(canvas_h)}",
         "width": canvas_w,
@@ -82,4 +162,21 @@ def print_own_total_cents(canvas: dict) -> int:
 
 
 def print_gallery_total_cents(canvas: dict) -> int:
-    return PRINT_GALLERY_BASE_CENTS + canvas["price_cents"]
+    """Print-own plus the creator markup. Derived from the print-own total (not
+    a separate base fee) so the two can never drift apart."""
+    return math.floor(print_own_total_cents(canvas) * (1 + GALLERY_MARKUP) + 0.5)
+
+
+def creator_earnings_cents(gallery_total_cents: int) -> int:
+    """The creator's cut of a gallery sale.
+
+    Deliberately equal to the markup the buyer paid: the share is taken off the
+    print-own base, recovered by dividing the markup back out, NOT off the
+    gallery total. Taking 20% of the gallery total would pay out more than the
+    buyer contributed and the business would eat the difference.
+
+    `gallery_total_cents` must be the item's own price — never Stripe's
+    amount_total, which includes shipping.
+    """
+    print_own_equivalent = gallery_total_cents / (1 + GALLERY_MARKUP)
+    return math.floor(print_own_equivalent * CREATOR_SHARE_OF_PRINT_OWN + 0.5)

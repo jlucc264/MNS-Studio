@@ -926,12 +926,15 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
 
 def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str, sale_amount_cents: int) -> None:
     from app.services.supabase_db import _request
+    from app.services.canvas_pricing import creator_earnings_cents
     _request("POST", "/creator_earnings", body={
         "stripe_session_id": session_id,
         "creator_user_id": creator_user_id,
         "gallery_item_id": gallery_item_id,
         "order_type": order_type,
-        "amount_cents": round(sale_amount_cents * 0.20),
+        # Share of the print-own base, which equals the markup the buyer paid —
+        # NOT 20% of the marked-up total. See creator_earnings_cents.
+        "amount_cents": creator_earnings_cents(sale_amount_cents),
         "paid_out": False,
     })
 
@@ -1059,7 +1062,18 @@ def _handle_completed_session(session) -> None:
         gallery_item_id = metadata.get("gallery_item_id", "")
         if creator_user_id and gallery_item_id:
             try:
-                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type, session.get("amount_total", 0))
+                # Use the item's own price, never amount_total — that includes
+                # the $7 shipping, which the creator has no claim to. Falls back
+                # to amount_total only for sessions created before
+                # item_total_cents was stamped into metadata.
+                item_total = int(metadata.get("item_total_cents") or 0)
+                if not item_total:
+                    item_total = session.get("amount_total", 0)
+                    logger.warning(
+                        "Session %s has no item_total_cents; creator earnings fall back to "
+                        "amount_total and will include shipping", session.get("id"),
+                    )
+                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type, item_total)
             except Exception:
                 logger.exception("Failed to record creator earnings for session %s", session.get("id"))
 

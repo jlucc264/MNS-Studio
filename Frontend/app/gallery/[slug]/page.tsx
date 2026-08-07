@@ -8,7 +8,7 @@ import CheckoutModal from '../../../components/CheckoutModal'
 import { NavAccountControls } from '../../../components/NavAccountControls'
 import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
-import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isDesignPrintable, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, fetchGalleryItemProject, formatCents, getCanvasForDesign, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isDesignPrintable, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -660,7 +660,7 @@ export default function CreatorProfilePage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const printPrice = canvas ? formatCents(2000 + canvas.priceCents) : null
+                  const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
                   return (
                     <>
                       <button
@@ -682,7 +682,7 @@ export default function CreatorProfilePage() {
                         <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                           <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                           <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
-                          <div>Printing &amp; fulfillment — {formatCents(2000)}</div>
+                          <div>Printing &amp; fulfillment — {formatCents(printGalleryTotalCents(canvas) - canvas.priceCents)}</div>
                         </div>
                       )}
                       {canvas && printPrice && (

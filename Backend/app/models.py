@@ -286,6 +286,7 @@ class ChatActionItem(BaseModel):
     to_code: str = ""
     setting: str = ""
     url: str = ""
+    source_type: Optional[str] = None
     width_inches: Optional[float] = None
     height_inches: Optional[float] = None
     mesh_count: Optional[int] = None
