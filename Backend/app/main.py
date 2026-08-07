@@ -1199,7 +1199,18 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
 
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72
-    path = generate_roll_print_pdf(designs, x_offset_pts=x_offset_pts, skew_correction_pts=skew_correction_pts, y_scale=request.y_scale)
+    try:
+        path = generate_roll_print_pdf(
+            designs,
+            roll_width_inches=request.roll_width_inches,
+            gap_inches=request.gap_inches,
+            x_offset_pts=x_offset_pts,
+            skew_correction_pts=skew_correction_pts,
+            y_scale=request.y_scale,
+        )
+    except ValueError as exc:
+        # A design too wide for the loaded roll — actionable, not a server fault.
+        raise HTTPException(status_code=400, detail=str(exc))
 
     if request.print_order_ids:
         mark_print_orders_printed(request.print_order_ids)

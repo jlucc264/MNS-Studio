@@ -9,6 +9,7 @@ import {
   downloadCalibrationPdf,
   downloadRegistrationTestPdf,
   downloadRollPrintPdf,
+  MAX_ROLL_WIDTH_INCHES,
   type Project,
 } from '../../lib/api'
 
@@ -144,6 +145,8 @@ export default function AdminPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [copies, setCopies] = useState(1)
+  const [rollWidthInches, setRollWidthInches] = useState(MAX_ROLL_WIDTH_INCHES)
+  const [gapInches, setGapInches] = useState(0)
   const [xOffsetInches, setXOffsetInches] = useState(0)
   const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
   const [yScale, setYScale] = useState(1.0)
@@ -216,7 +219,15 @@ export default function AdminPage() {
     setRollBusy(true)
     setRollError('')
     try {
-      await downloadRollPrintPdf(selectedIds, copies, session.access_token, xOffsetInches, skewCorrectionInches, yScale, includeAlignmentTest)
+      await downloadRollPrintPdf(selectedIds, session.access_token, {
+        copies,
+        rollWidthInches,
+        gapInches,
+        xOffsetInches,
+        skewCorrectionInches,
+        yScale,
+        includeAlignmentTest,
+      })
     } catch (e: unknown) {
       setRollError(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -235,7 +246,7 @@ export default function AdminPage() {
   return (
     <div style={styles.page}>
       <h1 style={styles.h1}>Roll Print Admin</h1>
-      <p style={styles.subtitle}>P900 · 18 mesh · 8″ roll · admin only</p>
+      <p style={styles.subtitle}>P900 · 18 mesh · up to {MAX_ROLL_WIDTH_INCHES}″ roll · admin only</p>
 
       {/* Calibration */}
       <div style={styles.section}>
@@ -314,8 +325,8 @@ export default function AdminPage() {
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Roll Print PDF</div>
         <div style={styles.sectionDesc}>
-          Select designs in print order. Each prints at true size centered on the 8″ roll with 2″
-          gaps and cut lines between them.
+          Select designs in print order. Each prints at true size, centered on the roll width you
+          set below, with a cut line between them.
         </div>
 
         <div style={styles.projectList}>
@@ -355,6 +366,32 @@ export default function AdminPage() {
             max={20}
             value={copies}
             onChange={e => setCopies(Math.max(1, parseInt(e.target.value) || 1))}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="rollWidth">Roll width (inches):</label>
+          <input
+            id="rollWidth"
+            type="number"
+            min={4}
+            max={MAX_ROLL_WIDTH_INCHES}
+            step={0.5}
+            value={rollWidthInches}
+            onChange={e => setRollWidthInches(parseFloat(e.target.value) || MAX_ROLL_WIDTH_INCHES)}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="gap">Gap between copies (inches):</label>
+          <input
+            id="gap"
+            type="number"
+            min={0}
+            max={6}
+            step={0.25}
+            value={gapInches}
+            onChange={e => setGapInches(Math.max(0, parseFloat(e.target.value) || 0))}
             style={styles.copiesInput}
           />
         </div>

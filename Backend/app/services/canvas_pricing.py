@@ -58,10 +58,24 @@ _LEGACY_ANCHORS = [
     (96, 1400),   # 8×12 = $14
 ]
 
+# Widest canvas the printer can feed. Rolls arrive 40" wide from the supplier
+# and get cut down to whatever feed width a job needs, so this is a property of
+# the printer, not of the stock.
+MAX_ROLL_WIDTH_IN = 17.0
+
+# Unstitched canvas left around the design for blocking and framing. 2" is what
+# we want; 1" is the least that's still workable. Designs wide enough that 2"
+# per side would overrun the roll get the margin trimmed toward the floor rather
+# than being refused — that's what lets a 15" design (17" at 1") print at all.
+# Anything needing less than the floor is genuinely unprintable.
+CANVAS_MARGIN_IN = 2.0
+MIN_CANVAS_MARGIN_IN = 1.0
+
 # Maximum printable design dimensions (short side × long side).
-# Short side bounded by the 13" print roll; long side by the editor's
-# 20" canvas stage.
-_MAX_PRINT_SHORT_IN = 13.0
+# Short side is the roll minus the *minimum* margin on both edges; long side is
+# bounded by the editor's 20" canvas stage, not by the printer, since the long
+# axis runs down the roll's unbounded feed direction.
+_MAX_PRINT_SHORT_IN = MAX_ROLL_WIDTH_IN - 2 * MIN_CANVAS_MARGIN_IN  # 15.0
 _MAX_PRINT_LONG_IN = 20.0
 
 # Belt mode: a long, narrow strip that doesn't fit the normal short/long
@@ -88,6 +102,23 @@ def is_design_printable(width_inches: float, height_inches: float) -> bool:
     short = min(width_inches, height_inches)
     long = max(width_inches, height_inches)
     return short <= _MAX_PRINT_SHORT_IN and long <= _MAX_PRINT_LONG_IN
+
+
+def canvas_margin_inches(width_inches: float, height_inches: float) -> float:
+    """Unstitched margin on every side of the design, in inches.
+
+    The full CANVAS_MARGIN_IN wherever it fits the roll, shrinking toward
+    MIN_CANVAS_MARGIN_IN for designs too wide to afford it. The roll only
+    constrains the short side — the long side runs down the feed direction —
+    so the trim is driven by min(width, height).
+
+    Both the price and the printed border must come from this one function: if
+    pricing assumed 1" and the printer drew 2", the canvas would be 2" wider
+    than the roll and generate_roll_print_pdf would reject the job.
+    """
+    short = min(width_inches, height_inches)
+    affordable = (MAX_ROLL_WIDTH_IN - short) / 2
+    return max(MIN_CANVAS_MARGIN_IN, min(CANVAS_MARGIN_IN, affordable))
 
 
 def canvas_price_cents(sq_in: float) -> int:
@@ -140,9 +171,11 @@ def _fmt_canvas(n: float) -> str:
 
 
 def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
-    """Compute canvas dimensions (2" waste on each side, rounded to nearest 0.5") and its material price."""
-    canvas_w = round((width_inches + 4) * 2) / 2
-    canvas_h = round((height_inches + 4) * 2) / 2
+    """Canvas dimensions (design plus waste on each side, rounded to the nearest
+    0.5") and the material price for that area."""
+    margin = canvas_margin_inches(width_inches, height_inches)
+    canvas_w = round((width_inches + 2 * margin) * 2) / 2
+    canvas_h = round((height_inches + 2 * margin) * 2) / 2
     sq_in = canvas_w * canvas_h
     price = (
         belt_canvas_price_cents(sq_in)

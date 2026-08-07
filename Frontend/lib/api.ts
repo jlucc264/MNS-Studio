@@ -702,9 +702,17 @@ function _beltCanvasPriceCents(sqIn: number): number {
 
 export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
 
+/** Mirrors canvas_margin_inches in canvas_pricing.py — keep the two in step. */
+export function canvasMarginInches(widthInches: number, heightInches: number): number {
+  const short = Math.min(widthInches, heightInches)
+  const affordable = (MAX_ROLL_WIDTH_INCHES - short) / 2
+  return Math.max(MIN_CANVAS_MARGIN_INCHES, Math.min(CANVAS_MARGIN_INCHES, affordable))
+}
+
 export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
-  const canvasW = Math.round((widthInches + 4) * 2) / 2
-  const canvasH = Math.round((heightInches + 4) * 2) / 2
+  const margin = canvasMarginInches(widthInches, heightInches)
+  const canvasW = Math.round((widthInches + 2 * margin) * 2) / 2
+  const canvasH = Math.round((heightInches + 2 * margin) * 2) / 2
   const sqIn = canvasW * canvasH
   const fmt = (n: number) => n % 1 === 0 ? `${n}` : `${n.toFixed(1)}`
   return {
@@ -725,8 +733,19 @@ export function printGalleryTotalCents(canvas: CanvasSize): number {
   return Math.round(printOwnTotalCents(canvas) * (1 + GALLERY_MARKUP))
 }
 
-// Max printable: short side ≤ 13" (roll width), long side ≤ 20" (editor stage)
-export const MAX_PRINTABLE_SHORT_SIDE = 13
+// Widest roll the printer can feed. Mirrors MAX_ROLL_WIDTH_IN in canvas_pricing.py.
+export const MAX_ROLL_WIDTH_INCHES = 17
+
+// Unstitched canvas around the design: 2" preferred, 1" floor. Designs too wide
+// for 2" per side get the margin trimmed rather than refused, which is what
+// lets a 15" design print on the 17" roll. See canvasMarginInches.
+export const CANVAS_MARGIN_INCHES = 2
+export const MIN_CANVAS_MARGIN_INCHES = 1
+
+// Max printable: short side is the roll minus the *minimum* margin on both
+// edges; long side is the editor's 20" stage, since the long axis runs down the
+// roll's unbounded feed direction.
+export const MAX_PRINTABLE_SHORT_SIDE = MAX_ROLL_WIDTH_INCHES - 2 * MIN_CANVAS_MARGIN_INCHES // 15
 export const MAX_PRINTABLE_LONG_SIDE = 20
 
 // Belt mode: a long, narrow strip outside the normal short/long envelope
@@ -1030,25 +1049,34 @@ export async function downloadCalibrationPdf(accessToken: string, nozzle = true,
   URL.revokeObjectURL(url)
 }
 
+export interface RollPrintOptions {
+  copies?: number
+  /** Feed width of the roll loaded in the printer. Backend caps this at 17". */
+  rollWidthInches?: number
+  gapInches?: number
+  xOffsetInches?: number
+  skewCorrectionInches?: number
+  yScale?: number
+  includeAlignmentTest?: boolean
+}
+
 export async function downloadRollPrintPdf(
   projectIds: string[],
-  copies: number,
   accessToken: string,
-  xOffsetInches: number = 0,
-  skewCorrectionInches: number = 0,
-  yScale: number = 1.0,
-  includeAlignmentTest: boolean = false,
+  opts: RollPrintOptions = {},
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/admin/roll-print`, {
     method: 'POST',
     headers: { ...jsonHeaders(accessToken) },
     body: JSON.stringify({
       project_ids: projectIds,
-      copies,
-      x_offset_inches: xOffsetInches,
-      skew_correction_inches: skewCorrectionInches,
-      y_scale: yScale,
-      include_alignment_test: includeAlignmentTest,
+      copies: opts.copies ?? 1,
+      roll_width_inches: opts.rollWidthInches ?? MAX_ROLL_WIDTH_INCHES,
+      gap_inches: opts.gapInches ?? 0,
+      x_offset_inches: opts.xOffsetInches ?? 0,
+      skew_correction_inches: opts.skewCorrectionInches ?? 0,
+      y_scale: opts.yScale ?? 1.0,
+      include_alignment_test: opts.includeAlignmentTest ?? false,
     }),
   })
   if (!res.ok) {

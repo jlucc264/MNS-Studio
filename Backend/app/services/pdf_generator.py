@@ -15,6 +15,7 @@ from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
 from PIL import Image, ImageDraw, ImageFont
 import reportlab
 
+from .canvas_pricing import MAX_ROLL_WIDTH_IN, canvas_margin_inches
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 
 logger = logging.getLogger(__name__)
@@ -656,9 +657,12 @@ def generate_preview_pdf(
     design_h = len(preview_cells) / mesh_count if preview_cells else height_inches
 
     page_size = landscape(letter) if design_w > design_h else letter
-    # Cover preview: design + 2" canvas margin on each side, with signature
+    # Cover preview: design + the canvas margin on each side, with signature.
+    # Same margin the customer was quoted, so the picture matches the canvas.
+    cover_margin_in = canvas_margin_inches(design_w, design_h)
     preview_image = _render_preview_image_from_cells(
-        preview_cells, mesh_count, show_grid, signature=signature, sku=sku, border_inches=2.0,
+        preview_cells, mesh_count, show_grid, signature=signature, sku=sku,
+        border_inches=cover_margin_in,
     )
     preview_image.save(preview_path, format="PNG")
     # Report thumbnail: just the design (no canvas border) so it fills the small thumb area
@@ -682,7 +686,7 @@ def generate_preview_pdf(
             used_colors,
             total_stitches,
             has_outline,
-            preview_border_inches=2.0,
+            preview_border_inches=cover_margin_in,
         )
 
         pdf.showPage()
@@ -1036,7 +1040,7 @@ def generate_alignment_test_design(
 
 def generate_roll_print_pdf(
     designs: list[dict],
-    roll_width_inches: float = 8.0,
+    roll_width_inches: float = MAX_ROLL_WIDTH_IN,
     gap_inches: float = 0.0,
     x_offset_pts: float = 0.0,
     skew_correction_pts: float = 0.0,
@@ -1045,40 +1049,58 @@ def generate_roll_print_pdf(
     """`designs` items may include an optional `signature` (a SignatureAsset,
     already resolved to the design's creator) and/or `sku` (a SkuAsset, read
     directly off the project) drawn into the design's own 2" margin — see
-    `_render_preview_image_from_cells`."""
+    `_render_preview_image_from_cells`.
+
+    Raises ValueError if any design is wider than the roll even after rotation.
+    """
     roll_width_pts = roll_width_inches * 72
     gap_pts = gap_inches * 72
 
-    rendered = []
+    # Pass 1: geometry only. `pagesize` needs the total height before the canvas
+    # can exist, but holding every rendered page in RAM to get it cost ~76MB per
+    # copy (measured, 13x20 at 18 mesh) — the form allows 20 copies, which is
+    # 1.9GB against a 2GB container. This pass is pure arithmetic on the cell
+    # counts; pass 2 renders one page at a time and releases it once drawn.
+    layouts = []
     for design in designs:
         cells = design["cells"]
         mesh = design.get("mesh_count", 18)
         stitch_h = len(cells)
         stitch_w = len(cells[0]) if stitch_h else 0
-        border_stitches = int(2.0 * mesh)
+        # Margin must match what the customer was charged for — same function
+        # feeds get_canvas_for_design. Orientation-independent, so the rotation
+        # below can't change it.
+        margin_in = canvas_margin_inches(stitch_w / mesh, stitch_h / mesh)
+        border_stitches = int(margin_in * mesh)
         draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
         # Designs whose column count won't fit the roll's fixed width print
         # rotated 90° so the long axis runs along the unbounded feed
         # direction instead — belts (38"+ long, 1.25" tall) are the case
         # that hits this; ordinary canvases never trigger it.
-        if draw_w > roll_width_pts:
-            cells = _rotate_cells_90(cells)
-            stitch_h = len(cells)
-            stitch_w = len(cells[0]) if stitch_h else 0
-            draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
-        draw_h = ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale
-        img = _render_preview_image_from_cells(
-            cells, mesh, show_grid=False, include_border=True, border_inches=2.0,
-            signature=design.get("signature"), sku=design.get("sku"),
-        )
-        rendered.append({
-            "img": img,
+        rotate = draw_w > roll_width_pts
+        if rotate:
+            rotated_w = ((stitch_h + 2 * border_stitches) / mesh) * 72
+            if rotated_w > roll_width_pts:
+                # Neither orientation fits. Drawing it anyway centres it at a
+                # negative x and silently clips both edges, wasting the canvas
+                # with no signal — fail before anything reaches the printer.
+                # Report the narrower orientation: that's the roll to load.
+                raise ValueError(
+                    f'"{design.get("label", "Untitled")}" needs a roll at least '
+                    f'{min(draw_w, rotated_w) / 72:.1f}" wide (including its '
+                    f'{margin_in:g}" canvas margins), but the roll is '
+                    f'{roll_width_inches:.1f}" wide.'
+                )
+            stitch_w, stitch_h = stitch_h, stitch_w
+            draw_w = rotated_w
+        layouts.append({
+            "rotate": rotate,
             "draw_w": draw_w,
-            "draw_h": draw_h,
-            "mesh": mesh,
+            "draw_h": ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale,
+            "margin_in": margin_in,
         })
 
-    total_h = sum(r["draw_h"] for r in rendered) + gap_pts * max(0, len(rendered) - 1)
+    total_h = sum(lay["draw_h"] for lay in layouts) + gap_pts * max(0, len(layouts) - 1)
 
     output_path = FINALIZED_DIR / "admin_roll_print.pdf"
     pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
@@ -1092,26 +1114,38 @@ def generate_roll_print_pdf(
 
     y = total_h  # top of available area
 
-    for i, r in enumerate(rendered):
-        img_x = (roll_width_pts - r["draw_w"]) / 2 + x_offset_pts
-        img_bottom = y - r["draw_h"]
+    # Pass 2: render, draw, discard — one page resident at a time.
+    for i, (design, lay) in enumerate(zip(designs, layouts)):
+        cells = design["cells"]
+        if lay["rotate"]:
+            cells = _rotate_cells_90(cells)
+        img = _render_preview_image_from_cells(
+            cells, design.get("mesh_count", 18), show_grid=False,
+            include_border=True, border_inches=lay["margin_in"],
+            signature=design.get("signature"), sku=design.get("sku"),
+        )
+
+        img_x = (roll_width_pts - lay["draw_w"]) / 2 + x_offset_pts
+        img_bottom = y - lay["draw_h"]
 
         buf = BytesIO()
-        r["img"].save(buf, format="PNG")
+        img.save(buf, format="PNG")
         buf.seek(0)
         pdf.drawImage(
             ImageReader(buf),
             img_x,
             img_bottom,
-            width=r["draw_w"],
-            height=r["draw_h"],
+            width=lay["draw_w"],
+            height=lay["draw_h"],
             preserveAspectRatio=False,
             mask="auto",
         )
+        img.close()
+        del img, buf
 
         y = img_bottom
 
-        if i < len(rendered) - 1:
+        if i < len(layouts) - 1:
             _draw_roll_cut_line(pdf, y - gap_pts / 2, roll_width_pts, gap_pts)
             y -= gap_pts
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Optional
 
 
@@ -336,6 +336,10 @@ class RollPrintRequest(BaseModel):
     skew_correction_inches: float = 0.0
     y_scale: float = 1.0
     include_alignment_test: bool = False
+    # Feed width of the roll actually loaded in the printer. 17" is the
+    # printer's max; narrower strips get cut from the same 40" stock.
+    roll_width_inches: float = Field(17.0, ge=4.0, le=17.0)
+    gap_inches: float = Field(0.0, ge=0.0, le=6.0)
 
 
 class ReplayCheckoutSessionRequest(BaseModel):
