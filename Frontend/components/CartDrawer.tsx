@@ -172,6 +172,15 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
                 <span>{useCredit ? `−${formatCents(credit)}` : `${formatCents(creditAvailable)} available`}</span>
               </label>
             )}
+            {/* Stripe owns the code field: it allows one discount per session
+                and refuses to show a promo box when a coupon is already
+                attached, so credit and codes can't both apply. Say which
+                you're getting rather than showing a box that won't appear. */}
+            <div style={{ fontSize: 12, color: '#8a8177' }}>
+              {credit > 0
+                ? 'Canvas credit applied — promo codes can’t be combined with it. Untick above to use a code instead.'
+                : 'Have a promo code? Enter it at checkout.'}
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16, borderTop: '1px solid #e7e1d8', paddingTop: 10, marginTop: 2 }}>
               <span>Total</span><span>{formatCents(totalAfterCredit)}</span>
             </div>

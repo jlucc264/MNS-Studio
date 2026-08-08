@@ -736,8 +736,8 @@ def get_my_earnings(user_id: str = Depends(get_current_user_id)):
 # the frontend never sends a larger grid, this just guards the public
 # endpoint. Shared by both corner-mark features (signature and SKU), which
 # both use SignatureGridEditor for pixel authoring.
-CORNER_MARK_GRID_MAX_COLS = 27
-CORNER_MARK_GRID_MAX_ROWS = 18
+CORNER_MARK_GRID_MAX_COLS = 19
+CORNER_MARK_GRID_MAX_ROWS = 19
 
 
 @app.get("/profile/signature")
@@ -1246,6 +1246,8 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             x_offset_pts=x_offset_pts,
             skew_correction_pts=skew_correction_pts,
             y_scale=request.y_scale,
+            logo_offset_in=(request.logo_x_offset_inches, request.logo_y_offset_inches),
+            side_margin_inches=request.side_margin_inches,
         )
     except ValueError as exc:
         # A design too wide for the loaded roll — actionable, not a server fault.

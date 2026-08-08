@@ -4,9 +4,13 @@ import { useRef, useState } from 'react'
 import { importStitchlyFile, ImportPatternError } from '../lib/api'
 
 // Printed decoration only — not mesh-aligned stitch data — so one fixed grid
-// covers every mesh: 1.5"×1" at 18 mesh (27×18 stitches).
-const GRID_COLS = 27
-const GRID_ROWS = 18
+// covers every mesh. A pixel grid prints one authored stitch per real stitch,
+// so the same count is ~38% larger at 13 mesh than at 18 (1/13" vs 1/18" per
+// stitch). 19 is the ceiling on BOTH axes: 19/13 = 1.46", which clears the
+// 0.5" corner inset inside a 2" canvas margin with 0.04" to spare. 20 does
+// not fit. Raising it means cutting SIGNATURE_CORNER_INSET_IN.
+const GRID_COLS = 19
+const GRID_ROWS = 19
 const CELL_PX = 16
 const EXPORT_CELL_PX = 20
 const BLANK_CELL = '__BLANK__' // shared sentinel — Backend/app/services/stitch_visualizer.py BLANK_CELL

@@ -49,7 +49,13 @@ function effectiveDimensions(p: Project): { w: number; h: number } | null {
     for (let r = 0; r < gridH; r++) {
       for (let c = 0; c < gridW; c++) {
         const cell = cells[r][c]
-        if (cell !== '__BLANK__' && cell !== '__FINISH_OUTLINE__') {
+        // Only blanks are excluded. A finish outline prints as real black
+        // stitches and takes up canvas, so it counts toward the design's
+        // physical size — same rule as compute_content_bounds (which drives
+        // pricing) and crop_to_content (which drives the roll print and the
+        // finalized PDF). Excluding it here made this card the only place in
+        // the app reporting a design 0.5" smaller than it prints.
+        if (cell !== '__BLANK__') {
           if (r < minRow) minRow = r
           if (r > maxRow) maxRow = r
           if (c < minCol) minCol = c

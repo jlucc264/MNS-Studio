@@ -10,6 +10,8 @@ import {
   downloadRegistrationTestPdf,
   downloadRollPrintPdf,
   MAX_ROLL_WIDTH_INCHES,
+  contentDimensionsInches,
+  getCanvasForDesign,
   type Project,
 } from '../../lib/api'
 
@@ -138,6 +140,31 @@ const styles = {
   } as const,
 }
 
+// Calibration is per-machine and admin-only, so it lives in the browser rather
+// than costing a Supabase table. Keyed by roll width as a string.
+type Calibration = { yScale: number; xOffsetInches: number; skewCorrectionInches: number }
+const CALIBRATION_KEY = 'mns_roll_calibration_v1'
+
+function loadCalibration(): Record<string, Calibration> {
+  if (typeof window === 'undefined') return {}
+  try {
+    return JSON.parse(localStorage.getItem(CALIBRATION_KEY) ?? '{}') as Record<string, Calibration>
+  } catch {
+    return {}
+  }
+}
+
+function saveCalibration(rollWidth: number, values: Calibration) {
+  if (typeof window === 'undefined') return
+  try {
+    const all = loadCalibration()
+    all[String(rollWidth)] = values
+    localStorage.setItem(CALIBRATION_KEY, JSON.stringify(all))
+  } catch {
+    /* private browsing or quota — calibration just won't persist */
+  }
+}
+
 export default function AdminPage() {
   const { session, loading } = useAuth()
   const router = useRouter()
@@ -147,6 +174,10 @@ export default function AdminPage() {
   const [copies, setCopies] = useState(1)
   const [rollWidthInches, setRollWidthInches] = useState(MAX_ROLL_WIDTH_INCHES)
   const [gapInches, setGapInches] = useState(0)
+  // Empty string = match the top/bottom canvas margin (previous behaviour).
+  const [sideMarginInches, setSideMarginInches] = useState('')
+  const [logoXOffsetInches, setLogoXOffsetInches] = useState(0)
+  const [logoYOffsetInches, setLogoYOffsetInches] = useState(0)
   const [xOffsetInches, setXOffsetInches] = useState(0)
   const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
   const [yScale, setYScale] = useState(1.0)
@@ -159,6 +190,7 @@ export default function AdminPage() {
   const [regError, setRegError] = useState('')
   const [blankError, setBlankError] = useState('')
   const [rollError, setRollError] = useState('')
+  const [calibrationNote, setCalibrationNote] = useState('')
 
   useEffect(() => {
     if (!loading && !session) router.replace('/studio')
@@ -168,6 +200,20 @@ export default function AdminPage() {
     if (!session) return
     listProjects(session.access_token).then(setProjects).catch(() => {})
   }, [session])
+
+  // Roller speed varies with the width of the loaded roll, so a Y scale
+  // calibrated on an 8" roll is wrong on a 17" one. Re-deriving it means
+  // burning large canvas to find the number again, so each width remembers
+  // its own. Offset and skew ride along — they're re-measured in the same
+  // pass and drift for the same reason.
+  useEffect(() => {
+    const saved = loadCalibration()[String(rollWidthInches)]
+    if (!saved) return
+    setYScale(saved.yScale)
+    setXOffsetInches(saved.xOffsetInches)
+    setSkewCorrectionInches(saved.skewCorrectionInches)
+    setCalibrationNote(`Loaded saved calibration for ${rollWidthInches}″ roll.`)
+  }, [rollWidthInches])
 
   function toggleProject(id: string) {
     setSelectedIds(prev =>
@@ -223,11 +269,18 @@ export default function AdminPage() {
         copies,
         rollWidthInches,
         gapInches,
+        sideMarginInches: sideMarginInches === '' ? null : parseFloat(sideMarginInches),
+        logoXOffsetInches,
+        logoYOffsetInches,
         xOffsetInches,
         skewCorrectionInches,
         yScale,
         includeAlignmentTest,
       })
+      // Only persist once a print actually generated — a width whose values
+      // errored out isn't a calibration worth remembering.
+      saveCalibration(rollWidthInches, { yScale, xOffsetInches, skewCorrectionInches })
+      setCalibrationNote(`Saved calibration for ${rollWidthInches}″ roll.`)
     } catch (e: unknown) {
       setRollError(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -341,11 +394,19 @@ export default function AdminPage() {
               >
                 <input type="checkbox" readOnly checked={selected} style={{ pointerEvents: 'none' }} />
                 <span style={{ flex: 1 }}>{p.name || 'Untitled'}</span>
-                {p.width_inches && p.height_inches && (
-                  <span style={{ fontSize: 11, color: '#7A817A' }}>
-                    {p.width_inches.toFixed(1)}″ × {p.height_inches.toFixed(1)}″
-                  </span>
-                )}
+                {(() => {
+                  // What will actually print, not the workspace the design was
+                  // drawn on — roll print crops to content, so a sliver on a
+                  // big blank canvas prints at its own size, not the canvas's.
+                  const d = contentDimensionsInches(p.cells, p.mesh_count ?? 13)
+                  if (!d) return null
+                  const canvas = getCanvasForDesign(d.w, d.h)
+                  return (
+                    <span style={{ fontSize: 11, color: '#7A817A' }}>
+                      {d.w.toFixed(1)}″ × {d.h.toFixed(1)}″ · {canvas.label} canvas
+                    </span>
+                  )
+                })()}
                 {selected && <span style={styles.selectedBadge}>#{idx + 1}</span>}
               </div>
             )
@@ -392,6 +453,49 @@ export default function AdminPage() {
             step={0.25}
             value={gapInches}
             onChange={e => setGapInches(Math.max(0, parseFloat(e.target.value) || 0))}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="sideMargin">Side margin (inches):</label>
+          <input
+            id="sideMargin"
+            type="number"
+            min={0}
+            max={4}
+            step={0.25}
+            placeholder="auto"
+            value={sideMarginInches}
+            onChange={e => setSideMarginInches(e.target.value)}
+            style={styles.copiesInput}
+          />
+          <span style={{ fontSize: 11, color: '#7A817A' }}>
+            blank = match top/bottom · 0 = image stops at the design
+          </span>
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="logoX">Logo X offset (inches):</label>
+          <input
+            id="logoX"
+            type="number"
+            min={-2}
+            max={2}
+            step={0.05}
+            value={logoXOffsetInches}
+            onChange={e => setLogoXOffsetInches(parseFloat(e.target.value) || 0)}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
+          <label htmlFor="logoY">Logo Y offset (inches):</label>
+          <input
+            id="logoY"
+            type="number"
+            min={-2}
+            max={2}
+            step={0.05}
+            value={logoYOffsetInches}
+            onChange={e => setLogoYOffsetInches(parseFloat(e.target.value) || 0)}
             style={styles.copiesInput}
           />
         </div>
@@ -460,6 +564,9 @@ export default function AdminPage() {
           </button>
         </div>
         {rollError && <div style={styles.error}>{rollError}</div>}
+        {calibrationNote && (
+          <div style={{ marginTop: 12, fontSize: 11, color: '#5a7a52' }}>{calibrationNote}</div>
+        )}
       </div>
     </div>
   )

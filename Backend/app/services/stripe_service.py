@@ -44,6 +44,22 @@ def _apply_canvas_credit(buyer_user_id: str | None, total_cents: int) -> tuple[s
     return coupon.id, apply
 
 
+def _apply_discount(session_params: dict, coupon_id: str | None) -> None:
+    """Attach either the buyer's canvas credit or a promo-code field.
+
+    Stripe allows one discount per session and rejects `allow_promotion_codes`
+    outright when `discounts` is set, so the two are mutually exclusive. Credit
+    wins where both could apply: it is money the buyer has already earned, and
+    silently dropping it to make room for a code would be worse than not
+    offering the field. Friends-and-family codes are created and managed in the
+    Stripe dashboard — nothing about them lives in this codebase.
+    """
+    if coupon_id:
+        session_params["discounts"] = [{"coupon": coupon_id}]
+    else:
+        session_params["allow_promotion_codes"] = True
+
+
 def create_print_own_checkout(
     pdf_url: str,
     width_inches: float,
@@ -105,8 +121,7 @@ def create_print_own_checkout(
         "return_url": f"{FRONTEND_URL}/studio?order=success",
         "metadata": metadata,
     }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
+    _apply_discount(session_params, coupon_id)
 
     session = stripe.checkout.Session.create(**session_params)
     return session.client_secret
@@ -151,8 +166,7 @@ def create_template_checkout(
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
+    _apply_discount(session_params, coupon_id)
 
     session = stripe.checkout.Session.create(**session_params)
     return session.client_secret
@@ -211,8 +225,7 @@ def create_gallery_print_checkout(
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
+    _apply_discount(session_params, coupon_id)
 
     session = stripe.checkout.Session.create(**session_params)
     return session.client_secret
@@ -283,8 +296,7 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
         "return_url": f"{FRONTEND_URL}/gallery?order=success",
         "metadata": metadata,
     }
-    if coupon_id:
-        session_params["discounts"] = [{"coupon": coupon_id}]
+    _apply_discount(session_params, coupon_id)
 
     session = stripe.checkout.Session.create(**session_params)
     return session.client_secret

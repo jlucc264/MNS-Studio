@@ -336,10 +336,20 @@ class RollPrintRequest(BaseModel):
     skew_correction_inches: float = 0.0
     y_scale: float = 1.0
     include_alignment_test: bool = False
-    # Feed width of the roll actually loaded in the printer. 17" is the
+    # Feed width of the roll actually loaded in the printer. 19" is the
     # printer's max; narrower strips get cut from the same 40" stock.
-    roll_width_inches: float = Field(17.0, ge=4.0, le=17.0)
+    # Keep the ceiling in step with MAX_ROLL_WIDTH_IN in canvas_pricing.py.
+    roll_width_inches: float = Field(19.0, ge=4.0, le=19.0)
     gap_inches: float = Field(0.0, ge=0.0, le=6.0)
+    # Nudges the bottom-right signature off its usual corner position for this
+    # print only, +x right and +y down. Bounded so a typo can't fling the mark
+    # off the canvas; negative values can push it over the design on purpose.
+    logo_x_offset_inches: float = Field(0.0, ge=-2.0, le=2.0)
+    logo_y_offset_inches: float = Field(0.0, ge=-2.0, le=2.0)
+    # Margin drawn down the left/right edges. None keeps it equal to the
+    # top/bottom canvas margin (previous behaviour); 0 stops the imaged area
+    # at the design, letting the pre-cut roll edge be the only side margin.
+    side_margin_inches: Optional[float] = Field(None, ge=0.0, le=4.0)
 
 
 class ReplayCheckoutSessionRequest(BaseModel):

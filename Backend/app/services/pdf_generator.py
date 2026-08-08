@@ -62,7 +62,7 @@ _ALIGNMENT_TEST_INK = "#211c15"
 # never creep into the design itself.
 SIGNATURE_CORNER_INSET_IN = 0.5
 SIGNATURE_MAX_WIDTH_IN = 1.5
-SIGNATURE_MAX_HEIGHT_IN = 1.0
+SIGNATURE_MAX_HEIGHT_IN = 1.5
 
 # SKU placement: same mechanics as the signature above, mirrored to the
 # canvas's own bottom-left corner instead of bottom-right. Per-project (not
@@ -168,12 +168,29 @@ def _render_preview_image_from_cells(
     signature: SignatureAsset | None = None,
     sku: SkuAsset | None = None,
     border_inches: float = BORDER_INCHES,
+    side_border_inches: float | None = None,
+    signature_offset_in: tuple[float, float] = (0.0, 0.0),
 ) -> Image.Image:
+    """`signature_offset_in` nudges the signature off its usual corner
+    position, in inches, +x right and +y down. A roll-print calibration knob
+    for when the mark lands wrong on the physical canvas — applied after the
+    keep-out clamp, so it has effect even when the signature is already
+    pressed against the design, and can therefore be pushed over the stitches
+    if driven far enough. Callers that aren't calibrating leave it at 0."""
     stitch_height = len(cells)
     stitch_width = len(cells[0]) if stitch_height else 0
     border_stitches = int(border_inches * mesh_count) if include_border else 0
+    # Sides can carry a different margin to top/bottom. The roll is cut to
+    # width before it's loaded, so that physical edge already IS the side
+    # margin — drawing another one inside it leaves two margins to reconcile
+    # when aligning across the roll. Defaults to matching top/bottom, so
+    # callers that don't care are unaffected.
+    side_border_stitches = (
+        border_stitches if side_border_inches is None
+        else (int(side_border_inches * mesh_count) if include_border else 0)
+    )
 
-    total_width = stitch_width + (2 * border_stitches)
+    total_width = stitch_width + (2 * side_border_stitches)
     total_height = stitch_height + (2 * border_stitches)
 
     quantized = Image.new("RGB", (stitch_width, stitch_height), (255, 255, 255))
@@ -190,7 +207,7 @@ def _render_preview_image_from_cells(
 
     canvas_image = Image.new("RGB", (total_width, total_height), (255, 255, 255))
     if stitch_width and stitch_height:
-        canvas_image.paste(quantized, (border_stitches, border_stitches))
+        canvas_image.paste(quantized, (side_border_stitches, border_stitches))
 
     display_w = total_width * DISPLAY_CELL_SIZE
     display_h = total_height * DISPLAY_CELL_SIZE
@@ -205,7 +222,7 @@ def _render_preview_image_from_cells(
 
     if include_border and signature and border_stitches > 0:
         px_per_inch = mesh_count * DISPLAY_CELL_SIZE
-        design_right_px = border_stitches * DISPLAY_CELL_SIZE + stitch_width * DISPLAY_CELL_SIZE
+        design_right_px = side_border_stitches * DISPLAY_CELL_SIZE + stitch_width * DISPLAY_CELL_SIZE
         design_bottom_px = border_stitches * DISPLAY_CELL_SIZE + stitch_height * DISPLAY_CELL_SIZE
         # Anchor from the canvas's own bottom-right corner (display_w /
         # display_h), not the design's edge — so the gap to the fabric
@@ -228,12 +245,21 @@ def _render_preview_image_from_cells(
             # Snap to the nearest whole stitch column/row, not just the
             # nearest pixel — otherwise the corner inset can land mid-cell,
             # splitting a drawn block across two real stitches instead of
-            # filling one. Clamp to the design's own edge so an unusually
-            # large signature can never creep into the stitches themselves.
+            # filling one. Prefer to keep clear of the design, but staying on
+            # the image wins: with a narrow side margin there is no room
+            # beside the design, and a mark pushed off the edge is silently
+            # dropped by PIL rather than erroring.
             raw_x = display_w - corner_inset_px - box_w
             raw_y = display_h - corner_inset_px - box_h
-            paste_x = max(design_right_px, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
-            paste_y = max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            paste_x = min(display_w - box_w, max(design_right_px, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE))
+            paste_y = min(display_h - box_h, max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE))
+            # Nudge in whole stitches so the calibration can't undo the
+            # snapping above and split a drawn block across two real stitches.
+            # Clamped to the canvas itself: PIL clips out-of-bounds rectangles
+            # silently, so without this a large offset makes the mark vanish
+            # from the print with no error.
+            paste_x = min(max(0, paste_x + round(signature_offset_in[0] * mesh_count) * DISPLAY_CELL_SIZE), display_w - box_w)
+            paste_y = min(max(0, paste_y + round(signature_offset_in[1] * mesh_count) * DISPLAY_CELL_SIZE), display_h - box_h)
             draw = ImageDraw.Draw(preview)
             for r, row in enumerate(grid):
                 for c, hex_color in enumerate(row):
@@ -254,13 +280,16 @@ def _render_preview_image_from_cells(
                 box_w = max(1, round(sig_w * scale))
                 box_h = max(1, round(sig_h * scale))
                 sig_scaled = signature.image.resize((box_w, box_h), Image.Resampling.LANCZOS)
-                paste_x = max(design_right_px, round(display_w - corner_inset_px - box_w))
-                paste_y = max(design_bottom_px, round(display_h - corner_inset_px - box_h))
+                paste_x = min(display_w - box_w, max(design_right_px, round(display_w - corner_inset_px - box_w)))
+                paste_y = min(display_h - box_h, max(design_bottom_px, round(display_h - corner_inset_px - box_h)))
+                # Clamped to the canvas — see the grid path above.
+                paste_x = min(max(0, paste_x + round(signature_offset_in[0] * px_per_inch)), display_w - box_w)
+                paste_y = min(max(0, paste_y + round(signature_offset_in[1] * px_per_inch)), display_h - box_h)
                 preview.paste(sig_scaled, (paste_x, paste_y), sig_scaled)
 
     if include_border and sku and border_stitches > 0:
         px_per_inch = mesh_count * DISPLAY_CELL_SIZE
-        design_left_px = border_stitches * DISPLAY_CELL_SIZE
+        design_left_px = side_border_stitches * DISPLAY_CELL_SIZE
         design_bottom_px = border_stitches * DISPLAY_CELL_SIZE + stitch_height * DISPLAY_CELL_SIZE
         # Mirror of the signature block above, anchored to the canvas's own
         # bottom-left corner instead of bottom-right.
@@ -274,10 +303,11 @@ def _render_preview_image_from_cells(
             box_h = grid_rows * DISPLAY_CELL_SIZE
             raw_x = corner_inset_px
             raw_y = display_h - corner_inset_px - box_h
-            # Clamp so an unusually large SKU can never creep right into the
-            # stitches themselves (mirrors the design_right_px clamp above).
-            paste_x = min(design_left_px - box_w, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
-            paste_y = max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE)
+            # Prefer to keep clear of the design, but staying on the image
+            # wins — with a narrow side margin there is no room beside it.
+            # Mirrors the signature clamp above.
+            paste_x = max(0, min(design_left_px - box_w, round(raw_x / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE))
+            paste_y = min(display_h - box_h, max(design_bottom_px, round(raw_y / DISPLAY_CELL_SIZE) * DISPLAY_CELL_SIZE))
             draw = ImageDraw.Draw(preview)
             for r, row in enumerate(grid):
                 for c, hex_color in enumerate(row):
@@ -298,7 +328,7 @@ def _render_preview_image_from_cells(
                 box_w = max(1, round(sku_w * scale))
                 box_h = max(1, round(sku_h * scale))
                 sku_scaled = sku.image.resize((box_w, box_h), Image.Resampling.LANCZOS)
-                paste_x = min(design_left_px - box_w, round(corner_inset_px))
+                paste_x = max(0, min(design_left_px - box_w, round(corner_inset_px)))
                 paste_y = max(design_bottom_px, round(display_h - corner_inset_px - box_h))
                 preview.paste(sku_scaled, (paste_x, paste_y), sku_scaled)
 
@@ -1045,6 +1075,8 @@ def generate_roll_print_pdf(
     x_offset_pts: float = 0.0,
     skew_correction_pts: float = 0.0,
     y_scale: float = 1.0,
+    logo_offset_in: tuple[float, float] = (0.0, 0.0),
+    side_margin_inches: float | None = None,
 ) -> Path:
     """`designs` items may include an optional `signature` (a SignatureAsset,
     already resolved to the design's creator) and/or `sku` (a SkuAsset, read
@@ -1072,14 +1104,19 @@ def generate_roll_print_pdf(
         # below can't change it.
         margin_in = canvas_margin_inches(stitch_w / mesh, stitch_h / mesh)
         border_stitches = int(margin_in * mesh)
-        draw_w = ((stitch_w + 2 * border_stitches) / mesh) * 72
+        # The roll is cut to width before loading, so its physical edge is
+        # already the side margin. Overriding lets the imaged area stop at the
+        # design instead of carrying a second margin inside the first.
+        side_margin = margin_in if side_margin_inches is None else side_margin_inches
+        side_border_stitches = int(side_margin * mesh)
+        draw_w = ((stitch_w + 2 * side_border_stitches) / mesh) * 72
         # Designs whose column count won't fit the roll's fixed width print
         # rotated 90° so the long axis runs along the unbounded feed
         # direction instead — belts (38"+ long, 1.25" tall) are the case
         # that hits this; ordinary canvases never trigger it.
         rotate = draw_w > roll_width_pts
         if rotate:
-            rotated_w = ((stitch_h + 2 * border_stitches) / mesh) * 72
+            rotated_w = ((stitch_h + 2 * side_border_stitches) / mesh) * 72
             if rotated_w > roll_width_pts:
                 # Neither orientation fits. Drawing it anyway centres it at a
                 # negative x and silently clips both edges, wasting the canvas
@@ -1098,6 +1135,7 @@ def generate_roll_print_pdf(
             "draw_w": draw_w,
             "draw_h": ((stitch_h + 2 * border_stitches) / mesh) * 72 * y_scale,
             "margin_in": margin_in,
+            "side_margin_in": side_margin,
         })
 
     total_h = sum(lay["draw_h"] for lay in layouts) + gap_pts * max(0, len(layouts) - 1)
@@ -1118,12 +1156,32 @@ def generate_roll_print_pdf(
     for i, (design, lay) in enumerate(zip(designs, layouts)):
         cells = design["cells"]
         if lay["rotate"]:
-            cells = _rotate_cells_90(cells)
-        img = _render_preview_image_from_cells(
-            cells, design.get("mesh_count", 18), show_grid=False,
-            include_border=True, border_inches=lay["margin_in"],
-            signature=design.get("signature"), sku=design.get("sku"),
-        )
+            # Render upright — signature and SKU included — then turn the whole
+            # finished image 90° clockwise. Rotating the cells first and drawing
+            # the marks afterwards left them upright on a turned design, so once
+            # the customer squared the canvas up the signature was on its side
+            # in the wrong corner. Rotating the composite keeps every element in
+            # the same relationship to the design.
+            #
+            # The margins swap with it: what was drawn top/bottom ends up across
+            # the roll, so the side margin is passed as the vertical one here and
+            # lands on the correct axis after the turn.
+            img = _render_preview_image_from_cells(
+                cells, design.get("mesh_count", 18), show_grid=False,
+                include_border=True, border_inches=lay["side_margin_in"],
+                side_border_inches=lay["margin_in"],
+                signature=design.get("signature"), sku=design.get("sku"),
+                signature_offset_in=logo_offset_in,
+            )
+            img = img.transpose(Image.Transpose.ROTATE_270)
+        else:
+            img = _render_preview_image_from_cells(
+                cells, design.get("mesh_count", 18), show_grid=False,
+                include_border=True, border_inches=lay["margin_in"],
+                side_border_inches=lay["side_margin_in"],
+                signature=design.get("signature"), sku=design.get("sku"),
+                signature_offset_in=logo_offset_in,
+            )
 
         img_x = (roll_width_pts - lay["draw_w"]) / 2 + x_offset_pts
         img_bottom = y - lay["draw_h"]

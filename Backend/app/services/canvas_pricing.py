@@ -61,12 +61,12 @@ _LEGACY_ANCHORS = [
 # Widest canvas the printer can feed. Rolls arrive 40" wide from the supplier
 # and get cut down to whatever feed width a job needs, so this is a property of
 # the printer, not of the stock.
-MAX_ROLL_WIDTH_IN = 17.0
+MAX_ROLL_WIDTH_IN = 19.0
 
 # Unstitched canvas left around the design for blocking and framing. 2" is what
 # we want; 1" is the least that's still workable. Designs wide enough that 2"
 # per side would overrun the roll get the margin trimmed toward the floor rather
-# than being refused — that's what lets a 15" design (17" at 1") print at all.
+# than being refused — that's what lets a 17" design (19" at 1") print at all.
 # Anything needing less than the floor is genuinely unprintable.
 CANVAS_MARGIN_IN = 2.0
 MIN_CANVAS_MARGIN_IN = 1.0

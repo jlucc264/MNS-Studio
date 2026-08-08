@@ -710,6 +710,30 @@ function _beltCanvasPriceCents(sqIn: number): number {
 export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
 
 /** Mirrors canvas_margin_inches in canvas_pricing.py — keep the two in step. */
+/** The design's real printed size: the bounding box of non-blank cells, in
+ *  inches. Mirrors crop_to_content in pdf_generator.py, which is what the roll
+ *  print actually renders — a stored width_inches/height_inches is the *canvas*
+ *  the user was working on, which can be far larger than what they stitched.
+ *  A finish outline counts: it prints as black stitches and takes up canvas. */
+export function contentDimensionsInches(
+  cells: string[][] | null | undefined,
+  meshCount: number,
+): { w: number; h: number } | null {
+  if (!cells?.length || !cells[0]?.length) return null
+  let minRow = cells.length, maxRow = -1, minCol = cells[0].length, maxCol = -1
+  for (let r = 0; r < cells.length; r++) {
+    for (let c = 0; c < cells[r].length; c++) {
+      if (cells[r][c] === '__BLANK__') continue
+      if (r < minRow) minRow = r
+      if (r > maxRow) maxRow = r
+      if (c < minCol) minCol = c
+      if (c > maxCol) maxCol = c
+    }
+  }
+  if (maxRow < 0) return { w: cells[0].length / meshCount, h: cells.length / meshCount }
+  return { w: (maxCol - minCol + 1) / meshCount, h: (maxRow - minRow + 1) / meshCount }
+}
+
 export function canvasMarginInches(widthInches: number, heightInches: number): number {
   const short = Math.min(widthInches, heightInches)
   const affordable = (MAX_ROLL_WIDTH_INCHES - short) / 2
@@ -748,11 +772,11 @@ export function creatorEarningsCents(galleryTotalCents: number): number {
 }
 
 // Widest roll the printer can feed. Mirrors MAX_ROLL_WIDTH_IN in canvas_pricing.py.
-export const MAX_ROLL_WIDTH_INCHES = 17
+export const MAX_ROLL_WIDTH_INCHES = 19
 
 // Unstitched canvas around the design: 2" preferred, 1" floor. Designs too wide
 // for 2" per side get the margin trimmed rather than refused, which is what
-// lets a 15" design print on the 17" roll. See canvasMarginInches.
+// lets a 17" design print on the 19" roll. See canvasMarginInches.
 export const CANVAS_MARGIN_INCHES = 2
 export const MIN_CANVAS_MARGIN_INCHES = 1
 
@@ -1088,9 +1112,17 @@ export async function downloadCalibrationPdf(accessToken: string, nozzle = true,
 
 export interface RollPrintOptions {
   copies?: number
-  /** Feed width of the roll loaded in the printer. Backend caps this at 17". */
+  /** Feed width of the roll loaded in the printer. Backend caps this at 19". */
   rollWidthInches?: number
   gapInches?: number
+  /** Nudges the bottom-right signature for this print only, +x right, +y down.
+   *  Backend clamps each to ±2". Does not affect the customer-facing PDF. */
+  logoXOffsetInches?: number
+  logoYOffsetInches?: number
+  /** Margin drawn on the left/right edges. Omit to match the top/bottom canvas
+   *  margin; 0 stops the imaged area at the design so the pre-cut roll edge is
+   *  the only side margin. */
+  sideMarginInches?: number | null
   xOffsetInches?: number
   skewCorrectionInches?: number
   yScale?: number
@@ -1110,6 +1142,9 @@ export async function downloadRollPrintPdf(
       copies: opts.copies ?? 1,
       roll_width_inches: opts.rollWidthInches ?? MAX_ROLL_WIDTH_INCHES,
       gap_inches: opts.gapInches ?? 0,
+      logo_x_offset_inches: opts.logoXOffsetInches ?? 0,
+      logo_y_offset_inches: opts.logoYOffsetInches ?? 0,
+      side_margin_inches: opts.sideMarginInches ?? null,
       x_offset_inches: opts.xOffsetInches ?? 0,
       skew_correction_inches: opts.skewCorrectionInches ?? 0,
       y_scale: opts.yScale ?? 1.0,
