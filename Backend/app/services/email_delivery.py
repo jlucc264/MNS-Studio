@@ -80,7 +80,13 @@ def send_order_notification(
     if metadata.get("pdf_url"):
         lines.append(f"PDF: {metadata['pdf_url']}")
     if metadata.get("item_count"):
+        # A cart's metadata carries none of the title/canvas_size/dimension keys
+        # the single-item paths set, so without this the whole notification read
+        # "Cart Order / Items in cart: 5" and nothing else — the buyer got an
+        # itemised list and we didn't. Same helper the customer email uses.
         lines.append(f"Items in cart: {metadata['item_count']}")
+        for n, item_line in enumerate(_order_items_summary(order_type, metadata), start=1):
+            lines.append(f"  {n}. {item_line}")
     if customer_email:
         lines.append(f"\nCustomer email: {customer_email}")
     if shipping:

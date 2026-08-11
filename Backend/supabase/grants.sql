@@ -51,6 +51,46 @@ create table if not exists public.print_orders (
   printed_at timestamptz
 );
 
+-- Generating the PDF is not the same event as the canvas coming off the roll
+-- intact. We stamp this when the PDF is built, and leave the order in the
+-- queue until the operator confirms the print actually worked.
+alter table public.print_orders
+add column if not exists pdf_generated_at timestamptz;
+
+-- One row per roll-print run. page_length_inches is stored alongside the
+-- calibration values because each of them is relative to it — a 0.3" skew
+-- means nothing without knowing it spanned 18".
+create table if not exists public.print_runs (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  roll_width_inches numeric,
+  copies integer,
+  y_scale numeric,
+  x_offset_inches numeric,
+  skew_correction_inches numeric,
+  side_margin_inches numeric,
+  gap_inches numeric,
+  logo_x_offset_inches numeric,
+  logo_y_offset_inches numeric,
+  include_alignment_test boolean,
+  page_length_inches numeric,
+  project_ids jsonb,
+  print_order_ids jsonb,
+  designs jsonb
+);
+
+-- It usually takes a few PDFs before one prints correctly, so the log needs to
+-- say which attempt actually worked. Without this every run looks equally
+-- authoritative and "reuse settings" is a coin flip.
+alter table public.print_runs
+add column if not exists outcome text;
+
+alter table public.print_runs
+add column if not exists outcome_note text;
+
+alter table public.print_runs
+add column if not exists outcome_at timestamptz;
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
@@ -59,5 +99,6 @@ grant select, insert, update, delete on table public.gallery_likes to service_ro
 grant select, insert, update on table public.creator_earnings to service_role;
 grant select, insert, update, delete on table public.creator_signatures to service_role;
 grant select, insert, update, delete on table public.print_orders to service_role;
+grant select, insert, update on table public.print_runs to service_role;
 
 grant usage, select on all sequences in schema public to service_role;

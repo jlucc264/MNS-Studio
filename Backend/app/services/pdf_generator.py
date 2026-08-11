@@ -1077,6 +1077,7 @@ def generate_roll_print_pdf(
     y_scale: float = 1.0,
     logo_offset_in: tuple[float, float] = (0.0, 0.0),
     side_margin_inches: float | None = None,
+    info_out: dict | None = None,
 ) -> Path:
     """`designs` items may include an optional `signature` (a SignatureAsset,
     already resolved to the design's creator) and/or `sku` (a SkuAsset, read
@@ -1139,6 +1140,24 @@ def generate_roll_print_pdf(
         })
 
     total_h = sum(lay["draw_h"] for lay in layouts) + gap_pts * max(0, len(layouts) - 1)
+
+    # Filled for the caller's print log. An out-param rather than a changed
+    # return type because the page length is incidental to generating the PDF
+    # but is the number every calibration value is relative to — a skew of
+    # 0.3" means nothing without knowing it spanned 18".
+    if info_out is not None:
+        info_out["page_length_inches"] = round(total_h / 72, 4)
+        info_out["roll_width_inches"] = roll_width_inches
+        info_out["designs"] = [
+            {
+                "label": d.get("label") or "",
+                "mesh": d.get("mesh_count", 18),
+                "printed_w_in": round(lay["draw_w"] / 72, 4),
+                "printed_h_in": round(lay["draw_h"] / 72, 4),
+                "rotated": lay["rotate"],
+            }
+            for d, lay in zip(designs, layouts)
+        ]
 
     output_path = FINALIZED_DIR / "admin_roll_print.pdf"
     pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))

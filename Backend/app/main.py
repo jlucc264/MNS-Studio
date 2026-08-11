@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from app.models import (
     ContactRequest,
     ImportUrlRequest,
+    PrintOrderIdsRequest,
+    PrintRunOutcomeRequest,
     RollPrintRequest,
     ReplayCheckoutSessionRequest,
     LlmChatRequest,
@@ -1031,12 +1033,31 @@ def _handle_completed_session(session) -> None:
             try:
                 item_meta = json.loads(raw)
             except Exception:
+                # Skipping here drops the item from the attachments AND from the
+                # print_orders rows below, so it must never pass unnoticed.
+                logger.exception(
+                    "Cart item %d of %d unreadable for session %s — item will be MISSING "
+                    "from the order email and the print queue. Raw metadata: %r",
+                    i + 1, item_count, session.get("id"), raw,
+                )
                 continue
             ip = item_meta.get("ip")
             if ip:
                 item_pdf = download_from_supabase_storage(ip, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
                 if item_pdf:
                     cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
+                else:
+                    logger.error(
+                        "Cart item %d of %d: production PDF %s could not be downloaded for "
+                        "session %s — order email will be short one attachment.",
+                        i + 1, item_count, ip, session.get("id"),
+                    )
+            else:
+                logger.error(
+                    "Cart item %d of %d has no internal PDF path for session %s — order "
+                    "email will be short one attachment.",
+                    i + 1, item_count, session.get("id"),
+                )
             pdf_url = item_meta.get("pdf")
             if pdf_url:
                 try:
@@ -1200,7 +1221,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         get_project as db_get_project,
         get_project_by_id,
         get_print_order,
-        mark_print_orders_printed,
+        mark_print_orders_pdf_generated,
     )
 
     designs = []
@@ -1238,6 +1259,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
 
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72
+    print_info: dict = {}
     try:
         path = generate_roll_print_pdf(
             designs,
@@ -1248,13 +1270,42 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             y_scale=request.y_scale,
             logo_offset_in=(request.logo_x_offset_inches, request.logo_y_offset_inches),
             side_margin_inches=request.side_margin_inches,
+            info_out=print_info,
         )
     except ValueError as exc:
         # A design too wide for the loaded roll — actionable, not a server fault.
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Log what was actually run. Calibration values are meaningless without the
+    # page length they were measured against, so record that alongside them.
+    # Best-effort — a logging failure must never cost the operator their PDF.
+    try:
+        from app.services.supabase_db import create_print_run
+        create_print_run({
+            "roll_width_inches": request.roll_width_inches,
+            "copies": request.copies,
+            "y_scale": request.y_scale,
+            "x_offset_inches": request.x_offset_inches,
+            "skew_correction_inches": request.skew_correction_inches,
+            "side_margin_inches": request.side_margin_inches,
+            "gap_inches": request.gap_inches,
+            "logo_x_offset_inches": request.logo_x_offset_inches,
+            "logo_y_offset_inches": request.logo_y_offset_inches,
+            "include_alignment_test": request.include_alignment_test,
+            "page_length_inches": print_info.get("page_length_inches"),
+            "project_ids": request.project_ids,
+            "print_order_ids": request.print_order_ids,
+            "designs": print_info.get("designs"),
+        })
+    except Exception:
+        logger.exception("Failed to log print run for roll print")
+
+    # Deliberately not marked printed here. A PDF that downloaded is not a
+    # canvas that printed — it can still jam, skew, or run short — and an order
+    # that leaves the queue at download time is one you cannot recover when
+    # that happens. The operator confirms the print, and only that retires it.
     if request.print_order_ids:
-        mark_print_orders_printed(request.print_order_ids)
+        mark_print_orders_pdf_generated(request.print_order_ids)
 
     return FileResponse(
         str(path),
@@ -1268,6 +1319,48 @@ def admin_list_print_orders(user_id: str = Depends(get_current_user_id)):
     _require_admin(user_id)
     from app.services.supabase_db import list_pending_print_orders
     return list_pending_print_orders()
+
+
+@app.get("/admin/print-orders/completed")
+def admin_list_completed_print_orders(limit: int = 50, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_completed_print_orders
+    return list_completed_print_orders(min(max(limit, 1), 200))
+
+
+@app.post("/admin/print-orders/mark-printed")
+def admin_mark_print_orders_printed(request: PrintOrderIdsRequest, user_id: str = Depends(get_current_user_id)):
+    """Retire orders once the canvas is actually off the roll and good."""
+    _require_admin(user_id)
+    from app.services.supabase_db import mark_print_orders_printed
+    mark_print_orders_printed(request.print_order_ids)
+    return {"ok": True, "count": len(request.print_order_ids)}
+
+
+@app.post("/admin/print-orders/reopen")
+def admin_reopen_print_orders(request: PrintOrderIdsRequest, user_id: str = Depends(get_current_user_id)):
+    """Undo — puts an order back in the queue to be printed again."""
+    _require_admin(user_id)
+    from app.services.supabase_db import reopen_print_orders
+    reopen_print_orders(request.print_order_ids)
+    return {"ok": True, "count": len(request.print_order_ids)}
+
+
+@app.get("/admin/print-runs")
+def admin_list_print_runs(limit: int = 25, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_print_runs
+    return list_print_runs(min(max(limit, 1), 100))
+
+
+@app.post("/admin/print-runs/outcome")
+def admin_set_print_run_outcome(request: PrintRunOutcomeRequest, user_id: str = Depends(get_current_user_id)):
+    """Record whether a run's PDF actually printed correctly. Several attempts
+    usually precede a good one, and the log is worthless if they all look alike."""
+    _require_admin(user_id)
+    from app.services.supabase_db import set_print_run_outcome
+    set_print_run_outcome(request.print_run_id, request.outcome, request.outcome_note)
+    return {"ok": True}
 
 
 @app.post("/admin/replay-checkout-session")

@@ -352,5 +352,16 @@ class RollPrintRequest(BaseModel):
     side_margin_inches: Optional[float] = Field(None, ge=0.0, le=4.0)
 
 
+class PrintOrderIdsRequest(BaseModel):
+    print_order_ids: list[str] = []
+
+
+class PrintRunOutcomeRequest(BaseModel):
+    print_run_id: str
+    # "good" | "bad", or None to clear a verdict recorded too early.
+    outcome: Optional[str] = Field(None, pattern="^(good|bad)$")
+    outcome_note: Optional[str] = Field(None, max_length=300)
+
+
 class ReplayCheckoutSessionRequest(BaseModel):
     session_id: str

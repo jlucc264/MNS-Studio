@@ -526,9 +526,118 @@ def create_print_order(
     })
 
 
+def create_print_run(record: dict) -> None:
+    """Append one roll-print run to the log. Best-effort: a failure here must
+    never lose the operator their PDF, so callers swallow exceptions."""
+    _request("POST", "/print_runs", body=record)
+
+
+def set_print_run_outcome(print_run_id: str, outcome: str | None, note: str | None = None) -> None:
+    """Mark a run good or bad after seeing the canvas. `outcome` of None clears
+    the verdict, for when a run was judged too early."""
+    encoded = quote(print_run_id, safe="")
+    _request(
+        "PATCH", "/print_runs",
+        params=f"id=eq.{encoded}",
+        body={
+            "outcome": outcome,
+            "outcome_note": note,
+            "outcome_at": datetime.now(timezone.utc).isoformat() if outcome else None,
+        },
+    )
+
+
+def list_print_runs(limit: int = 25) -> list[dict]:
+    result = _request(
+        "GET", "/print_runs",
+        params=f"order=created_at.desc&limit={int(limit)}&select=*",
+    )
+    return result if isinstance(result, list) else []
+
+
+def _resolve_order_titles(orders: list[dict]) -> list[dict]:
+    """Fill in titles the checkout never recorded.
+
+    Cart items carry no title in their Stripe metadata — only ids — so every
+    cart order lands with title NULL and shows up as "Untitled". Rather than
+    widen the metadata (it is capped at 500 chars per value, and it would only
+    help future orders), look the name up from the ids we do have. Two batched
+    queries regardless of how many orders are on screen.
+    """
+    missing = [o for o in orders if not o.get("title")]
+    if not missing:
+        return orders
+
+    gallery_ids = {o["gallery_item_id"] for o in missing if o.get("gallery_item_id")}
+    project_ids = {o["project_id"] for o in missing if o.get("project_id")}
+
+    def _lookup(path: str, ids: set[str], name_col: str) -> dict[str, str]:
+        if not ids:
+            return {}
+        joined = ",".join(f'"{quote(i, safe="")}"' for i in ids)
+        try:
+            rows = _request("GET", path, params=f"id=in.({joined})&select=id,{name_col}")
+        except Exception:
+            # A title is a convenience; failing to resolve one must never take
+            # down the print queue itself.
+            logger.exception("Could not resolve titles from %s", path)
+            return {}
+        if not isinstance(rows, list):
+            return {}
+        return {r["id"]: r[name_col] for r in rows if r.get("id") and r.get(name_col)}
+
+    gallery_titles = _lookup("/gallery_items", gallery_ids, "title")
+    project_names = _lookup("/projects", project_ids, "name")
+
+    for o in missing:
+        # Gallery title wins: on a gallery print the buyer chose that listing,
+        # and the underlying project may be named something else entirely.
+        o["title"] = (
+            gallery_titles.get(o.get("gallery_item_id") or "")
+            or project_names.get(o.get("project_id") or "")
+            or None
+        )
+    return orders
+
+
 def list_pending_print_orders() -> list[dict]:
     result = _request("GET", "/print_orders", params="status=eq.pending&order=created_at.asc&select=*")
-    return result if isinstance(result, list) else []
+    return _resolve_order_titles(result) if isinstance(result, list) else []
+
+
+def list_completed_print_orders(limit: int = 50) -> list[dict]:
+    """Most recently printed first. Kept queryable so a finished order stays
+    on screen — a printed order that vanishes is one you cannot check."""
+    result = _request(
+        "GET", "/print_orders",
+        params=f"status=eq.printed&order=printed_at.desc&limit={int(limit)}&select=*",
+    )
+    return _resolve_order_titles(result) if isinstance(result, list) else []
+
+
+def mark_print_orders_pdf_generated(print_order_ids: list[str]) -> None:
+    """Records that a PDF went out for these, without retiring them. The order
+    stays pending until someone confirms the canvas actually printed."""
+    stamp = datetime.now(timezone.utc).isoformat()
+    for pid in print_order_ids:
+        encoded = quote(pid, safe="")
+        _request(
+            "PATCH", "/print_orders",
+            params=f"id=eq.{encoded}",
+            body={"pdf_generated_at": stamp},
+        )
+
+
+def reopen_print_orders(print_order_ids: list[str]) -> None:
+    """Put a printed order back in the queue — the reprint path for when a
+    canvas jams, skews, or comes off the roll short."""
+    for pid in print_order_ids:
+        encoded = quote(pid, safe="")
+        _request(
+            "PATCH", "/print_orders",
+            params=f"id=eq.{encoded}",
+            body={"status": "pending", "printed_at": None},
+        )
 
 
 def get_print_order(print_order_id: str) -> dict | None:

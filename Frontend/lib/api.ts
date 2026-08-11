@@ -483,6 +483,111 @@ export async function listProjects(accessToken?: string | null): Promise<Project
   return res.json()
 }
 
+export type PrintOrder = {
+  id: string
+  stripe_session_id: string
+  order_type: string
+  project_id: string | null
+  gallery_item_id: string | null
+  buyer_user_id: string | null
+  title: string | null
+  width_inches: number | null
+  height_inches: number | null
+  status?: string | null
+  created_at?: string | null
+  /** Set when a roll-print PDF was generated including this order. Not the
+   *  same as printed — the canvas can still jam or come off short. */
+  pdf_generated_at?: string | null
+  printed_at?: string | null
+}
+
+/** Paid orders still waiting to be printed, oldest first. Admin only. */
+export async function listPendingPrintOrders(accessToken: string): Promise<PrintOrder[]> {
+  const res = await fetch(`${API_BASE}/admin/print-orders`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load print orders')
+  return res.json()
+}
+
+/** Orders confirmed printed, most recent first. Admin only. */
+export async function listCompletedPrintOrders(accessToken: string, limit = 50): Promise<PrintOrder[]> {
+  const res = await fetch(`${API_BASE}/admin/print-orders/completed?limit=${limit}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load completed orders')
+  return res.json()
+}
+
+/** Retire orders — call once the canvas is off the roll and good. */
+export async function markPrintOrdersPrinted(ids: string[], accessToken: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/print-orders/mark-printed`, {
+    method: 'POST',
+    headers: { ...jsonHeaders(accessToken) },
+    body: JSON.stringify({ print_order_ids: ids }),
+  })
+  if (!res.ok) throw new Error('Could not mark printed')
+}
+
+/** Undo — puts a completed order back in the queue to print again. */
+export async function reopenPrintOrders(ids: string[], accessToken: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/print-orders/reopen`, {
+    method: 'POST',
+    headers: { ...jsonHeaders(accessToken) },
+    body: JSON.stringify({ print_order_ids: ids }),
+  })
+  if (!res.ok) throw new Error('Could not reopen order')
+}
+
+export type PrintRun = {
+  id: string
+  created_at: string
+  roll_width_inches: number | null
+  copies: number | null
+  y_scale: number | null
+  x_offset_inches: number | null
+  skew_correction_inches: number | null
+  side_margin_inches: number | null
+  gap_inches: number | null
+  logo_x_offset_inches: number | null
+  logo_y_offset_inches: number | null
+  include_alignment_test: boolean | null
+  /** Total printed length. Every calibration value is relative to this — a
+   *  skew of 0.3" means nothing without knowing it spanned 18". */
+  page_length_inches: number | null
+  project_ids: string[] | null
+  print_order_ids: string[] | null
+  designs: Array<{ label: string; mesh: number; printed_w_in: number; printed_h_in: number; rotated: boolean }> | null
+  /** Whether this attempt actually printed correctly. Null until judged. */
+  outcome?: 'good' | 'bad' | null
+  outcome_note?: string | null
+  outcome_at?: string | null
+}
+
+/** Record whether a run printed correctly. Pass null to clear a verdict. */
+export async function setPrintRunOutcome(
+  printRunId: string,
+  outcome: 'good' | 'bad' | null,
+  accessToken: string,
+  note?: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/print-runs/outcome`, {
+    method: 'POST',
+    headers: { ...jsonHeaders(accessToken) },
+    body: JSON.stringify({ print_run_id: printRunId, outcome, outcome_note: note ?? null }),
+  })
+  if (!res.ok) throw new Error('Could not save print run outcome')
+}
+
+/** Recent roll-print runs, newest first. Admin only. */
+export async function listPrintRuns(accessToken: string, limit = 25): Promise<PrintRun[]> {
+  const res = await fetch(`${API_BASE}/admin/print-runs?limit=${limit}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load print runs')
+  return res.json()
+}
+
 export async function saveProject(payload: ProjectSavePayload, accessToken?: string | null): Promise<Project> {
   const res = await fetch(`${API_BASE}/projects`, {
     method: 'POST',
@@ -1112,6 +1217,9 @@ export async function downloadCalibrationPdf(accessToken: string, nozzle = true,
 
 export interface RollPrintOptions {
   copies?: number
+  /** Pending print-order ids to include. The backend marks these printed once
+   *  the PDF generates, so passing them closes the fulfilment loop. */
+  printOrderIds?: string[]
   /** Feed width of the roll loaded in the printer. Backend caps this at 19". */
   rollWidthInches?: number
   gapInches?: number
@@ -1139,6 +1247,7 @@ export async function downloadRollPrintPdf(
     headers: { ...jsonHeaders(accessToken) },
     body: JSON.stringify({
       project_ids: projectIds,
+      print_order_ids: opts.printOrderIds ?? [],
       copies: opts.copies ?? 1,
       roll_width_inches: opts.rollWidthInches ?? MAX_ROLL_WIDTH_INCHES,
       gap_inches: opts.gapInches ?? 0,
