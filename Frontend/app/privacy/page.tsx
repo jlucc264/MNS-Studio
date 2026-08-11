@@ -78,15 +78,12 @@ export default function PrivacyPage() {
         </div>
         <div style={{ display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
           <Link href="/terms" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Terms</Link>
-          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none' }}>Contact Us</Link>
-          {session && (
-            <NavAccountControls
-              user={user}
-              onProfile={() => void handleViewProfile()}
-              onLogout={() => { void signOut() }}
-              onStudio={() => router.push('/studio')}
-            />
-          )}
+          <NavAccountControls
+            user={user}
+            onProfile={() => void handleViewProfile()}
+            onLogout={() => { void signOut() }}
+            onStudio={() => router.push('/studio')}
+          />
         </div>
       </nav>
 

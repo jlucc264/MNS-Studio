@@ -306,16 +306,13 @@ export default function CreatorProfilePage() {
           ← Gallery
         </Link>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13 }}>Contact Us</Link>
           <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
-          {session && (
-            <NavAccountControls
-              user={user}
-              onProfile={() => void handleViewProfile()}
-              onLogout={() => { void signOut() }}
-              onStudio={() => router.push('/studio')}
-            />
-          )}
+          <NavAccountControls
+            user={user}
+            onProfile={() => void handleViewProfile()}
+            onLogout={() => { void signOut() }}
+            onStudio={() => router.push('/studio')}
+          />
         </div>
       </nav>
 

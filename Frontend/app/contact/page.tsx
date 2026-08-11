@@ -124,14 +124,12 @@ export default function ContactPage() {
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <span style={{ color: '#fffdf8', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>Contact Us</span>
-          {session && (
-            <NavAccountControls
-              user={user}
-              onProfile={() => void handleViewProfile()}
-              onLogout={() => { void signOut() }}
-              onStudio={() => router.push('/studio')}
-            />
-          )}
+          <NavAccountControls
+            user={user}
+            onProfile={() => void handleViewProfile()}
+            onLogout={() => { void signOut() }}
+            onStudio={() => router.push('/studio')}
+          />
         </div>
       </nav>
 

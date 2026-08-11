@@ -363,26 +363,21 @@ export default function DraftsPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
-            Contact Us
-          </Link>
-          {session && (
-            <NavAccountControls
-              user={user}
-              onProfile={async () => {
-                if (!session?.access_token) return
-                try {
-                  const profile = await getMyCreatorProfile(session.access_token)
-                  router.push(profile.slug ? `/gallery/${profile.slug}` : '/gallery')
-                } catch {
-                  router.push('/gallery')
-                }
-              }}
-              onLogout={() => setShowLogoutConfirm(true)}
-              onStudio={() => router.push('/studio')}
-              onAdmin={() => router.push('/admin')}
-            />
-          )}
+          <NavAccountControls
+            user={user}
+            onProfile={async () => {
+              if (!session?.access_token) return
+              try {
+                const profile = await getMyCreatorProfile(session.access_token)
+                router.push(profile.slug ? `/gallery/${profile.slug}` : '/gallery')
+              } catch {
+                router.push('/gallery')
+              }
+            }}
+            onLogout={() => setShowLogoutConfirm(true)}
+            onStudio={() => router.push('/studio')}
+            onAdmin={() => router.push('/admin')}
+          />
         </div>
       </nav>
 

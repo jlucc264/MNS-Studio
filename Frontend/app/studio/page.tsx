@@ -4916,28 +4916,19 @@ function StudioPage() {
               <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
             )}
           </button>
-          {!showPortraitWarning && (
-            <button
-              type="button"
-              onClick={() => navigateAwayFromStudio('/contact')}
-              style={{ border: 0, background: 'transparent', font: 'inherit', color: '#fffdf8', padding: 0, cursor: 'pointer', fontWeight: 600, fontSize: isMobile ? 12 : 13, whiteSpace: 'nowrap' }}
-            >
-              Contact Us
-            </button>
-          )}
-          {session ? (
-            <NavAccountControls
-              user={user}
-              onProfile={() => void handleViewProfile()}
-              onLogout={() => setShowLogoutConfirm(true)}
-              onAdmin={() => navigateAwayFromStudio('/admin')}
-              pendingCents={pendingCents}
-            />
-          ) : (
+          {!session && (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
               Log in
             </button>
           )}
+          <NavAccountControls
+            user={user}
+            onProfile={() => void handleViewProfile()}
+            onLogout={() => setShowLogoutConfirm(true)}
+            onAdmin={() => navigateAwayFromStudio('/admin')}
+            onNavigate={navigateAwayFromStudio}
+            pendingCents={pendingCents}
+          />
         </div>
       </nav>
       )}

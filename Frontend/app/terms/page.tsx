@@ -7,7 +7,7 @@ import { NavAccountControls } from '../../components/NavAccountControls'
 import { useAuth } from '../../components/AuthProvider'
 import { getMyCreatorProfile } from '../../lib/api'
 
-const EFFECTIVE_DATE = 'June 2, 2026'
+const EFFECTIVE_DATE = 'August 10, 2026'
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -78,15 +78,12 @@ export default function TermsPage() {
         </div>
         <div style={{ display: 'flex', gap: 18, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
           <Link href="/privacy" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Privacy</Link>
-          <Link href="/contact" style={{ color: '#fffdf8', textDecoration: 'none' }}>Contact Us</Link>
-          {session && (
-            <NavAccountControls
-              user={user}
-              onProfile={() => void handleViewProfile()}
-              onLogout={() => { void signOut() }}
-              onStudio={() => router.push('/studio')}
-            />
-          )}
+          <NavAccountControls
+            user={user}
+            onProfile={() => void handleViewProfile()}
+            onLogout={() => { void signOut() }}
+            onStudio={() => router.push('/studio')}
+          />
         </div>
       </nav>
 
@@ -247,7 +244,39 @@ export default function TermsPage() {
             </Sub>
           </Section>
 
-          <Section title="6. Prohibited Uses">
+          <Section title="6. Canvas Print Guarantee">
+            <p style={p}>
+              We print to order and we stand behind what we ship. If there is a problem with a canvas you
+              received from us — a print defect, a colour that did not come out as shown, damage in
+              transit, or a canvas that does not match the design you ordered — we will refund the price
+              of that canvas.
+            </p>
+            <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
+              <li style={li}>
+                <strong>You have 30 days</strong> from the delivery date to raise the issue with us, by
+                email or through the contact form.
+              </li>
+              <li style={li}>
+                <strong>You keep the canvas and the design.</strong> There is nothing to send back to us.
+              </li>
+              <li style={li}>
+                <strong>The refund covers the price of the canvas itself.</strong> Shipping costs are not
+                refunded.
+              </li>
+              <li style={li}>
+                <strong>The guarantee applies per canvas.</strong> On an order containing several canvases,
+                we refund the ones you had a problem with, not the whole order.
+              </li>
+            </ul>
+            <p style={p}>
+              This guarantee covers the printed canvas we supply. It is not a warranty that a printed
+              canvas will match the precision of a hand-painted one — printing has limits that we are
+              open about — and it does not cover the finished result of stitching, framing, or blocking
+              work carried out on the canvas after you receive it.
+            </p>
+          </Section>
+
+          <Section title="7. Prohibited Uses">
             <p style={p}>You agree not to use the Service to:</p>
             <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
               <li style={li}>Violate any applicable law or regulation</li>
@@ -259,23 +288,27 @@ export default function TermsPage() {
             </ul>
           </Section>
 
-          <Section title="7. Termination">
+          <Section title="8. Termination">
             <p style={p}>
               MNS Studio may suspend or terminate your account at any time, with or without notice, for conduct that we determine
               violates these Terms or is harmful to other users, MNS Studio, or third parties. Upon termination, your license to
-              use the Service ends. Sections 3, 4.4, 8, and 9 survive termination.
+              use the Service ends. Sections 3, 4.4, 6, 9, and 10 survive termination.
             </p>
           </Section>
 
-          <Section title="8. Disclaimers">
+          <Section title="9. Disclaimers">
             <p style={p}>
-              The Service is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo; without warranties of any kind, express
-              or implied. MNS Studio does not warrant that the Service will be uninterrupted, error-free, or free of harmful
-              components. We do not warrant the accuracy or completeness of any content on the platform.
+              Except for the Canvas Print Guarantee in Section 6, the Service is provided &ldquo;as is&rdquo; and
+              &ldquo;as available&rdquo; without warranties of any kind, express or implied. MNS Studio does not warrant
+              that the Service will be uninterrupted, error-free, or free of harmful components. We do not warrant the
+              accuracy or completeness of any content on the platform.
+            </p>
+            <p style={p}>
+              Nothing in this section limits the Canvas Print Guarantee, which we honour on its own terms.
             </p>
           </Section>
 
-          <Section title="9. Limitation of Liability">
+          <Section title="10. Limitation of Liability">
             <p style={p}>
               To the fullest extent permitted by law, MNS Studio and its officers, employees, and affiliates will not be liable
               for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service,
@@ -283,9 +316,13 @@ export default function TermsPage() {
               these Terms or the Service will not exceed the greater of (a) the total royalties paid to you in the three months
               preceding the claim or (b) $100.
             </p>
+            <p style={p}>
+              This cap does not apply to refunds owed under the Canvas Print Guarantee in Section 6. Those are refunded at the
+              price you paid for the canvas, whatever that price was.
+            </p>
           </Section>
 
-          <Section title="10. Privacy">
+          <Section title="11. Privacy">
             <p style={p}>
               Your use of the Service is also governed by our{' '}
               <Link href="/privacy" style={{ color: '#6e8d67' }}>Privacy Policy</Link>, which is incorporated into these Terms by
@@ -293,7 +330,7 @@ export default function TermsPage() {
             </p>
           </Section>
 
-          <Section title="11. Changes to These Terms">
+          <Section title="12. Changes to These Terms">
             <p style={p}>
               We may update these Terms from time to time. When we do, we will post the revised Terms with an updated date at the
               top and notify you via email or in-app notice. Your continued use of the Service after the effective date of any
@@ -301,7 +338,7 @@ export default function TermsPage() {
             </p>
           </Section>
 
-          <Section title="12. Governing Law">
+          <Section title="13. Governing Law">
             <p style={p}>
               These Terms are governed by the laws of the State of New Jersey, without regard to conflict of law principles. Any
               disputes arising under these Terms will be resolved exclusively in the state or federal courts located in Ocean
@@ -309,7 +346,7 @@ export default function TermsPage() {
             </p>
           </Section>
 
-          <Section title="13. Contact">
+          <Section title="14. Contact">
             <p style={{ ...p, marginBottom: 0 }}>
               For questions about these Terms, DMCA notices, design ownership disputes, or any other matter, contact us at:{' '}
               <a href="mailto:john@mns.studio" style={{ color: '#6e8d67', fontWeight: 600 }}>john@mns.studio</a>
