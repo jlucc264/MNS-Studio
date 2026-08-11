@@ -13,6 +13,11 @@ Frontend/node_modules/
 Frontend/.next/
 Frontend/out/
 Frontend/.vercel/
+# Incremental typecheck cache — rewritten by every tsc/build run
+Frontend/tsconfig.tsbuildinfo
+
+# Local screen recordings, not part of the app
+recovered_screen_recordings/
 
 # Python
 __pycache__/
