@@ -91,6 +91,20 @@ add column if not exists outcome_note text;
 alter table public.print_runs
 add column if not exists outcome_at timestamptz;
 
+-- One row per like/sale notification surfaced to a creator in the bell
+-- dropdown. gallery_item_title is denormalized so the dropdown never needs
+-- a join back to gallery_items (which may itself get deleted later).
+create table if not exists public.notifications (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  user_id text not null,
+  type text not null,
+  gallery_item_id text,
+  gallery_item_title text,
+  actor_user_id text,
+  read boolean not null default false
+);
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
@@ -100,5 +114,6 @@ grant select, insert, update on table public.creator_earnings to service_role;
 grant select, insert, update, delete on table public.creator_signatures to service_role;
 grant select, insert, update, delete on table public.print_orders to service_role;
 grant select, insert, update on table public.print_runs to service_role;
+grant select, insert, update on table public.notifications to service_role;
 
 grant usage, select on all sequences in schema public to service_role;

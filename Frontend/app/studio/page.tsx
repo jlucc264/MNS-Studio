@@ -29,6 +29,7 @@ import BeltControls from '../../components/BeltControls'
 import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { NotificationBell } from '../../components/NotificationBell'
 import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
@@ -3864,6 +3865,20 @@ function StudioPage() {
           ? 'Null/X removals are reflected in the current color count.'
           : 'Drag left to reduce colors. Drag back right to restore the generated palette.'}
       </div>
+      {/* The palette slider is where a design is won or lost, so the advice sits
+          here rather than only in a menu nobody opens mid-design. Routed through
+          navigateAwayFromStudio so unsaved work still gets its confirm. */}
+      <button
+        type="button"
+        onClick={() => navigateAwayFromStudio('/tips')}
+        style={{
+          border: 0, background: 'transparent', padding: 0, marginTop: 2,
+          font: 'inherit', fontSize: 12, fontWeight: 600, color: '#6e8d67',
+          textAlign: 'left', cursor: 'pointer', textDecoration: 'underline',
+        }}
+      >
+        Tips for choosing colors &amp; size
+      </button>
     </div>
   )
 
@@ -4921,6 +4936,7 @@ function StudioPage() {
               Log in
             </button>
           )}
+          <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}
             onProfile={() => void handleViewProfile()}

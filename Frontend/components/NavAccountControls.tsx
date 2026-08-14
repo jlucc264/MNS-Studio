@@ -170,7 +170,7 @@ export function NavAccountControls({
               header stays uncluttered on phones and tablets, and they sit
               outside the signed-in block so logged-out visitors — the people
               About is actually written for — can still reach them. */}
-          {([['/about', 'About Us'], ['/contact', 'Contact Us']] as const).map(([href, label]) =>
+          {([['/tips', 'Tips & Tricks'], ['/about', 'About Us'], ['/contact', 'Contact Us']] as const).map(([href, label]) =>
             onNavigate ? (
               <button
                 key={href}

@@ -356,6 +356,10 @@ class PrintOrderIdsRequest(BaseModel):
     print_order_ids: list[str] = []
 
 
+class MarkNotificationsReadRequest(BaseModel):
+    ids: Optional[list[str]] = None
+
+
 class PrintRunOutcomeRequest(BaseModel):
     print_run_id: str
     # "good" | "bad", or None to clear a verdict recorded too early.

@@ -718,6 +718,45 @@ export async function toggleGalleryLike(id: string, accessToken?: string | null)
   return res.json()
 }
 
+export type Notification = {
+  id: string
+  created_at: string
+  user_id: string
+  type: 'like' | 'sale'
+  gallery_item_id: string | null
+  gallery_item_title: string | null
+  actor_user_id: string | null
+  read: boolean
+}
+
+export type NotificationsResponse = {
+  items: Notification[]
+  unread_count: number
+}
+
+export async function listNotifications(accessToken?: string | null): Promise<NotificationsResponse> {
+  const res = await fetch(`${API_BASE}/notifications`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not load notifications')
+  }
+  return res.json()
+}
+
+export async function markNotificationsRead(accessToken?: string | null, ids?: string[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/notifications/read`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ ids: ids ?? null }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail ?? 'Could not update notifications')
+  }
+}
+
 export async function fetchGalleryItemProject(itemId: string): Promise<Record<string, unknown>> {
   const res = await fetch(`${API_BASE}/gallery/${itemId}/project`)
   if (!res.ok) {
@@ -888,7 +927,7 @@ export const MIN_CANVAS_MARGIN_INCHES = 1
 // Max printable: short side is the roll minus the *minimum* margin on both
 // edges; long side is the editor's 20" stage, since the long axis runs down the
 // roll's unbounded feed direction.
-export const MAX_PRINTABLE_SHORT_SIDE = MAX_ROLL_WIDTH_INCHES - 2 * MIN_CANVAS_MARGIN_INCHES // 15
+export const MAX_PRINTABLE_SHORT_SIDE = MAX_ROLL_WIDTH_INCHES - 2 * MIN_CANVAS_MARGIN_INCHES // 17
 export const MAX_PRINTABLE_LONG_SIDE = 20
 
 // Belt mode: a long, narrow strip outside the normal short/long envelope

@@ -8,6 +8,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { NotificationBell } from '../../components/NotificationBell'
 import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
@@ -450,6 +451,7 @@ function GalleryPage() {
               Log in
             </button>
           )}
+          <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}
             onProfile={() => {

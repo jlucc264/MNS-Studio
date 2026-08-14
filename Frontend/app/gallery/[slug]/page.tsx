@@ -6,6 +6,7 @@ import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../../../components/AuthProvider'
 import CheckoutModal from '../../../components/CheckoutModal'
 import { NavAccountControls } from '../../../components/NavAccountControls'
+import { NotificationBell } from '../../../components/NotificationBell'
 import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
 import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
@@ -307,6 +308,7 @@ export default function CreatorProfilePage() {
         </Link>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
+          <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}
             onProfile={() => void handleViewProfile()}

@@ -46,6 +46,7 @@ from app.models import (
     PrintOwnCheckoutRequest,
     CartCheckoutRequest,
     CheckoutResponse,
+    MarkNotificationsReadRequest,
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
@@ -94,6 +95,9 @@ from app.services.supabase_db import (
     get_project_sku,
     upsert_project_sku,
     resolve_root_creator_id,
+    create_notification,
+    list_notifications,
+    mark_notifications_read,
 )
 from app.services.stitch_visualizer import generate_stitch_preview, recolor_stitch_preview, compute_content_bounds, grid_first_render
 from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
@@ -697,6 +701,9 @@ def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id))
     result = toggle_gallery_like(item_id, user_id)
     if result is None:
         raise HTTPException(status_code=502, detail="Could not update gallery like.")
+    owner_id = result.get("user_id")
+    if result.get("liked_by_me") and owner_id and owner_id != user_id:
+        create_notification(owner_id, "like", item_id, result.get("title"), user_id)
     return result
 
 
@@ -732,6 +739,19 @@ def update_my_gallery_creator(request: UpdateCreatorRequest, user_id: str = Depe
 @app.get("/gallery/creator/me/earnings")
 def get_my_earnings(user_id: str = Depends(get_current_user_id)):
     return get_creator_earnings(user_id)
+
+
+@app.get("/notifications")
+def get_my_notifications(user_id: str = Depends(get_current_user_id)):
+    items = list_notifications(user_id)
+    unread_count = sum(1 for n in items if not n.get("read"))
+    return {"items": items, "unread_count": unread_count}
+
+
+@app.post("/notifications/read")
+def mark_my_notifications_read(request: MarkNotificationsReadRequest, user_id: str = Depends(get_current_user_id)):
+    mark_notifications_read(user_id, request.ids)
+    return {"ok": True}
 
 
 # Mirrors Frontend/components/SignatureGridEditor.tsx's GRID_COLS/GRID_ROWS —
@@ -965,7 +985,15 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
 
 # ── Stripe webhook ────────────────────────────────────────────────────────────
 
-def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item_id: str, order_type: str, sale_amount_cents: int) -> None:
+def _record_creator_earnings(
+    session_id: str,
+    creator_user_id: str,
+    gallery_item_id: str,
+    order_type: str,
+    sale_amount_cents: int,
+    buyer_user_id: str | None = None,
+    gallery_item_title: str | None = None,
+) -> None:
     from app.services.supabase_db import _request
     from app.services.canvas_pricing import creator_earnings_cents
     _request("POST", "/creator_earnings", body={
@@ -978,6 +1006,8 @@ def _record_creator_earnings(session_id: str, creator_user_id: str, gallery_item
         "amount_cents": creator_earnings_cents(sale_amount_cents),
         "paid_out": False,
     })
+    if buyer_user_id != creator_user_id:
+        create_notification(creator_user_id, "sale", gallery_item_id, gallery_item_title, buyer_user_id)
 
 
 def _handle_completed_session(session) -> None:
@@ -1070,7 +1100,10 @@ def _handle_completed_session(session) -> None:
             if gi and cu:
                 item_total = (item_meta.get("b", 0) + item_meta.get("cv", 0)) * item_meta.get("qty", 1)
                 try:
-                    _record_creator_earnings(f"{session['id']}_{i}", cu, gi, "cart", item_total)
+                    _record_creator_earnings(
+                        f"{session['id']}_{i}", cu, gi, "cart", item_total,
+                        buyer_user_id=metadata.get("user_id"),
+                    )
                 except Exception:
                     logger.exception("Failed to record cart creator earnings for session %s item %d", session.get("id"), i)
             try:
@@ -1133,7 +1166,11 @@ def _handle_completed_session(session) -> None:
                         "Session %s has no item_total_cents; creator earnings fall back to "
                         "amount_total and will include shipping", session.get("id"),
                     )
-                _record_creator_earnings(session["id"], creator_user_id, gallery_item_id, order_type, item_total)
+                _record_creator_earnings(
+                    session["id"], creator_user_id, gallery_item_id, order_type, item_total,
+                    buyer_user_id=metadata.get("user_id"),
+                    gallery_item_title=metadata.get("title"),
+                )
             except Exception:
                 logger.exception("Failed to record creator earnings for session %s", session.get("id"))
 

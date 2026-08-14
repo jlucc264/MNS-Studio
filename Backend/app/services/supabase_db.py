@@ -502,6 +502,46 @@ def toggle_gallery_like(item_id: str, user_id: str) -> dict | None:
     return None
 
 
+# ── notifications ────────────────────────────────────────────────────────────
+
+def create_notification(
+    user_id: str,
+    type_: str,
+    gallery_item_id: str | None,
+    gallery_item_title: str | None,
+    actor_user_id: str | None,
+) -> None:
+    if not gallery_item_title and gallery_item_id:
+        item = get_gallery_item(gallery_item_id, user_id=None)
+        gallery_item_title = item.get("title") if item else None
+    _request("POST", "/notifications", body={
+        "user_id": user_id,
+        "type": type_,
+        "gallery_item_id": gallery_item_id,
+        "gallery_item_title": gallery_item_title,
+        "actor_user_id": actor_user_id,
+    })
+
+
+def list_notifications(user_id: str, limit: int = 30) -> list[dict]:
+    encoded = quote(user_id, safe="")
+    result = _request(
+        "GET",
+        "/notifications",
+        params=f"user_id=eq.{encoded}&order=created_at.desc&limit={limit}&select=*",
+    )
+    return result if isinstance(result, list) else []
+
+
+def mark_notifications_read(user_id: str, ids: list[str] | None = None) -> None:
+    encoded = quote(user_id, safe="")
+    params = f"user_id=eq.{encoded}&read=eq.false"
+    if ids:
+        encoded_ids = ",".join(quote(i, safe="") for i in ids)
+        params += f"&id=in.({encoded_ids})"
+    _request("PATCH", "/notifications", body={"read": True}, params=params)
+
+
 # ── print fulfillment ───────────────────────────────────────────────────────
 
 def create_print_order(

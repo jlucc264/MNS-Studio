@@ -7,6 +7,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { useAuth } from '../../components/AuthProvider'
 import { assetUrl, deleteProject, getCanvasForDesign, getMyCreatorProfile, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
 import { NavAccountControls } from '../../components/NavAccountControls'
+import { NotificationBell } from '../../components/NotificationBell'
 import { useIsTouch } from '../../lib/useViewport'
 
 const btnPrimary = {
@@ -363,6 +364,7 @@ export default function DraftsPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}
             onProfile={async () => {
