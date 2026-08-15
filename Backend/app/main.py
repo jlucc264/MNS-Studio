@@ -1072,29 +1072,56 @@ def _handle_completed_session(session) -> None:
                 )
                 continue
             ip = item_meta.get("ip")
+            item_pdf: bytes | None = None
             if ip:
                 item_pdf = download_from_supabase_storage(ip, bucket_env="SUPABASE_INTERNAL_STORAGE_BUCKET")
-                if item_pdf:
-                    cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
-                else:
+                if not item_pdf:
                     logger.error(
                         "Cart item %d of %d: production PDF %s could not be downloaded for "
-                        "session %s — order email will be short one attachment.",
+                        "session %s — falling back to the public PDF for the order email.",
                         i + 1, item_count, ip, session.get("id"),
                     )
+
+            pdf_url = item_meta.get("pdf")
+            public_pdf: bytes | None = None
+            if not ip or not item_pdf:
+                # Gallery-item cart lines never carry an internal PDF path — the
+                # frontend has no way to know another creator's internal storage
+                # path — so this is the normal case for those, not just a fallback
+                # for download failures. Mirrors the non-cart print_gallery path,
+                # which falls back to pdf_url the same way.
+                if pdf_url:
+                    try:
+                        with _ur.urlopen(pdf_url, timeout=20) as r:
+                            public_pdf = r.read()
+                    except Exception:
+                        logger.exception("Could not fetch public PDF for session %s item %d", session.get("id"), i)
+                item_pdf = item_pdf or public_pdf
+
+            if item_pdf:
+                cart_attachments.append((item_pdf, f"production_report_{i + 1}.pdf"))
             else:
                 logger.error(
-                    "Cart item %d of %d has no internal PDF path for session %s — order "
-                    "email will be short one attachment.",
+                    "Cart item %d of %d has no internal or public PDF available for session "
+                    "%s — order email will be short one attachment.",
                     i + 1, item_count, session.get("id"),
                 )
-            pdf_url = item_meta.get("pdf")
+
             if pdf_url:
-                try:
-                    with _ur.urlopen(pdf_url, timeout=20) as r:
-                        customer_cart_attachments.append((r.read(), f"production_report_{i + 1}.pdf"))
-                except Exception:
-                    logger.exception("Could not fetch cart item PDF for session %s item %d", session.get("id"), i)
+                if public_pdf:
+                    customer_cart_attachments.append((public_pdf, f"production_report_{i + 1}.pdf"))
+                else:
+                    try:
+                        with _ur.urlopen(pdf_url, timeout=20) as r:
+                            customer_cart_attachments.append((r.read(), f"production_report_{i + 1}.pdf"))
+                    except Exception:
+                        logger.exception("Could not fetch cart item PDF for session %s item %d", session.get("id"), i)
+            else:
+                logger.error(
+                    "Cart item %d of %d has no public PDF URL for session %s — customer "
+                    "confirmation email will be short one attachment.",
+                    i + 1, item_count, session.get("id"),
+                )
             gi = item_meta.get("gi")
             cu = item_meta.get("cu")
             if gi and cu:
