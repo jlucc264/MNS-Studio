@@ -20,6 +20,7 @@ import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
 const ORIGIN_TAGS = new Set(['remix', 'from photo', 'graphic art'])
 const WELCOME_STORAGE_KEY = 'mns_welcome_seen'
+const PAGE_SIZE = 30
 
 const shimmerKeyframes = `
 @keyframes gallery-shimmer {
@@ -181,6 +182,8 @@ function GalleryPage() {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'recent' | 'popular'>('recent')
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState('')
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
@@ -251,11 +254,42 @@ function GalleryPage() {
   useEffect(() => {
     setLoading(true)
     setError('')
-    listGalleryItems({ search, sort, accessToken: session?.access_token })
-      .then(setItems)
+    const fetchOptions = search
+      ? { search, sort, accessToken: session?.access_token }
+      : { search, sort, accessToken: session?.access_token, limit: PAGE_SIZE, offset: 0 }
+    listGalleryItems(fetchOptions)
+      .then((result) => {
+        setItems(result)
+        setHasMore(!search && result.length === PAGE_SIZE)
+      })
       .catch(() => setError('Could not load the gallery.'))
       .finally(() => setLoading(false))
   }, [search, sort, session?.access_token])
+
+  function loadMore() {
+    if (!hasMore || loadingMore || search) return
+    setLoadingMore(true)
+    listGalleryItems({ sort, accessToken: session?.access_token, limit: PAGE_SIZE, offset: items.length })
+      .then((result) => {
+        setItems((prev) => [...prev, ...result])
+        setHasMore(result.length === PAGE_SIZE)
+      })
+      .catch(() => setError('Could not load more designs.'))
+      .finally(() => setLoadingMore(false))
+  }
+
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const target = loadMoreRef.current
+    if (!target || !hasMore) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) loadMore()
+    }, { rootMargin: '400px' })
+    observer.observe(target)
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, loadingMore, items.length])
 
   useEffect(() => {
     const itemId = searchParams.get('item')
@@ -832,6 +866,12 @@ function GalleryPage() {
               </article>
             ))}
           </section>
+        )}
+
+        {hasMore && (
+          <div ref={loadMoreRef} style={{ textAlign: 'center', padding: '12px 0', fontSize: 13, color: '#8a8177' }}>
+            {loadingMore ? 'Loading more…' : ''}
+          </div>
         )}
       </main>
 

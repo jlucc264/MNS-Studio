@@ -215,13 +215,24 @@ def _liked_gallery_ids(user_id: str | None) -> set[str]:
     return {row["item_id"] for row in result if row.get("item_id")}
 
 
-def list_gallery_items(search: str | None = None, sort: str = "recent", user_id: str | None = None) -> list[dict]:
+def list_gallery_items(
+    search: str | None = None,
+    sort: str = "recent",
+    user_id: str | None = None,
+    limit: int = 30,
+    offset: int = 0,
+) -> list[dict]:
     order = "like_count.desc,created_at.desc" if sort == "popular" else "created_at.desc"
-    result = _request(
-        "GET",
-        "/gallery_items",
-        params=f"order={order}&limit=80&select=*",
-    )
+    if search:
+        # Filtering happens in Python below, after the fetch — offset-based
+        # paging doesn't compose with that, so search gets one wide fetch
+        # instead of a page at a time. Result sets are small enough that this
+        # stays fast, and it means search can find things a normal page-1
+        # fetch wouldn't reach.
+        params = f"order={order}&limit=500&select=*"
+    else:
+        params = f"order={order}&limit={limit}&offset={offset}&select=*"
+    result = _request("GET", "/gallery_items", params=params)
     items = result if isinstance(result, list) else []
 
     if search:

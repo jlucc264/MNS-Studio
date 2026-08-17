@@ -664,11 +664,19 @@ export type GalleryCreatePayload = {
 }
 
 export async function listGalleryItems(
-  options: { search?: string; sort?: 'recent' | 'popular'; accessToken?: string | null } = {},
+  options: {
+    search?: string
+    sort?: 'recent' | 'popular'
+    accessToken?: string | null
+    offset?: number
+    limit?: number
+  } = {},
 ): Promise<GalleryItem[]> {
   const params = new URLSearchParams()
   if (options.search) params.set('search', options.search)
   if (options.sort) params.set('sort', options.sort)
+  if (options.offset) params.set('offset', String(options.offset))
+  if (options.limit) params.set('limit', String(options.limit))
   const query = params.toString()
   const res = await fetch(`${API_BASE}/gallery${query ? `?${query}` : ''}`, {
     headers: authHeaders(options.accessToken),

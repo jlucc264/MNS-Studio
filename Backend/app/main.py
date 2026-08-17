@@ -659,10 +659,16 @@ def remove_project(project_id: str, user_id: str = Depends(get_current_user_id))
 # ── Gallery ───────────────────────────────────────────────────────────────────
 
 @app.get("/gallery", response_model=list[GalleryItemResponse])
-def get_gallery(search: str = "", sort: str = "recent", user_id: str | None = Depends(get_optional_user_id)):
+def get_gallery(
+    search: str = "",
+    sort: str = "recent",
+    offset: int = 0,
+    limit: int = 30,
+    user_id: str | None = Depends(get_optional_user_id),
+):
     if sort not in {"recent", "popular"}:
         raise HTTPException(status_code=400, detail="Sort must be recent or popular.")
-    return list_gallery_items(search=search, sort=sort, user_id=user_id)
+    return list_gallery_items(search=search, sort=sort, user_id=user_id, limit=min(limit, 60), offset=max(offset, 0))
 
 
 @app.post("/gallery", response_model=GalleryItemResponse, status_code=201)
