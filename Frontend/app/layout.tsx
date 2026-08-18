@@ -2,9 +2,40 @@ import type { Metadata, Viewport } from 'next'
 import { AuthProvider } from '../components/AuthProvider'
 import { Analytics } from '@vercel/analytics/next'
 
+const SITE_DESCRIPTION = 'MNS Studio, by Mantoloking Needlepoint Shop — design needlepoint canvases from your photos and order them printed.'
+
+// Tells Google "MNS Studio" (the product) and "Mantoloking Needlepoint Shop"
+// (the business) are the same entity, so a search for either name can surface
+// this site. No address/LocalBusiness fields — the shop is online-only.
+const ORGANIZATION_JSON_LD = {
+  '@context': 'https://schema.org',
+  '@type': 'Organization',
+  name: 'Mantoloking Needlepoint Shop',
+  alternateName: 'MNS Studio',
+  url: 'https://www.mns.studio',
+  logo: 'https://www.mns.studio/icons/icon-512.png',
+  description: SITE_DESCRIPTION,
+}
+
 export const metadata: Metadata = {
-  title: 'MNS Studio',
-  description: 'Design needlepoint canvases from your photos — edit stitch by stitch, then order the printed canvas.',
+  metadataBase: new URL('https://www.mns.studio'),
+  title: {
+    default: 'MNS Studio',
+    template: '%s — MNS Studio',
+  },
+  description: SITE_DESCRIPTION,
+  openGraph: {
+    siteName: 'MNS Studio',
+    title: 'MNS Studio',
+    description: SITE_DESCRIPTION,
+    images: ['/icons/icon-512.png'],
+  },
+  twitter: {
+    card: 'summary',
+    title: 'MNS Studio',
+    description: SITE_DESCRIPTION,
+    images: ['/icons/icon-512.png'],
+  },
   appleWebApp: {
     capable: true,
     title: 'MNS Studio',
@@ -34,6 +65,10 @@ export default function RootLayout({
           background: '#f5f1ea',
         }}
       >
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION_JSON_LD) }}
+        />
         <AuthProvider>{children}</AuthProvider>
         <Analytics />
       </body>
