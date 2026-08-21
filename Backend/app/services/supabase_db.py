@@ -249,6 +249,23 @@ def list_gallery_items(
     return [_normalize_gallery_item(item, liked_ids) for item in items]
 
 
+def list_gallery_items_by_creator(creator_user_id: str, viewer_user_id: str | None = None) -> list[dict]:
+    """All of one creator's gallery items, unbounded. A creator profile must
+    show every design they've ever posted, not just whichever of them land in
+    list_gallery_items' default 30-row page — that page is sized for the main
+    gallery feed's pagination and has nothing to do with one creator's total
+    item count, so filtering it client-side silently hid a prolific creator's
+    older work once site-wide activity pushed those rows past position 30."""
+    encoded = quote(creator_user_id, safe="")
+    result = _request(
+        "GET", "/gallery_items",
+        params=f"user_id=eq.{encoded}&order=created_at.desc&select=*",
+    )
+    items = result if isinstance(result, list) else []
+    liked_ids = _liked_gallery_ids(viewer_user_id)
+    return [_normalize_gallery_item(item, liked_ids) for item in items]
+
+
 def get_gallery_item(item_id: str, user_id: str | None = None) -> dict | None:
     encoded = quote(item_id, safe="")
     result = _request("GET", "/gallery_items", params=f"id=eq.{encoded}&select=*")
@@ -435,16 +452,17 @@ def update_creator_name(user_id: str, submitter_name: str) -> bool:
 
 
 def get_my_creator_profile(user_id: str) -> dict | None:
-    all_items = list_gallery_items()
+    # This wide fetch is only for resolving the slug (needs a broad view of
+    # every creator's first-seen ordering to disambiguate name collisions) —
+    # the actual item list below is a separate, targeted, unbounded query.
+    all_items = list_gallery_items(limit=1000)
     slug_map = _build_creator_slug_map(all_items)
     my_slug = next((slug for slug, uid in slug_map.items() if uid == user_id), None)
     if my_slug is None:
         return None
-    creator_items = [i for i in all_items if i.get('user_id') == user_id]
-    liked_ids = _liked_gallery_ids(user_id)
-    normalized = [_normalize_gallery_item(i, liked_ids) for i in creator_items]
+    normalized = list_gallery_items_by_creator(user_id, viewer_user_id=user_id)
     submitter_name = next(
-        (i['submitter_name'] for i in creator_items if i.get('submitter_name')),
+        (i['submitter_name'] for i in normalized if i.get('submitter_name')),
         'creator',
     )
     return {
@@ -456,12 +474,12 @@ def get_my_creator_profile(user_id: str) -> dict | None:
 
 
 def get_creator_profile(slug: str, user_id: str | None = None) -> dict | None:
-    all_items = list_gallery_items(user_id=user_id)
+    all_items = list_gallery_items(limit=1000)
     slug_map = _build_creator_slug_map(all_items)
     creator_uid = slug_map.get(slug)
     if not creator_uid:
         return None
-    creator_items = [i for i in all_items if i.get('user_id') == creator_uid]
+    creator_items = list_gallery_items_by_creator(creator_uid, viewer_user_id=user_id)
     submitter_name = next(
         (i['submitter_name'] for i in creator_items if i.get('submitter_name')),
         slug,
