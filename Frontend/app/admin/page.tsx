@@ -12,6 +12,7 @@ import {
   MAX_ROLL_WIDTH_INCHES,
   contentDimensionsInches,
   getCanvasForDesign,
+  deletePrintRun,
   listCompletedPrintOrders,
   listPendingPrintOrders,
   listPrintRuns,
@@ -150,7 +151,7 @@ const styles = {
 
 // Calibration is per-machine and admin-only, so it lives in the browser rather
 // than costing a Supabase table. Keyed by roll width as a string.
-type Calibration = { yScale: number; xOffsetInches: number; skewCorrectionInches: number }
+type Calibration = { yScale: number; xOffsetInches: number; skewCorrectionInches: number; skewCorrectionYInches: number }
 const CALIBRATION_KEY = 'mns_roll_calibration_v1'
 
 function loadCalibration(): Record<string, Calibration> {
@@ -162,14 +163,19 @@ function loadCalibration(): Record<string, Calibration> {
   }
 }
 
-function saveCalibration(rollWidth: number, values: Calibration) {
-  if (typeof window === 'undefined') return
+/** Returns whether the save actually succeeded — private browsing and a full
+ *  localStorage quota (e.g. from the studio's own autosaved design recovery
+ *  snapshot) both fail silently otherwise, and the operator has no way to
+ *  know their calibration didn't stick. */
+function saveCalibration(rollWidth: number, values: Calibration): boolean {
+  if (typeof window === 'undefined') return false
   try {
     const all = loadCalibration()
     all[String(rollWidth)] = values
     localStorage.setItem(CALIBRATION_KEY, JSON.stringify(all))
+    return true
   } catch {
-    /* private browsing or quota — calibration just won't persist */
+    return false
   }
 }
 
@@ -186,6 +192,9 @@ export default function AdminPage() {
   const [orderBusyId, setOrderBusyId] = useState('')
   const [runBusyId, setRunBusyId] = useState('')
   const [runs, setRuns] = useState<PrintRun[]>([])
+  // Good runs are a durable calibration reference, not just recent-attempts
+  // scrollback — fetch enough that an old good one doesn't fall off the list.
+  const [showGoodRunsOnly, setShowGoodRunsOnly] = useState(false)
   const [copies, setCopies] = useState(1)
   const [rollWidthInches, setRollWidthInches] = useState(MAX_ROLL_WIDTH_INCHES)
   const [gapInches, setGapInches] = useState(0)
@@ -195,6 +204,7 @@ export default function AdminPage() {
   const [logoYOffsetInches, setLogoYOffsetInches] = useState(0)
   const [xOffsetInches, setXOffsetInches] = useState(0)
   const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
+  const [skewCorrectionYInches, setSkewCorrectionYInches] = useState(0)
   const [yScale, setYScale] = useState(1.0)
   const [includeAlignmentTest, setIncludeAlignmentTest] = useState(false)
   const [calibBusy, setCalibBusy] = useState(false)
@@ -260,7 +270,7 @@ export default function AdminPage() {
 
   function refreshRuns() {
     if (!session) return
-    listPrintRuns(session.access_token, 15).then(setRuns).catch(() => {})
+    listPrintRuns(session.access_token, 100).then(setRuns).catch(() => {})
   }
 
   useEffect(refreshRuns, [session])
@@ -280,12 +290,30 @@ export default function AdminPage() {
     }
   }
 
+  // Deleting is distinct from marking a run bad: a bad verdict stays visible
+  // on purpose (a warning against reusing it), delete is for junk you never
+  // want to see again. Native confirm since it's irreversible.
+  async function deleteRun(r: PrintRun) {
+    if (!session) return
+    if (!window.confirm('Delete this print run permanently? This cannot be undone.')) return
+    setRunBusyId(r.id)
+    try {
+      await deletePrintRun(r.id, session.access_token)
+      refreshRuns()
+    } catch {
+      setRollError('Could not delete that run.')
+    } finally {
+      setRunBusyId('')
+    }
+  }
+
   function reuseRun(r: PrintRun) {
     if (r.roll_width_inches != null) setRollWidthInches(r.roll_width_inches)
     if (r.copies != null) setCopies(r.copies)
     if (r.y_scale != null) setYScale(r.y_scale)
     if (r.x_offset_inches != null) setXOffsetInches(r.x_offset_inches)
     if (r.skew_correction_inches != null) setSkewCorrectionInches(r.skew_correction_inches)
+    if (r.skew_correction_y_inches != null) setSkewCorrectionYInches(r.skew_correction_y_inches)
     if (r.gap_inches != null) setGapInches(r.gap_inches)
     if (r.logo_x_offset_inches != null) setLogoXOffsetInches(r.logo_x_offset_inches)
     if (r.logo_y_offset_inches != null) setLogoYOffsetInches(r.logo_y_offset_inches)
@@ -310,7 +338,18 @@ export default function AdminPage() {
     setYScale(saved.yScale)
     setXOffsetInches(saved.xOffsetInches)
     setSkewCorrectionInches(saved.skewCorrectionInches)
-    setCalibrationNote(`Loaded saved calibration for ${rollWidthInches}″ roll.`)
+    setSkewCorrectionYInches(saved.skewCorrectionYInches ?? 0)
+    // yScale multiplies the entire print slot (design + margin), so a stale
+    // value from a botched calibration pass silently turns into inches of
+    // blank leader or a stretched print — surface the actual numbers instead
+    // of a bare "loaded" message, and flag it if yScale looks out of range.
+    const yScaleLooksOff = saved.yScale < 0.9 || saved.yScale > 1.1
+    setCalibrationNote(
+      `Loaded saved calibration for ${rollWidthInches}″ roll: `
+      + `length scale ${saved.yScale}, x offset ${saved.xOffsetInches}″, `
+      + `skew ${saved.skewCorrectionInches}″, skew Y ${saved.skewCorrectionYInches ?? 0}″.`
+      + (yScaleLooksOff ? ' ⚠ Length scale is outside the normal 0.9–1.1 range — check before printing.' : '')
+    )
   }, [rollWidthInches])
 
   function toggleOrder(id: string) {
@@ -379,13 +418,20 @@ export default function AdminPage() {
         logoYOffsetInches,
         xOffsetInches,
         skewCorrectionInches,
+        skewCorrectionYInches,
         yScale,
         includeAlignmentTest,
       })
       // Only persist once a print actually generated — a width whose values
       // errored out isn't a calibration worth remembering.
-      saveCalibration(rollWidthInches, { yScale, xOffsetInches, skewCorrectionInches })
-      setCalibrationNote(`Saved calibration for ${rollWidthInches}″ roll.`)
+      const saved = saveCalibration(rollWidthInches, { yScale, xOffsetInches, skewCorrectionInches, skewCorrectionYInches })
+      setCalibrationNote(
+        saved
+          ? `Saved calibration for ${rollWidthInches}″ roll.`
+          : `⚠ Could not save calibration for ${rollWidthInches}″ roll — browser storage is full or unavailable `
+            + `(the print itself still worked). Free up localStorage — Application → Local Storage in DevTools — `
+            + `and try again, or the great settings you just found won't be there next visit.`
+      )
       // Orders deliberately stay selected and in the queue — the PDF is only
       // stamped "PDF sent". They leave when you tick the check, after seeing
       // the canvas come off the roll.
@@ -701,6 +747,17 @@ export default function AdminPage() {
           />
         </div>
         <div style={styles.copiesRow}>
+          <label htmlFor="skewCorrectionY">Skew correction — across width (inches):</label>
+          <input
+            id="skewCorrectionY"
+            type="number"
+            step={0.05}
+            value={skewCorrectionYInches}
+            onChange={e => setSkewCorrectionYInches(parseFloat(e.target.value) || 0)}
+            style={styles.copiesInput}
+          />
+        </div>
+        <div style={styles.copiesRow}>
           <label htmlFor="yScale">Length scale (1.0 = no stretch):</label>
           <input
             id="yScale"
@@ -744,7 +801,9 @@ export default function AdminPage() {
         </div>
         {rollError && <div style={styles.error}>{rollError}</div>}
         {calibrationNote && (
-          <div style={{ marginTop: 12, fontSize: 11, color: '#5a7a52' }}>{calibrationNote}</div>
+          <div style={{ marginTop: 12, fontSize: 11, color: calibrationNote.includes('⚠') ? '#B03A2E' : '#5a7a52' }}>
+            {calibrationNote}
+          </div>
         )}
       </div>
 
@@ -808,8 +867,16 @@ export default function AdminPage() {
           scale and skew value is relative to it — a 0.3″ skew means nothing without knowing
           it spanned 18″.
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12, marginBottom: 10 }}>
+          <input
+            type="checkbox"
+            checked={showGoodRunsOnly}
+            onChange={e => setShowGoodRunsOnly(e.target.checked)}
+          />
+          Show good prints only (calibration reference)
+        </label>
         <div style={{ ...styles.projectList, marginBottom: 0 }}>
-          {runs.map(r => (
+          {runs.filter(r => !showGoodRunsOnly || r.outcome === 'good').map(r => (
             <div
               key={r.id}
               style={{
@@ -874,10 +941,23 @@ export default function AdminPage() {
                   >
                     Reuse settings
                   </button>
+                  <button
+                    type="button"
+                    title="Delete this run permanently"
+                    disabled={runBusyId === r.id}
+                    onClick={() => void deleteRun(r)}
+                    style={{
+                      border: '1px solid #ccc', borderRadius: 6, width: 26, height: 26, padding: 0, lineHeight: 1,
+                      fontSize: 13, cursor: 'pointer', flexShrink: 0, background: '#f4f2ee', color: '#7A817A',
+                    }}
+                  >
+                    🗑
+                  </button>
                 </div>
               </div>
               <div style={{ fontSize: 11, color: '#7A817A' }}>
                 Y {r.y_scale ?? 1} · X {r.x_offset_inches ?? 0}″ · skew {r.skew_correction_inches ?? 0}″
+                {' · '}skew Y {r.skew_correction_y_inches ?? 0}″
                 {' · '}side {r.side_margin_inches == null ? 'auto' : `${r.side_margin_inches}″`}
                 {' · '}gap {r.gap_inches ?? 0}″
                 {(r.logo_x_offset_inches || r.logo_y_offset_inches)

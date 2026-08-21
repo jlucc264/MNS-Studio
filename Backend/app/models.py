@@ -334,6 +334,7 @@ class RollPrintRequest(BaseModel):
     copies: int = 1
     x_offset_inches: float = 0.0
     skew_correction_inches: float = 0.0
+    skew_correction_y_inches: float = 0.0
     y_scale: float = 1.0
     include_alignment_test: bool = False
     # Feed width of the roll actually loaded in the printer. 19" is the

@@ -1329,6 +1329,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
 
     x_offset_pts = request.x_offset_inches * 72
     skew_correction_pts = request.skew_correction_inches * 72
+    skew_correction_y_pts = request.skew_correction_y_inches * 72
     print_info: dict = {}
     try:
         path = generate_roll_print_pdf(
@@ -1337,6 +1338,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             gap_inches=request.gap_inches,
             x_offset_pts=x_offset_pts,
             skew_correction_pts=skew_correction_pts,
+            skew_correction_y_pts=skew_correction_y_pts,
             y_scale=request.y_scale,
             logo_offset_in=(request.logo_x_offset_inches, request.logo_y_offset_inches),
             side_margin_inches=request.side_margin_inches,
@@ -1357,6 +1359,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             "y_scale": request.y_scale,
             "x_offset_inches": request.x_offset_inches,
             "skew_correction_inches": request.skew_correction_inches,
+            "skew_correction_y_inches": request.skew_correction_y_inches,
             "side_margin_inches": request.side_margin_inches,
             "gap_inches": request.gap_inches,
             "logo_x_offset_inches": request.logo_x_offset_inches,
@@ -1430,6 +1433,16 @@ def admin_set_print_run_outcome(request: PrintRunOutcomeRequest, user_id: str = 
     _require_admin(user_id)
     from app.services.supabase_db import set_print_run_outcome
     set_print_run_outcome(request.print_run_id, request.outcome, request.outcome_note)
+    return {"ok": True}
+
+
+@app.delete("/admin/print-runs/{print_run_id}")
+def admin_delete_print_run(print_run_id: str, user_id: str = Depends(get_current_user_id)):
+    """Permanently remove a junk run from the log — distinct from marking one
+    bad, which deliberately keeps it visible as a warning against reuse."""
+    _require_admin(user_id)
+    from app.services.supabase_db import delete_print_run
+    delete_print_run(print_run_id)
     return {"ok": True}
 
 

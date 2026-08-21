@@ -547,6 +547,7 @@ export type PrintRun = {
   y_scale: number | null
   x_offset_inches: number | null
   skew_correction_inches: number | null
+  skew_correction_y_inches: number | null
   side_margin_inches: number | null
   gap_inches: number | null
   logo_x_offset_inches: number | null
@@ -586,6 +587,16 @@ export async function listPrintRuns(accessToken: string, limit = 25): Promise<Pr
   })
   if (!res.ok) throw new Error('Could not load print runs')
   return res.json()
+}
+
+/** Permanently remove a junk run from the log. Distinct from marking one bad
+ *  (setPrintRunOutcome), which deliberately keeps it visible as a warning. */
+export async function deletePrintRun(printRunId: string, accessToken: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/print-runs/${printRunId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not delete print run')
 }
 
 export async function saveProject(payload: ProjectSavePayload, accessToken?: string | null): Promise<Project> {
@@ -1280,6 +1291,7 @@ export interface RollPrintOptions {
   sideMarginInches?: number | null
   xOffsetInches?: number
   skewCorrectionInches?: number
+  skewCorrectionYInches?: number
   yScale?: number
   includeAlignmentTest?: boolean
 }
@@ -1303,6 +1315,7 @@ export async function downloadRollPrintPdf(
       side_margin_inches: opts.sideMarginInches ?? null,
       x_offset_inches: opts.xOffsetInches ?? 0,
       skew_correction_inches: opts.skewCorrectionInches ?? 0,
+      skew_correction_y_inches: opts.skewCorrectionYInches ?? 0,
       y_scale: opts.yScale ?? 1.0,
       include_alignment_test: opts.includeAlignmentTest ?? false,
     }),

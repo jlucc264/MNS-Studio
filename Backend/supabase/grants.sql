@@ -91,6 +91,11 @@ add column if not exists outcome_note text;
 alter table public.print_runs
 add column if not exists outcome_at timestamptz;
 
+-- Shear across the roll's width (one side printing "ahead" of the other),
+-- distinct from skew_correction_inches which corrects drift along the feed.
+alter table public.print_runs
+add column if not exists skew_correction_y_inches numeric;
+
 -- One row per like/sale notification surfaced to a creator in the bell
 -- dropdown. gallery_item_title is denormalized so the dropdown never needs
 -- a join back to gallery_items (which may itself get deleted later).

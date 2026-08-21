@@ -606,6 +606,14 @@ def list_print_runs(limit: int = 25) -> list[dict]:
     return result if isinstance(result, list) else []
 
 
+def delete_print_run(print_run_id: str) -> None:
+    """Permanently remove one run from the log — for junk attempts the
+    operator doesn't want cluttering the list, not a verdict (see
+    set_print_run_outcome for that)."""
+    encoded = quote(print_run_id, safe="")
+    _request("DELETE", "/print_runs", params=f"id=eq.{encoded}")
+
+
 def _resolve_order_titles(orders: list[dict]) -> list[dict]:
     """Fill in titles the checkout never recorded.
 

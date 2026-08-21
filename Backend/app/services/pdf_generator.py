@@ -1074,6 +1074,7 @@ def generate_roll_print_pdf(
     gap_inches: float = 0.0,
     x_offset_pts: float = 0.0,
     skew_correction_pts: float = 0.0,
+    skew_correction_y_pts: float = 0.0,
     y_scale: float = 1.0,
     logo_offset_in: tuple[float, float] = (0.0, 0.0),
     side_margin_inches: float | None = None,
@@ -1168,6 +1169,14 @@ def generate_roll_print_pdf(
     if skew_correction_pts:
         skew_factor = skew_correction_pts / total_h
         pdf.transform(1, 0, skew_factor, 1, -skew_factor * total_h, 0)
+
+    # Same idea, other axis: corrects one side of the roll printing "ahead" of
+    # the other across its width (printhead not perfectly perpendicular to the
+    # feed) rather than drift along the feed direction. Shifts the right edge
+    # of the print by skew_correction_y_pts in Y relative to the left edge.
+    if skew_correction_y_pts:
+        skew_factor_y = skew_correction_y_pts / roll_width_pts
+        pdf.transform(1, skew_factor_y, 0, 1, 0, 0)
 
     y = total_h  # top of available area
 
