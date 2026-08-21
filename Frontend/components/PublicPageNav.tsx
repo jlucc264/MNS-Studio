@@ -13,6 +13,7 @@ import { NavAccountControls } from './NavAccountControls'
 export function PublicPageNav({
   user,
   label,
+  extraLink,
   onProfile,
   onLogout,
   onStudio,
@@ -20,6 +21,10 @@ export function PublicPageNav({
 }: {
   user?: User | null
   label?: string
+  /** A cross-link to a sibling page (e.g. Terms ↔ Privacy). Hidden on mobile
+   *  like `label` — safe as long as the page body also links to it, which
+   *  both legal pages already do. */
+  extraLink?: { href: string; label: string }
   onProfile: () => void
   onLogout: () => void
   onStudio: () => void
@@ -66,6 +71,11 @@ export function PublicPageNav({
       <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
         {label && !isMobile && (
           <span style={{ color: '#fffdf8', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>{label}</span>
+        )}
+        {extraLink && !isMobile && (
+          <Link href={extraLink.href} style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            {extraLink.label}
+          </Link>
         )}
         <NavAccountControls
           user={user}
