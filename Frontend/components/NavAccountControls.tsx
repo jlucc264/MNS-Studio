@@ -61,6 +61,7 @@ export function NavAccountControls({
   onStudio,
   onAdmin,
   onNavigate,
+  onLogin,
   pendingCents,
 }: {
   user?: User | null
@@ -68,6 +69,10 @@ export function NavAccountControls({
   onLogout?: () => void
   onStudio?: () => void
   onAdmin?: () => void
+  /** Signed-out only. Lets callers fold their own "Log in" trigger (auth
+   *  modal, redirect, etc.) into this menu instead of a separate header
+   *  button competing for space next to it. */
+  onLogin?: () => void
   /** Route the public links through the page's own navigation instead of a
    *  plain <Link>. The studio needs this: leaving with unsaved work has to go
    *  through its confirm modal, and a Link would slip straight past it. */
@@ -128,6 +133,15 @@ export function NavAccountControls({
             zIndex: 200,
           }}
         >
+          {!signedIn && onLogin && (
+            <>
+              <button type="button" role="menuitem" onClick={() => { setOpen(false); onLogin() }} style={{ ...itemStyle, fontWeight: 700, color: '#4a7244' }}>
+                Log in
+              </button>
+              <Divider />
+            </>
+          )}
+
           {signedIn && pendingCents !== null && pendingCents !== undefined && pendingCents > 0 && (
             <>
               <div

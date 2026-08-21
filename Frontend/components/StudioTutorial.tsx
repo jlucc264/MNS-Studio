@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const STORAGE_KEY = 'mns_tutorial_seen'
+export const TUTORIAL_STORAGE_KEY = 'mns_tutorial_seen'
+const STORAGE_KEY = TUTORIAL_STORAGE_KEY
 
 interface Step {
   id: string

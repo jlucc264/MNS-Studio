@@ -1,9 +1,8 @@
 'use client'
 
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { type FormEvent, useState } from 'react'
-import { NavAccountControls } from '../../components/NavAccountControls'
+import { PublicPageNav } from '../../components/PublicPageNav'
 import { useAuth } from '../../components/AuthProvider'
 import { getMyCreatorProfile } from '../../lib/api'
 
@@ -92,46 +91,14 @@ export default function ContactPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f1ea' }}>
-      <nav
-        style={{
-          height: 70,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 28px',
-          borderBottom: '1px solid #5c7856',
-          background: '#6e8d67',
-          boxSizing: 'border-box',
-          gap: 16,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-          <Link href="/gallery" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}>
-            <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 9px)', gap: 3, padding: 2 }}>
-              {Array.from({ length: 9 }, (_, i) => (
-                <span key={i} style={{ width: 9, height: 9, border: '2px solid #fffdf8', borderRadius: 2, boxSizing: 'border-box' }} />
-              ))}
-            </div>
-            <strong style={{ fontSize: 22, color: '#fffdf8' }}>MNS Studio</strong>
-          </Link>
-          <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
-          <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            <Link href="/gallery" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Gallery</Link>
-            <Link href="/drafts" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Your Studio</Link>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <span style={{ color: '#fffdf8', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>Contact Us</span>
-          <NavAccountControls
-            user={user}
-            onProfile={() => void handleViewProfile()}
-            onLogout={() => { void signOut() }}
-            onStudio={() => router.push('/studio')}
-          />
-        </div>
-      </nav>
+    <div style={{ minHeight: '100dvh', background: '#f5f1ea' }}>
+      <PublicPageNav
+        user={user}
+        label="Contact Us"
+        onProfile={() => void handleViewProfile()}
+        onLogout={() => { void signOut() }}
+        onStudio={() => router.push('/drafts')}
+      />
 
       <main style={{ maxWidth: 560, margin: '0 auto', padding: '48px 24px 80px' }}>
         <div style={{ marginBottom: 32 }}>

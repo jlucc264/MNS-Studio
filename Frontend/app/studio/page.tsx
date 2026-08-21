@@ -30,7 +30,7 @@ import { AuthPanel } from '../../components/AuthPanel'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { NotificationBell } from '../../components/NotificationBell'
-import { StudioTutorial, useTutorial } from '../../components/StudioTutorial'
+import { StudioTutorial, TUTORIAL_STORAGE_KEY, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
@@ -701,6 +701,17 @@ function StudioPage() {
   const [finishSizeInches, setFinishSizeInches] = useState(4)
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false)
   const isMobile = useIsMobile(BREAKPOINTS.studio)
+  // The interactive tour targets fixed-width popovers anchored to desktop-only
+  // layout elements (data-tutorial=... nodes that don't exist in the mobile
+  // sheet layout) — on a phone it just floats center-screen offering nothing
+  // concrete. Tips & Tricks covers the same ground as static content instead.
+  useEffect(() => {
+    if (tutorial.show && isMobile) {
+      localStorage.setItem(TUTORIAL_STORAGE_KEY, '1')
+      tutorial.close()
+      router.push('/tips')
+    }
+  }, [tutorial, isMobile, router])
   const isTouchDevice = useIsTouch()
   const isPhoneDevice = useIsPhoneDevice()
   const isLandscapeOrientation = useIsLandscape()
@@ -4914,7 +4925,7 @@ function StudioPage() {
         <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', flexShrink: 0 }}>
           <button
             type="button"
-            onClick={tutorial.open}
+            onClick={() => { if (isMobile) router.push('/tips'); else tutorial.open() }}
             aria-label="Show tutorial"
             title="Tutorial"
             style={{ border: '1px solid #d7d0c8', borderRadius: '50%', width: 30, height: 30, padding: 0, lineHeight: 1, background: '#fffdf8', cursor: 'pointer', fontSize: 15, fontWeight: 700, color: '#6e8d67', display: 'grid', placeItems: 'center', flexShrink: 0 }}
@@ -6270,7 +6281,7 @@ function StudioPage() {
         </div>
       )}
 
-      {tutorial.show && !recoveryCandidate && !showLeaveStudioConfirm && (
+      {tutorial.show && !isMobile && !recoveryCandidate && !showLeaveStudioConfirm && (
         <StudioTutorial onClose={tutorial.close} />
       )}
 

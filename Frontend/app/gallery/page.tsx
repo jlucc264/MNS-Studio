@@ -480,7 +480,7 @@ function GalleryPage() {
               <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
             )}
           </button>
-          {!session && (
+          {!session && !isMobile && (
             <button type="button" onClick={() => setShowAuthPrompt(true)} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
               Log in
             </button>
@@ -493,8 +493,9 @@ function GalleryPage() {
               if (slug) router.push(`/gallery/${slug}`)
             }}
             onLogout={() => setShowLogoutConfirm(true)}
-            onStudio={() => router.push('/studio')}
+            onStudio={() => router.push('/drafts')}
             onAdmin={() => router.push('/admin')}
+            onLogin={isMobile ? () => setShowAuthPrompt(true) : undefined}
             pendingCents={pendingCents}
           />
         </div>

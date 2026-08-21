@@ -313,7 +313,7 @@ export default function CreatorProfilePage() {
             user={user}
             onProfile={() => void handleViewProfile()}
             onLogout={() => { void signOut() }}
-            onStudio={() => router.push('/studio')}
+            onStudio={() => router.push('/drafts')}
           />
         </div>
       </nav>

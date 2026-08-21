@@ -377,7 +377,7 @@ export default function DraftsPage() {
               }
             }}
             onLogout={() => setShowLogoutConfirm(true)}
-            onStudio={() => router.push('/studio')}
+            onStudio={() => router.push('/drafts')}
             onAdmin={() => router.push('/admin')}
           />
         </div>
