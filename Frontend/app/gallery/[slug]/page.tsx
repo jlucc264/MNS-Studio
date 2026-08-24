@@ -307,7 +307,6 @@ export default function CreatorProfilePage() {
           ← Gallery
         </Link>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <Link href="/studio" style={{ ...btnSecondary, textDecoration: 'none', fontSize: 13 }}>Open Studio</Link>
           <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}

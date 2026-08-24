@@ -4942,7 +4942,7 @@ function StudioPage() {
               <span style={{ position: 'absolute', top: -4, right: -4, background: '#4a7244', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{cartCount}</span>
             )}
           </button>
-          {!session && (
+          {!session && !isMobile && (
             <button type="button" onClick={() => setAuthPrompt('login')} style={{ ...btnSecondary, fontSize: isMobile ? 12 : 13, padding: isMobile ? '6px 10px' : '8px 13px' }}>
               Log in
             </button>
@@ -4954,6 +4954,7 @@ function StudioPage() {
             onLogout={() => setShowLogoutConfirm(true)}
             onAdmin={() => navigateAwayFromStudio('/admin')}
             onNavigate={navigateAwayFromStudio}
+            onLogin={isMobile ? () => setAuthPrompt('login') : undefined}
             pendingCents={pendingCents}
           />
         </div>
