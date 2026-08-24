@@ -848,6 +848,15 @@ def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_us
     return result
 
 
+@app.get("/gallery/creators")
+def list_gallery_creators():
+    """Public, unauthenticated — feeds the frontend sitemap so creator
+    profile pages are submitted to Google directly instead of relying on
+    crawled links to find them."""
+    from app.services.supabase_db import list_creator_slugs
+    return list_creator_slugs()
+
+
 @app.get("/gallery/by-project/{project_id}")
 def get_gallery_by_project(project_id: str):
     result = get_gallery_item_by_project_id(project_id)

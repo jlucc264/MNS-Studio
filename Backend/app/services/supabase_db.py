@@ -451,6 +451,26 @@ def update_creator_name(user_id: str, submitter_name: str) -> bool:
     return result is not None
 
 
+def list_creator_slugs() -> list[dict]:
+    """Every creator's slug plus their most recent gallery activity — for the
+    sitemap. Without this, /gallery/[slug] pages are only discoverable by
+    Google crawling links to them, not by being told about them directly."""
+    all_items = list_gallery_items(limit=1000)
+    slug_map = _build_creator_slug_map(all_items)
+    latest_by_uid: dict[str, str] = {}
+    for item in all_items:
+        uid = item.get('user_id') or ''
+        created = item.get('created_at') or ''
+        if not uid or not created:
+            continue
+        if uid not in latest_by_uid or created > latest_by_uid[uid]:
+            latest_by_uid[uid] = created
+    return [
+        {'slug': slug, 'updated_at': latest_by_uid.get(uid)}
+        for slug, uid in slug_map.items()
+    ]
+
+
 def get_my_creator_profile(user_id: str) -> dict | None:
     # This wide fetch is only for resolving the slug (needs a broad view of
     # every creator's first-seen ordering to disambiguate name collisions) —

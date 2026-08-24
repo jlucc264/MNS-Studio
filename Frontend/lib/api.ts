@@ -1189,6 +1189,15 @@ export async function getCreatorProfile(slug: string, accessToken?: string | nul
   return res.json()
 }
 
+export type CreatorSlugEntry = { slug: string; updated_at: string | null }
+
+/** Every creator's slug, for the sitemap — public, unauthenticated. */
+export async function listCreatorSlugs(): Promise<CreatorSlugEntry[]> {
+  const res = await fetch(`${API_BASE}/gallery/creators`)
+  if (!res.ok) return []
+  return res.json()
+}
+
 export async function createGalleryPrintCheckout(galleryItemId: string): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/print-gallery/${galleryItemId}`, {
     method: 'POST',
