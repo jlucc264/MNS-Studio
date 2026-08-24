@@ -8,7 +8,7 @@ import { useAuth } from '../../components/AuthProvider'
 import { assetUrl, deleteProject, getCanvasForDesign, getMyCreatorProfile, listProjects, saveProject, updateProject, type Project, type ProjectSavePayload } from '../../lib/api'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { NotificationBell } from '../../components/NotificationBell'
-import { useIsTouch } from '../../lib/useViewport'
+import { BREAKPOINTS, useIsMobile, useIsTouch } from '../../lib/useViewport'
 
 const btnPrimary = {
   padding: '9px 18px',
@@ -88,6 +88,7 @@ function isFinalizedProject(project: Project) {
 export default function DraftsPage() {
   const router = useRouter()
   const isTouch = useIsTouch()
+  const isMobile = useIsMobile(BREAKPOINTS.tablet)
   const { loading: authLoading, session, user, signOut } = useAuth()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -323,7 +324,7 @@ export default function DraftsPage() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0 28px',
+          padding: isMobile ? '0 14px' : '0 28px',
           borderBottom: '1px solid #5c7856',
           background: '#6e8d67',
           boxSizing: 'border-box',
@@ -332,10 +333,10 @@ export default function DraftsPage() {
           zIndex: 50,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0 }}>
           <Link
             href="/gallery"
-            style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', flexShrink: 0 }}
           >
             <div
               aria-hidden="true"
@@ -354,16 +355,20 @@ export default function DraftsPage() {
                 />
               ))}
             </div>
-            <strong style={{ fontSize: 22, color: '#fffdf8' }}>MNS Studio</strong>
+            <strong style={{ fontSize: 22, color: '#fffdf8', whiteSpace: 'nowrap' }}>MNS Studio</strong>
           </Link>
-          <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
-          <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            <Link href="/gallery" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Gallery</Link>
-            <span style={{ color: '#fffdf8', fontWeight: 700 }}>Your Studio</span>
-          </div>
+          {!isMobile && (
+            <>
+              <span style={{ color: 'rgba(255,255,255,0.5)', margin: '0 6px' }}>|</span>
+              <div style={{ display: 'flex', gap: 24, color: '#fffdf8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <Link href="/gallery" style={{ color: 'rgba(255,255,255,0.86)', textDecoration: 'none' }}>Gallery</Link>
+                <span style={{ color: '#fffdf8', fontWeight: 700 }}>Your Studio</span>
+              </div>
+            </>
+          )}
         </div>
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', flexShrink: 0 }}>
           <NotificationBell accessToken={session?.access_token} />
           <NavAccountControls
             user={user}
