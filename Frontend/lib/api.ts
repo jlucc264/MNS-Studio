@@ -499,6 +499,42 @@ export type PrintOrder = {
    *  same as printed — the canvas can still jam or come off short. */
   pdf_generated_at?: string | null
   printed_at?: string | null
+  /** Null for orders placed before this was tracked, or if the Stripe
+   *  backfill couldn't recover a price for it. */
+  amount_total_cents?: number | null
+  /** Resolved from the underlying gallery listing or project — never stored
+   *  on the order itself. Null if both have since been deleted. */
+  mesh_count?: number | null
+}
+
+export type ExpenseTemplate = {
+  id: string
+  created_at: string
+  name: string
+  category: string | null
+  default_amount_cents: number | null
+  notes: string | null
+  archived: boolean
+}
+
+export type Expense = {
+  id: string
+  created_at: string
+  template_id: string | null
+  name: string
+  category: string | null
+  amount_cents: number
+  incurred_on: string
+  notes: string | null
+}
+
+export type SpendSummary = {
+  revenue_cents: number
+  expenses_cents: number
+  net_cents: number
+  order_count: number
+  expense_count: number
+  orders_missing_amount: number
 }
 
 /** Paid orders still waiting to be printed, oldest first. Admin only. */
@@ -537,6 +573,116 @@ export async function reopenPrintOrders(ids: string[], accessToken: string): Pro
     body: JSON.stringify({ print_order_ids: ids }),
   })
   if (!res.ok) throw new Error('Could not reopen order')
+}
+
+/** Every order in a date range regardless of print status — the revenue view. */
+export async function listOrdersInRange(accessToken: string, start?: string, end?: string): Promise<PrintOrder[]> {
+  const params = new URLSearchParams()
+  if (start) params.set('start', start)
+  if (end) params.set('end', end)
+  const res = await fetch(`${API_BASE}/admin/orders?${params}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load orders')
+  return res.json()
+}
+
+export async function getSpendSummary(accessToken: string, start?: string, end?: string): Promise<SpendSummary> {
+  const params = new URLSearchParams()
+  if (start) params.set('start', start)
+  if (end) params.set('end', end)
+  const res = await fetch(`${API_BASE}/admin/spend/summary?${params}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load spend summary')
+  return res.json()
+}
+
+export async function listExpenseTemplates(accessToken: string, includeArchived = false): Promise<ExpenseTemplate[]> {
+  const res = await fetch(`${API_BASE}/admin/expense-templates?include_archived=${includeArchived}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load expense templates')
+  return res.json()
+}
+
+export async function createExpenseTemplate(
+  accessToken: string,
+  data: { name: string; category?: string | null; default_amount_cents?: number | null; notes?: string | null },
+): Promise<ExpenseTemplate> {
+  const res = await fetch(`${API_BASE}/admin/expense-templates`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Could not create expense template')
+  return res.json()
+}
+
+export async function updateExpenseTemplate(
+  accessToken: string,
+  id: string,
+  data: Partial<Pick<ExpenseTemplate, 'name' | 'category' | 'default_amount_cents' | 'notes' | 'archived'>>,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/expense-templates/${id}`, {
+    method: 'PATCH',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Could not update expense template')
+}
+
+export async function deleteExpenseTemplate(accessToken: string, id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/expense-templates/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not delete expense template')
+}
+
+export async function listExpenses(accessToken: string, start?: string, end?: string): Promise<Expense[]> {
+  const params = new URLSearchParams()
+  if (start) params.set('start', start)
+  if (end) params.set('end', end)
+  const res = await fetch(`${API_BASE}/admin/expenses?${params}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not load expenses')
+  return res.json()
+}
+
+export async function createExpense(
+  accessToken: string,
+  data: { name: string; category?: string | null; amount_cents: number; incurred_on: string; notes?: string | null; template_id?: string | null },
+): Promise<Expense> {
+  const res = await fetch(`${API_BASE}/admin/expenses`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Could not create expense')
+  return res.json()
+}
+
+export async function updateExpense(
+  accessToken: string,
+  id: string,
+  data: Partial<Pick<Expense, 'name' | 'category' | 'amount_cents' | 'incurred_on' | 'notes'>>,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/expenses/${id}`, {
+    method: 'PATCH',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Could not update expense')
+}
+
+export async function deleteExpense(accessToken: string, id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/expenses/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not delete expense')
 }
 
 export type PrintRun = {
@@ -820,11 +966,26 @@ const ROLL_COST_CENTS = 34_350        // $343.50 per 40" x 270" roll
 const ROLL_SELLABLE_SQ_IN = 8_100     // 75% of gross; reprint loss removed
 const TARGET_MATERIAL_MARGIN = 0.80
 
-const PRICE_PER_SQ_IN_CENTS =
-  (ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN) / (1 - TARGET_MATERIAL_MARGIN)
-const MIN_CANVAS_PRICE_CENTS = 500
+// Price increase (owner's call), layered on top of the margin-derived rate
+// rather than folded into TARGET_MATERIAL_MARGIN. Calibrated so a 4x4
+// print-own design (8x8 canvas) lands at exactly $18.00 before
+// roundUpTo50Cents below. Keep in sync with canvas_pricing.py.
+const PRICE_INCREASE_MULTIPLIER = 1800 / 1357
 
-export const PRINT_OWN_BASE_CENTS = 700
+const PRICE_PER_SQ_IN_CENTS =
+  ((ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN) / (1 - TARGET_MATERIAL_MARGIN)) * PRICE_INCREASE_MULTIPLIER
+
+/** Every customer-facing price rounds up to the nearest 50 cents — cleaner
+ *  price tags, and rounding up (never down) never gives back any of the
+ *  2026-09-01 increase. Mirrors round_up_to_50_cents in canvas_pricing.py. */
+function roundUpTo50Cents(cents: number): number {
+  return Math.ceil(cents / 50) * 50
+}
+
+// $5.00 originally, scaled by PRICE_INCREASE_MULTIPLIER and rounded up.
+const MIN_CANVAS_PRICE_CENTS = 700
+
+export const PRINT_OWN_BASE_CENTS = 950 // $9.50 ($7 originally, scaled + rounded up)
 
 // A gallery print costs this much more than printing your own, and the markup
 // is passed to the creator 1:1 — so the business nets the same either way.
@@ -837,16 +998,19 @@ export const CREATOR_SHARE_OF_PRINT_OWN = 0.20
 // margin per side turns a 1.25" strap into a 5" canvas, so a flat-rate belt
 // would be ~80% margin the customer never sees.
 const BELT_PRICE_MULTIPLIER = 1.5
-const _LEGACY_ANCHORS: [number, number][] = [[30, 900], [48, 1200], [96, 1400]]
+// Anchor prices scaled by PRICE_INCREASE_MULTIPLIER (originally $9/$12/$14) —
+// curve inputs, not a shown price, so rounded to the cent, not to 50 cents.
+const _LEGACY_ANCHORS: [number, number][] = [[30, 1194], [48, 1592], [96, 1857]]
 
 // The canvas line on the invoice: the whole item at TARGET_MATERIAL_MARGIN,
 // less the fulfillment fee printOwnTotalCents adds back. The margin applies to
 // canvas + fulfillment together, not the canvas alone — see canvas_price_cents
 // in canvas_pricing.py. Floor applied after the subtraction so the smallest
-// canvases still total $12.
+// canvases still total $14.
 function _canvasPriceCents(sqIn: number): number {
   const itemTotal = Math.round(PRICE_PER_SQ_IN_CENTS * sqIn)
-  return Math.max(MIN_CANVAS_PRICE_CENTS, itemTotal - PRINT_OWN_BASE_CENTS)
+  const raw = Math.max(MIN_CANVAS_PRICE_CENTS, itemTotal - PRINT_OWN_BASE_CENTS)
+  return roundUpTo50Cents(raw)
 }
 
 function _legacyAnchorPriceCents(sqIn: number): number {
@@ -865,9 +1029,10 @@ function _legacyAnchorPriceCents(sqIn: number): number {
 }
 
 function _beltCanvasPriceCents(sqIn: number): number {
-  return Math.round(
+  const raw = Math.round(
     BELT_PRICE_MULTIPLIER * _legacyAnchorPriceCents(sqIn) + (BELT_PRICE_MULTIPLIER - 1) * PRINT_OWN_BASE_CENTS
   )
+  return roundUpTo50Cents(raw)
 }
 
 export type CanvasSize = { label: string; canvasW: number; canvasH: number; priceCents: number }
@@ -903,17 +1068,34 @@ export function canvasMarginInches(widthInches: number, heightInches: number): n
   return Math.max(MIN_CANVAS_MARGIN_INCHES, Math.min(CANVAS_MARGIN_INCHES, affordable))
 }
 
+// Standard orders are cut from a small set of pre-cut roll widths rather
+// than a bespoke width per design (8", 10", 12" and 16" are what's actually
+// kept cut) — see get_canvas_for_design in canvas_pricing.py. Always <=
+// STANDARD_MAX_SHORT_SIDE + 2*CANVAS_MARGIN_INCHES (16"), so 16 is a safe
+// last resort. Non-standard orders and belts stay fully continuous.
+const STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
+
 export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
   const margin = canvasMarginInches(widthInches, heightInches)
-  const canvasW = Math.round((widthInches + 2 * margin) * 2) / 2
-  const canvasH = Math.round((heightInches + 2 * margin) * 2) / 2
+  const isBelt = isBeltDesign(widthInches, heightInches)
+  let canvasW: number
+  let canvasH: number
+  if (isStandardOrder(widthInches, heightInches) && !isBelt) {
+    const shortSide = Math.min(widthInches, heightInches) + 2 * margin
+    const longSide = Math.round((Math.max(widthInches, heightInches) + 2 * margin) * 2) / 2
+    const tier = STANDARD_WIDTH_TIERS_IN.find(t => t >= shortSide) ?? STANDARD_WIDTH_TIERS_IN[STANDARD_WIDTH_TIERS_IN.length - 1]
+    ;[canvasW, canvasH] = widthInches <= heightInches ? [tier, longSide] : [longSide, tier]
+  } else {
+    canvasW = Math.round((widthInches + 2 * margin) * 2) / 2
+    canvasH = Math.round((heightInches + 2 * margin) * 2) / 2
+  }
   const sqIn = canvasW * canvasH
   const fmt = (n: number) => n % 1 === 0 ? `${n}` : `${n.toFixed(1)}`
   return {
     label: `${fmt(canvasW)}×${fmt(canvasH)}"`,
     canvasW,
     canvasH,
-    priceCents: isBeltDesign(widthInches, heightInches) ? _beltCanvasPriceCents(sqIn) : _canvasPriceCents(sqIn),
+    priceCents: isBelt ? _beltCanvasPriceCents(sqIn) : _canvasPriceCents(sqIn),
   }
 }
 
@@ -924,7 +1106,8 @@ export function printOwnTotalCents(canvas: CanvasSize): number {
 /** Print-own plus the creator markup. Derived from the print-own total so the
  *  two can never drift apart — do not reintroduce a separate gallery base fee. */
 export function printGalleryTotalCents(canvas: CanvasSize): number {
-  return Math.round(printOwnTotalCents(canvas) * (1 + GALLERY_MARKUP))
+  const raw = Math.round(printOwnTotalCents(canvas) * (1 + GALLERY_MARKUP))
+  return roundUpTo50Cents(raw)
 }
 
 /** What the original designer earns on a gallery print. Mirrors
@@ -934,19 +1117,23 @@ export function creatorEarningsCents(galleryTotalCents: number): number {
   return Math.round((galleryTotalCents / (1 + GALLERY_MARKUP)) * CREATOR_SHARE_OF_PRINT_OWN)
 }
 
-// Widest roll the printer can feed. Mirrors MAX_ROLL_WIDTH_IN in canvas_pricing.py.
-export const MAX_ROLL_WIDTH_INCHES = 19
+// Widest roll the printer can feed. Mirrors MAX_ROLL_WIDTH_IN in
+// canvas_pricing.py. Corrected 2026-08-30 from an assumed 19" — 17" is the
+// printer's real practical max, and even a 17" print struggled.
+export const MAX_ROLL_WIDTH_INCHES = 17
 
-// Unstitched canvas around the design: 2" preferred, 1" floor. Designs too wide
-// for 2" per side get the margin trimmed rather than refused, which is what
-// lets a 17" design print on the 19" roll. See canvasMarginInches.
+// Unstitched canvas around the design: 2" preferred, 1" floor. Designs too
+// wide for 2" per side get the margin trimmed rather than refused. See
+// canvasMarginInches.
 export const CANVAS_MARGIN_INCHES = 2
 export const MIN_CANVAS_MARGIN_INCHES = 1
 
-// Max printable: short side is the roll minus the *minimum* margin on both
-// edges; long side is the editor's 20" stage, since the long axis runs down the
-// roll's unbounded feed direction.
-export const MAX_PRINTABLE_SHORT_SIDE = MAX_ROLL_WIDTH_INCHES - 2 * MIN_CANVAS_MARGIN_INCHES // 17
+// Max printable — the hard ceiling on what can even be drafted in studio,
+// deliberately below what MAX_ROLL_WIDTH_INCHES - 2*MIN_CANVAS_MARGIN_INCHES
+// would allow (15"): real headroom under the printer's practical max, not
+// the theoretical one. Long side is the editor's 20" stage, since the long
+// axis runs down the roll's unbounded feed direction.
+export const MAX_PRINTABLE_SHORT_SIDE = 14
 export const MAX_PRINTABLE_LONG_SIDE = 20
 
 // Belt mode: a long, narrow strip outside the normal short/long envelope
@@ -972,12 +1159,16 @@ export function isBeltDesign(widthInches: number, heightInches: number): boolean
   return short <= BELT_SHORT_MAX_IN && long >= BELT_MIN_LENGTH_IN && long <= BELT_MAX_LENGTH_IN
 }
 
-// Self-serve envelope. A 10×6 design is a 14×10 canvas, which is what the flat
-// $7 shipping is sized to cover. Larger designs still print and can still be
-// designed and saved — they just can't be checked out or posted to the gallery.
-// Mirrors STANDARD_MAX_* / is_standard_order in canvas_pricing.py.
-export const STANDARD_MAX_SHORT_SIDE = 6
-export const STANDARD_MAX_LONG_SIDE = 10
+// Self-serve/gallery envelope. Gated on short side alone (up to 12", the
+// largest size that still fits a pre-cut roll tier — see
+// STANDARD_WIDTH_TIERS_IN); long side has no separate cap beyond the overall
+// printable ceiling. Larger designs still print and can still be designed
+// and saved — they just can't be checked out or posted to the gallery.
+// Raised from 6"x10" to 12"x(printable long max) on 2026-08-30 alongside
+// adding the 12" and 16" roll tiers. Mirrors STANDARD_MAX_* /
+// is_standard_order in canvas_pricing.py.
+export const STANDARD_MAX_SHORT_SIDE = 12
+export const STANDARD_MAX_LONG_SIDE = MAX_PRINTABLE_LONG_SIDE
 
 /** Whether a design can be bought self-serve and posted to the gallery.
  *  Narrower than isDesignPrintable, which only asks whether the roll can print
@@ -989,8 +1180,10 @@ export function isStandardOrder(widthInches: number, heightInches: number): bool
   return short <= STANDARD_MAX_SHORT_SIDE && long <= STANDARD_MAX_LONG_SIDE
 }
 
+// Phrased on width alone — STANDARD_MAX_LONG_SIDE just equals the overall
+// printable ceiling, so width is always what actually trips this gate.
 export const LARGE_PRINT_MESSAGE =
-  `Designs larger than ${STANDARD_MAX_LONG_SIDE}" × ${STANDARD_MAX_SHORT_SIDE}" are printed to order — contact us for a quote on large prints.`
+  `Designs wider than ${STANDARD_MAX_SHORT_SIDE}" are printed to order — contact us for a quote on large prints.`
 
 export function isDesignPrintable(widthInches: number, heightInches: number): boolean {
   if (isBeltDesign(widthInches, heightInches)) return true
@@ -1244,6 +1437,44 @@ export async function downloadBlankRollPdf(accessToken: string, height = 4): Pro
   const url = URL.createObjectURL(blob)
   window.open(url, '_blank')
   setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
+
+/** A length-calibration aid: one continuous line, two 18-mesh stitch widths
+ *  thick, exactly lengthInches tall, with the same 2"-per-side canvas margin
+ *  a real design gets (blank above/below) before yScale scales the whole
+ *  thing — matching how a real roll-print design's total commanded feed
+ *  distance is (content + 4") * yScale, not just content * yScale. Print it
+ *  and measure the line itself (not the blank margin) with a ruler to check
+ *  a candidate yScale before committing real canvas to a job. */
+export type TestLineColor = 'gray' | 'beige' | 'yellow'
+
+export async function downloadTestLinePdf(
+  accessToken: string,
+  lengthInches: number,
+  rollWidthInches = 8,
+  yScale = 1,
+  color: TestLineColor = 'gray',
+): Promise<void> {
+  const params = new URLSearchParams({
+    length: String(lengthInches),
+    roll_width: String(rollWidthInches),
+    y_scale: String(yScale),
+    color,
+  })
+  const res = await fetch(`${API_BASE}/admin/test-line-pdf?${params}`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error((data as { detail?: string }).detail ?? 'Failed to generate test line PDF')
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mns_test_line.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export async function downloadRegistrationTestPdf(accessToken: string): Promise<void> {

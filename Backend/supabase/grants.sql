@@ -110,6 +110,40 @@ create table if not exists public.notifications (
   read boolean not null default false
 );
 
+-- Sale price wasn't persisted historically — it only lived in the Stripe
+-- session, used once for the confirmation email. Needed so orders can be
+-- read back as revenue instead of re-querying Stripe every time.
+alter table public.print_orders
+add column if not exists amount_total_cents integer;
+
+-- A reusable starting point for expenses that recur but vary in amount each
+-- time (e.g. a canvas roll purchase) — default_amount_cents just prefills the
+-- log form, it is never treated as authoritative.
+create table if not exists public.expense_templates (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  name text not null,
+  category text,
+  default_amount_cents integer,
+  notes text,
+  archived boolean not null default false
+);
+
+-- One row per actual expense. name/category/amount are copied from the
+-- template at log time (denormalized, same pattern as gallery_item_title in
+-- notifications) so editing or archiving a template never rewrites history.
+-- template_id is kept only to group/trace occurrences back to their template.
+create table if not exists public.expenses (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  template_id uuid references public.expense_templates(id) on delete set null,
+  name text not null,
+  category text,
+  amount_cents integer not null,
+  incurred_on date not null,
+  notes text
+);
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
@@ -120,5 +154,7 @@ grant select, insert, update, delete on table public.creator_signatures to servi
 grant select, insert, update, delete on table public.print_orders to service_role;
 grant select, insert, update on table public.print_runs to service_role;
 grant select, insert, update on table public.notifications to service_role;
+grant select, insert, update, delete on table public.expense_templates to service_role;
+grant select, insert, update, delete on table public.expenses to service_role;
 
 grant usage, select on all sequences in schema public to service_role;

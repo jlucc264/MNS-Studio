@@ -370,3 +370,35 @@ class PrintRunOutcomeRequest(BaseModel):
 
 class ReplayCheckoutSessionRequest(BaseModel):
     session_id: str
+
+
+class CreateExpenseTemplateRequest(BaseModel):
+    name: str
+    category: Optional[str] = None
+    default_amount_cents: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class UpdateExpenseTemplateRequest(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    default_amount_cents: Optional[int] = None
+    notes: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class CreateExpenseRequest(BaseModel):
+    name: str
+    category: Optional[str] = None
+    amount_cents: int
+    incurred_on: str
+    notes: Optional[str] = None
+    template_id: Optional[str] = None
+
+
+class UpdateExpenseRequest(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    amount_cents: Optional[int] = None
+    incurred_on: Optional[str] = None
+    notes: Optional[str] = None

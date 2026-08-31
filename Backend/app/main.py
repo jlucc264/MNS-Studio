@@ -20,6 +20,10 @@ from app.models import (
     PrintRunOutcomeRequest,
     RollPrintRequest,
     ReplayCheckoutSessionRequest,
+    CreateExpenseTemplateRequest,
+    UpdateExpenseTemplateRequest,
+    CreateExpenseRequest,
+    UpdateExpenseRequest,
     LlmChatRequest,
     LlmChatResponse,
     SuggestionsRequest,
@@ -50,7 +54,7 @@ from app.models import (
 )
 from app.services.llm_chat import chat_with_claude, get_suggestions
 from app.services.storage import save_remote_image, save_upload
-from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_roll_print_pdf, generate_alignment_test_design, load_signature_image, load_sku_asset, crop_to_content
+from app.services.pdf_generator import generate_preview_pdf, generate_calibration_pdf, generate_blank_roll_pdf, generate_registration_test_pdf, generate_test_line_pdf, generate_roll_print_pdf, generate_alignment_test_design, load_signature_image, load_sku_asset, crop_to_content
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import (
     send_contact_email,
@@ -67,7 +71,6 @@ from app.services.canvas_pricing import (
     get_canvas_for_design,
     is_design_printable,
     is_standard_order,
-    STANDARD_MAX_LONG_IN,
     STANDARD_MAX_SHORT_IN,
 )
 from app.services.auth import get_current_user_id, get_optional_user_id
@@ -110,7 +113,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = BASE_DIR / "assets"
 logger = logging.getLogger(__name__)
 
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "")
+# Comma-separated so more than one person can be granted admin access.
+ADMIN_USER_IDS = {uid.strip() for uid in os.getenv("ADMIN_USER_ID", "").split(",") if uid.strip()}
 
 # Upper bounds on the requested stitch grid. The largest legitimate design is a
 # 60"×~1.3" belt at 18ct (~1080×24 cells) or a ~360×234 regular canvas, so these
@@ -147,7 +151,7 @@ def _validate_stitch_dimensions(stitch_width: int, stitch_height: int) -> None:
 
 
 def _require_admin(user_id: str) -> None:
-    if not ADMIN_USER_ID or user_id != ADMIN_USER_ID:
+    if not ADMIN_USER_IDS or user_id not in ADMIN_USER_IDS:
         raise HTTPException(status_code=403, detail="Admin only.")
 
 
@@ -157,9 +161,10 @@ def _fmt_in(value: float) -> str:
 
 # One message for every gate so the copy can't drift between checkout, cart and
 # gallery. 422 rather than 403: the design is valid, the size is not self-serve.
+# Phrased on width alone — STANDARD_MAX_LONG_IN just equals the overall
+# printable ceiling, so width is always what actually trips this gate.
 LARGE_PRINT_DETAIL = (
-    f"Designs larger than {_fmt_in(STANDARD_MAX_LONG_IN)}\" × "
-    f"{_fmt_in(STANDARD_MAX_SHORT_IN)}\" are printed to order — "
+    f"Designs wider than {_fmt_in(STANDARD_MAX_SHORT_IN)}\" are printed to order — "
     "contact us for a quote on large prints."
 )
 
@@ -1065,6 +1070,7 @@ def _handle_completed_session(session) -> None:
                 title=metadata.get("title"),
                 width_inches=float(metadata["width_inches"]) if metadata.get("width_inches") else None,
                 height_inches=float(metadata["height_inches"]) if metadata.get("height_inches") else None,
+                amount_total_cents=session.get("amount_total"),
             )
         except Exception:
             logger.exception("Failed to record print order for session %s", session.get("id"))
@@ -1139,8 +1145,12 @@ def _handle_completed_session(session) -> None:
                 )
             gi = item_meta.get("gi")
             cu = item_meta.get("cu")
+            # Per-item price the buyer paid, reconstructed from the unit price
+            # split into base + canvas value at checkout time. Excludes the
+            # cart's single shared shipping charge, which isn't attributable
+            # to any one item — an accepted approximation for revenue reporting.
+            item_total = (item_meta.get("b", 0) + item_meta.get("cv", 0)) * item_meta.get("qty", 1)
             if gi and cu:
-                item_total = (item_meta.get("b", 0) + item_meta.get("cv", 0)) * item_meta.get("qty", 1)
                 try:
                     _record_creator_earnings(
                         f"{session['id']}_{i}", cu, gi, "cart", item_total,
@@ -1159,6 +1169,7 @@ def _handle_completed_session(session) -> None:
                     title=None,
                     width_inches=item_meta.get("w"),
                     height_inches=item_meta.get("h"),
+                    amount_total_cents=item_total,
                 )
             except Exception:
                 logger.exception("Failed to record cart print order for session %s item %d", session.get("id"), i)
@@ -1230,6 +1241,19 @@ def admin_blank_roll_pdf(height: float = 4.0, user_id: str = Depends(get_current
     _require_admin(user_id)
     path = generate_blank_roll_pdf(height_inches=height)
     return FileResponse(str(path), media_type="application/pdf", filename="mns_blank_roll.pdf")
+
+
+@app.get("/admin/test-line-pdf")
+def admin_test_line_pdf(
+    length: float,
+    roll_width: float = 8.0,
+    y_scale: float = 1.0,
+    color: str = "gray",
+    user_id: str = Depends(get_current_user_id),
+):
+    _require_admin(user_id)
+    path = generate_test_line_pdf(design_length_inches=length, roll_width_inches=roll_width, y_scale=y_scale, line_color=color)
+    return FileResponse(str(path), media_type="application/pdf", filename="mns_test_line.pdf")
 
 
 @app.get("/admin/registration-test-pdf")
@@ -1426,6 +1450,99 @@ def admin_reopen_print_orders(request: PrintOrderIdsRequest, user_id: str = Depe
     from app.services.supabase_db import reopen_print_orders
     reopen_print_orders(request.print_order_ids)
     return {"ok": True, "count": len(request.print_order_ids)}
+
+
+@app.get("/admin/orders")
+def admin_list_orders(start: str | None = None, end: str | None = None, user_id: str = Depends(get_current_user_id)):
+    """Every order in the date range, regardless of print status — the
+    revenue view for the spend management page."""
+    _require_admin(user_id)
+    from app.services.supabase_db import list_print_orders_in_range
+    return list_print_orders_in_range(start, end)
+
+
+@app.get("/admin/spend/summary")
+def admin_spend_summary(start: str | None = None, end: str | None = None, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_print_orders_in_range, list_expenses
+    orders = list_print_orders_in_range(start, end)
+    expenses = list_expenses(start, end)
+    orders_missing_amount = sum(1 for o in orders if o.get("amount_total_cents") is None)
+    revenue_cents = sum(o.get("amount_total_cents") or 0 for o in orders)
+    expenses_cents = sum(e.get("amount_cents") or 0 for e in expenses)
+    return {
+        "revenue_cents": revenue_cents,
+        "expenses_cents": expenses_cents,
+        "net_cents": revenue_cents - expenses_cents,
+        "order_count": len(orders),
+        "expense_count": len(expenses),
+        "orders_missing_amount": orders_missing_amount,
+    }
+
+
+@app.get("/admin/expense-templates")
+def admin_list_expense_templates(include_archived: bool = False, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_expense_templates
+    return list_expense_templates(include_archived)
+
+
+@app.post("/admin/expense-templates")
+def admin_create_expense_template(request: CreateExpenseTemplateRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import create_expense_template
+    return create_expense_template(request.name, request.category, request.default_amount_cents, request.notes)
+
+
+@app.patch("/admin/expense-templates/{template_id}")
+def admin_update_expense_template(template_id: str, request: UpdateExpenseTemplateRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import update_expense_template
+    fields = {k: v for k, v in request.model_dump().items() if v is not None}
+    update_expense_template(template_id, fields)
+    return {"ok": True}
+
+
+@app.delete("/admin/expense-templates/{template_id}")
+def admin_delete_expense_template(template_id: str, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import delete_expense_template
+    delete_expense_template(template_id)
+    return {"ok": True}
+
+
+@app.get("/admin/expenses")
+def admin_list_expenses(start: str | None = None, end: str | None = None, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import list_expenses
+    return list_expenses(start, end)
+
+
+@app.post("/admin/expenses")
+def admin_create_expense(request: CreateExpenseRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import create_expense
+    return create_expense(
+        request.name, request.category, request.amount_cents,
+        request.incurred_on, request.notes, request.template_id,
+    )
+
+
+@app.patch("/admin/expenses/{expense_id}")
+def admin_update_expense(expense_id: str, request: UpdateExpenseRequest, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import update_expense
+    fields = {k: v for k, v in request.model_dump().items() if v is not None}
+    update_expense(expense_id, fields)
+    return {"ok": True}
+
+
+@app.delete("/admin/expenses/{expense_id}")
+def admin_delete_expense(expense_id: str, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import delete_expense
+    delete_expense(expense_id)
+    return {"ok": True}
 
 
 @app.get("/admin/print-runs")

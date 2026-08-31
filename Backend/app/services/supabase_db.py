@@ -602,6 +602,7 @@ def create_print_order(
     title: str | None,
     width_inches: float | None,
     height_inches: float | None,
+    amount_total_cents: int | None = None,
 ) -> None:
     _request("POST", "/print_orders", body={
         "stripe_session_id": stripe_session_id,
@@ -612,6 +613,7 @@ def create_print_order(
         "title": title,
         "width_inches": width_inches,
         "height_inches": height_inches,
+        "amount_total_cents": amount_total_cents,
     })
 
 
@@ -652,54 +654,54 @@ def delete_print_run(print_run_id: str) -> None:
     _request("DELETE", "/print_runs", params=f"id=eq.{encoded}")
 
 
-def _resolve_order_titles(orders: list[dict]) -> list[dict]:
-    """Fill in titles the checkout never recorded.
+def _resolve_order_details(orders: list[dict]) -> list[dict]:
+    """Fill in the title the checkout never recorded, and the mesh count —
+    neither lives on print_orders itself; both come from the underlying
+    gallery listing or project. Title is only ever missing on cart orders
+    (their Stripe metadata carries ids, not names), but mesh_count has never
+    been stored anywhere on the order, so every order needs it resolved.
+    Two batched queries regardless of how many orders are on screen.
 
-    Cart items carry no title in their Stripe metadata — only ids — so every
-    cart order lands with title NULL and shows up as "Untitled". Rather than
-    widen the metadata (it is capped at 500 chars per value, and it would only
-    help future orders), look the name up from the ids we do have. Two batched
-    queries regardless of how many orders are on screen.
+    Mesh mattering here at all is the point: combining designs at different
+    mesh counts into one roll print isn't wrong, but doing it by accident is
+    exactly the mistake this is meant to make impossible to miss.
     """
-    missing = [o for o in orders if not o.get("title")]
-    if not missing:
-        return orders
+    need_title = {o["id"] for o in orders if not o.get("title")}
+    gallery_ids = {o["gallery_item_id"] for o in orders if o.get("gallery_item_id")}
+    project_ids = {o["project_id"] for o in orders if o.get("project_id")}
 
-    gallery_ids = {o["gallery_item_id"] for o in missing if o.get("gallery_item_id")}
-    project_ids = {o["project_id"] for o in missing if o.get("project_id")}
-
-    def _lookup(path: str, ids: set[str], name_col: str) -> dict[str, str]:
+    def _lookup(path: str, ids: set[str], cols: str) -> dict[str, dict]:
         if not ids:
             return {}
         joined = ",".join(f'"{quote(i, safe="")}"' for i in ids)
         try:
-            rows = _request("GET", path, params=f"id=in.({joined})&select=id,{name_col}")
+            rows = _request("GET", path, params=f"id=in.({joined})&select=id,{cols}")
         except Exception:
-            # A title is a convenience; failing to resolve one must never take
+            # These are conveniences; failing to resolve them must never take
             # down the print queue itself.
-            logger.exception("Could not resolve titles from %s", path)
+            logger.exception("Could not resolve order details from %s", path)
             return {}
         if not isinstance(rows, list):
             return {}
-        return {r["id"]: r[name_col] for r in rows if r.get("id") and r.get(name_col)}
+        return {r["id"]: r for r in rows if r.get("id")}
 
-    gallery_titles = _lookup("/gallery_items", gallery_ids, "title")
-    project_names = _lookup("/projects", project_ids, "name")
+    gallery_rows = _lookup("/gallery_items", gallery_ids, "title,mesh_count")
+    project_rows = _lookup("/projects", project_ids, "name,mesh_count")
 
-    for o in missing:
-        # Gallery title wins: on a gallery print the buyer chose that listing,
-        # and the underlying project may be named something else entirely.
-        o["title"] = (
-            gallery_titles.get(o.get("gallery_item_id") or "")
-            or project_names.get(o.get("project_id") or "")
-            or None
-        )
+    for o in orders:
+        gallery_row = gallery_rows.get(o.get("gallery_item_id") or "") or {}
+        project_row = project_rows.get(o.get("project_id") or "") or {}
+        if o["id"] in need_title:
+            # Gallery title wins: on a gallery print the buyer chose that listing,
+            # and the underlying project may be named something else entirely.
+            o["title"] = gallery_row.get("title") or project_row.get("name") or None
+        o["mesh_count"] = gallery_row.get("mesh_count") or project_row.get("mesh_count") or None
     return orders
 
 
 def list_pending_print_orders() -> list[dict]:
     result = _request("GET", "/print_orders", params="status=eq.pending&order=created_at.asc&select=*")
-    return _resolve_order_titles(result) if isinstance(result, list) else []
+    return _resolve_order_details(result) if isinstance(result, list) else []
 
 
 def list_completed_print_orders(limit: int = 50) -> list[dict]:
@@ -709,7 +711,22 @@ def list_completed_print_orders(limit: int = 50) -> list[dict]:
         "GET", "/print_orders",
         params=f"status=eq.printed&order=printed_at.desc&limit={int(limit)}&select=*",
     )
-    return _resolve_order_titles(result) if isinstance(result, list) else []
+    return _resolve_order_details(result) if isinstance(result, list) else []
+
+
+def list_print_orders_in_range(start: str | None = None, end: str | None = None) -> list[dict]:
+    """Every order in the date range regardless of print status — the revenue
+    view. Separate from list_pending/list_completed, which filter on status
+    for the fulfillment queue instead."""
+    filters = []
+    if start:
+        filters.append(f"created_at=gte.{quote(start, safe='')}")
+    if end:
+        filters.append(f"created_at=lte.{quote(end, safe='')}")
+    filters.append("order=created_at.desc")
+    filters.append("select=*")
+    result = _request("GET", "/print_orders", params="&".join(filters))
+    return _resolve_order_details(result) if isinstance(result, list) else []
 
 
 def mark_print_orders_pdf_generated(print_order_ids: list[str]) -> None:
@@ -754,3 +771,72 @@ def mark_print_orders_printed(print_order_ids: list[str]) -> None:
             params=f"id=eq.{encoded}",
             body={"status": "printed", "printed_at": datetime.now(timezone.utc).isoformat()},
         )
+
+
+# ── spend management ────────────────────────────────────────────────────────
+
+def create_expense_template(name: str, category: str | None, default_amount_cents: int | None, notes: str | None) -> dict:
+    result = _request("POST", "/expense_templates", body={
+        "name": name,
+        "category": category,
+        "default_amount_cents": default_amount_cents,
+        "notes": notes,
+    })
+    return result[0] if isinstance(result, list) and result else result
+
+
+def list_expense_templates(include_archived: bool = False) -> list[dict]:
+    params = "order=created_at.desc&select=*" if include_archived else "archived=eq.false&order=created_at.desc&select=*"
+    result = _request("GET", "/expense_templates", params=params)
+    return result if isinstance(result, list) else []
+
+
+def update_expense_template(template_id: str, fields: dict) -> None:
+    encoded = quote(template_id, safe="")
+    _request("PATCH", "/expense_templates", params=f"id=eq.{encoded}", body=fields)
+
+
+def delete_expense_template(template_id: str) -> None:
+    encoded = quote(template_id, safe="")
+    _request("DELETE", "/expense_templates", params=f"id=eq.{encoded}")
+
+
+def create_expense(
+    name: str,
+    category: str | None,
+    amount_cents: int,
+    incurred_on: str,
+    notes: str | None,
+    template_id: str | None,
+) -> dict:
+    result = _request("POST", "/expenses", body={
+        "name": name,
+        "category": category,
+        "amount_cents": amount_cents,
+        "incurred_on": incurred_on,
+        "notes": notes,
+        "template_id": template_id,
+    })
+    return result[0] if isinstance(result, list) and result else result
+
+
+def list_expenses(start: str | None = None, end: str | None = None) -> list[dict]:
+    filters = []
+    if start:
+        filters.append(f"incurred_on=gte.{quote(start, safe='')}")
+    if end:
+        filters.append(f"incurred_on=lte.{quote(end, safe='')}")
+    filters.append("order=incurred_on.desc")
+    filters.append("select=*")
+    result = _request("GET", "/expenses", params="&".join(filters))
+    return result if isinstance(result, list) else []
+
+
+def update_expense(expense_id: str, fields: dict) -> None:
+    encoded = quote(expense_id, safe="")
+    _request("PATCH", "/expenses", params=f"id=eq.{encoded}", body=fields)
+
+
+def delete_expense(expense_id: str) -> None:
+    encoded = quote(expense_id, safe="")
+    _request("DELETE", "/expenses", params=f"id=eq.{encoded}")

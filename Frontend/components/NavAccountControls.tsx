@@ -7,7 +7,8 @@ import type { User } from '@supabase/supabase-js'
 import { UserAvatar } from './UserAvatar'
 import { formatCents } from '../lib/api'
 
-const ADMIN_USER_ID = process.env.NEXT_PUBLIC_ADMIN_USER_ID ?? ''
+// Comma-separated so more than one person can be granted admin access.
+const ADMIN_USER_IDS = (process.env.NEXT_PUBLIC_ADMIN_USER_ID ?? '').split(',').map(id => id.trim()).filter(Boolean)
 
 const itemStyle: CSSProperties = {
   display: 'block',
@@ -169,7 +170,7 @@ export function NavAccountControls({
             </button>
           )}
 
-          {signedIn && onAdmin && ADMIN_USER_ID && user?.id === ADMIN_USER_ID && (
+          {signedIn && onAdmin && !!user?.id && ADMIN_USER_IDS.includes(user.id) && (
             <>
               <Divider />
               <button type="button" role="menuitem" onClick={() => { setOpen(false); onAdmin() }} style={itemStyle}>

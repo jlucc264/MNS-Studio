@@ -15,7 +15,7 @@ from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
 from PIL import Image, ImageDraw, ImageFont
 import reportlab
 
-from .canvas_pricing import MAX_ROLL_WIDTH_IN, canvas_margin_inches
+from .canvas_pricing import MAX_ROLL_WIDTH_IN, CANVAS_MARGIN_IN, canvas_margin_inches
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 
 logger = logging.getLogger(__name__)
@@ -945,6 +945,84 @@ def generate_blank_roll_pdf(
     output_path = FINALIZED_DIR / "admin_blank_roll.pdf"
     pdf = canvas.Canvas(str(output_path), pagesize=(w, h))
     pdf.setTitle("MNS Blank Roll")
+    _set_print_actual_size(pdf)
+    pdf.save()
+    return output_path
+
+
+# Fill/stroke pairs for the test line — swappable so a calibration run doesn't
+# have to compete with real jobs for whichever ink cartridge is running low.
+_TEST_LINE_COLORS = {
+    "gray": ("#CCCCCC", "#888888"),
+    "beige": ("#E8D9A0", "#A89060"),
+    "yellow": ("#F0E68C", "#B8A030"),
+}
+
+
+def generate_test_line_pdf(
+    design_length_inches: float,
+    roll_width_inches: float = 8.0,
+    y_scale: float = 1.0,
+    leading_blank_inches: float = 0.5,
+    line_color: str = "gray",
+) -> Path:
+    """A length-calibration aid: a single continuous line, two 18-mesh stitch
+    widths thick, running exactly design_length_inches * y_scale tall, with
+    the same 2"-per-side canvas margin (CANVAS_MARGIN_IN) a real design gets
+    — blank above and below the line — before y_scale is applied to the
+    whole thing. Print it, then measure the line's own length on the canvas
+    with a ruler: if it matches design_length_inches, this y_scale is
+    correct for a print of this length.
+
+    The margin matters (added 2026-08-29): generate_roll_print_pdf scales
+    content-plus-margin together as one combined length (see draw_h below),
+    so a real 8.5" design's total commanded feed distance is (8.5 + 4") *
+    y_scale, not 8.5 * y_scale. A margin-less test was quietly asking the
+    printer to feed a shorter total distance than any real design of the
+    same content length ever does — not the same test, however identical
+    the content length looked on paper.
+
+    Also deliberately continuous ink top to bottom within that content
+    region, rather than two thin marks with blank canvas between them (the
+    original design, through 2026-08-28) — the print head engages the
+    canvas continuously the whole way down a real, fully-stitched design,
+    and a mostly-blank test doesn't reproduce that. It does NOT need to be
+    wide to test this, though (2026-08-28, second pass): what matters is
+    the head's continuous engagement feeding down the length, not how much
+    of the roll's width is inked — a narrow line burns far less canvas/ink
+    than a wide bar while testing the identical hypothesis."""
+    roll_width_pts = roll_width_inches * 72
+    leading_pts = leading_blank_inches * 72
+    margin_pts = CANVAS_MARGIN_IN * y_scale * 72
+    bar_h_pts = design_length_inches * y_scale * 72
+    label_h = 30.0
+    bottom_margin = 18.0
+    total_h = leading_pts + label_h + margin_pts + bar_h_pts + margin_pts + bottom_margin
+
+    output_path = FINALIZED_DIR / "admin_test_line.pdf"
+    pdf = canvas.Canvas(str(output_path), pagesize=(roll_width_pts, total_h))
+    pdf.setTitle("MNS Roll Print Test Line")
+
+    top_y = total_h - leading_pts
+    bar_top = top_y - label_h - margin_pts
+    bar_bottom = bar_top - bar_h_pts
+
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColor(colors.HexColor("#999999"))
+    pdf.drawCentredString(
+        roll_width_pts / 2, top_y - 14,
+        f'Testing {design_length_inches:.2f}" @ yScale {y_scale:.4f}  ·  measure the line, not the blank margin above/below it',
+    )
+
+    # Two 18-mesh stitch widths (2/18" = 8pt exactly), centered on the roll.
+    line_width_pts = 2 * (1 / 18) * 72
+    line_x = (roll_width_pts - line_width_pts) / 2
+    fill_hex, stroke_hex = _TEST_LINE_COLORS.get(line_color, _TEST_LINE_COLORS["gray"])
+    pdf.setFillColor(colors.HexColor(fill_hex))
+    pdf.setStrokeColor(colors.HexColor(stroke_hex))
+    pdf.setLineWidth(0.75)
+    pdf.rect(line_x, bar_bottom, line_width_pts, bar_h_pts, fill=1, stroke=1)
+
     _set_print_actual_size(pdf)
     pdf.save()
     return output_path

@@ -60,6 +60,8 @@ import {
   isDesignPrintable,
   isStandardOrder,
   LARGE_PRINT_MESSAGE,
+  STANDARD_MAX_SHORT_SIDE,
+  STANDARD_MAX_LONG_SIDE,
   samplePixel,
   PaletteColor,
   publishGalleryItem,
@@ -375,8 +377,11 @@ function getSettingsKey(settings: PreviewSettings | null) {
   })
 }
 
-const MAX_PRINT_SHORT = 6
-const MAX_PRINT_LONG = 10
+// Imported rather than a separate literal — these previously drifted from
+// canvas_pricing.py's STANDARD_MAX_SHORT_IN/LONG_IN by name only (both
+// happened to be 6/10), which was a real risk when either side changed.
+const MAX_PRINT_SHORT = STANDARD_MAX_SHORT_SIDE
+const MAX_PRINT_LONG = STANDARD_MAX_LONG_SIDE
 
 function clampPrintDimensions(w: number, h: number): { width_inches: number; height_inches: number } {
   let width = Math.max(0.5, Math.min(w, MAX_PRINT_LONG))
@@ -741,6 +746,7 @@ function StudioPage() {
   const pendingCents = useCanvasCredit(session?.access_token)
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showRegeneratePreviewConfirm, setShowRegeneratePreviewConfirm] = useState(false)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
@@ -4364,7 +4370,10 @@ function StudioPage() {
           {activeImagePath && (
             <button
               type="button"
-              onClick={() => applyPreviewInBackground(draftSettings)}
+              onClick={() => {
+                if (hasGeneratedPreview) setShowRegeneratePreviewConfirm(true)
+                else applyPreviewInBackground(draftSettings)
+              }}
               disabled={loading}
               style={btnPrimary}
             >
@@ -5631,6 +5640,7 @@ function StudioPage() {
         const designW = contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0
         const designH = contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0
         const printable = isDesignPrintable(designW, designH)
+        const standard = printable && isStandardOrder(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
         const printTotal = canvas
           ? (parentGalleryItemId ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas))
@@ -5658,7 +5668,9 @@ function StudioPage() {
                     </p>
                   </div>
                   {!printable ? (
-                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds max 6″×10″ (8×12 canvas).</p>
+                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds the maximum printable size.</p>
+                  ) : !standard ? (
+                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>{LARGE_PRINT_MESSAGE}</p>
                   ) : canvas && printTotal !== null ? (
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
                       <div>{canvas.label} canvas</div>
@@ -5673,10 +5685,10 @@ function StudioPage() {
                   <button
                     type="button"
                     onClick={() => setShowPriceBreakdownModal(true)}
-                    disabled={!canvas || !printable || printCheckoutLoading}
-                    style={{ ...btnPrimary, opacity: (!canvas || !printable) ? 0.5 : 1, cursor: (!canvas || !printable) ? 'not-allowed' : 'pointer' }}
+                    disabled={!canvas || !standard || printCheckoutLoading}
+                    style={{ ...btnPrimary, opacity: (!canvas || !standard) ? 0.5 : 1, cursor: (!canvas || !standard) ? 'not-allowed' : 'pointer' }}
                   >
-                    Review order
+                    {standard ? 'Review order' : 'Contact us for large prints'}
                   </button>
                 </div>
 
@@ -6063,10 +6075,45 @@ function StudioPage() {
         </div>
       )}
 
+      {showRegeneratePreviewConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10100, padding: 18 }}
+        >
+          <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Regenerate preview?</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                This rebuilds the stitch preview from your current settings. Undo history will be cleared, and if you&rsquo;ve
+                changed the size or mesh count, paint edits may not carry over. This can&rsquo;t be undone.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowRegeneratePreviewConfirm(false)}
+                style={btnSecondary}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowRegeneratePreviewConfirm(false); applyPreviewInBackground(draftSettings) }}
+                style={btnPrimary}
+              >
+                Regenerate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPriceBreakdownModal && (() => {
         const bW = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0)
         const bH = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0)
-        const bCanvas = lastSettings ? getCanvasForDesign(bW, bH) : null
+        const bStandard = isStandardOrder(bW, bH)
+        const bCanvas = lastSettings && bStandard ? getCanvasForDesign(bW, bH) : null
         const bShipping = 700
         // Everything above the canvas material charge: the print-own base fee,
         // plus the creator markup when this is a gallery remix.
@@ -6111,6 +6158,7 @@ function StudioPage() {
                     </div>
                   </>
                 )}
+                {!bStandard && <p style={{ margin: 0, fontSize: 13, color: '#8a8177' }}>{LARGE_PRINT_MESSAGE}</p>}
                 {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
               </div>
               <div style={{ padding: '12px 22px 18px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>

@@ -9,6 +9,8 @@ import {
   downloadCalibrationPdf,
   downloadRegistrationTestPdf,
   downloadRollPrintPdf,
+  downloadTestLinePdf,
+  type TestLineColor,
   MAX_ROLL_WIDTH_INCHES,
   contentDimensionsInches,
   getCanvasForDesign,
@@ -42,7 +44,14 @@ const styles = {
   subtitle: {
     fontSize: 13,
     color: '#7A817A',
-    marginBottom: 40,
+    marginBottom: 8,
+  } as const,
+  spendLink: {
+    fontSize: 12,
+    color: '#5c7856',
+    marginBottom: 32,
+    display: 'inline-block',
+    textDecoration: 'none',
   } as const,
   section: {
     background: '#fff',
@@ -147,6 +156,18 @@ const styles = {
     fontSize: 11,
     color: '#7A817A',
   } as const,
+  calcBox: {
+    border: '1px dashed #D7D0C8',
+    borderRadius: 8,
+    padding: '14px 16px',
+    marginBottom: 16,
+    background: '#FAFAF8',
+  } as const,
+  calcResult: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#2D332F',
+  } as const,
 }
 
 // Calibration is per-machine and admin-only, so it lives in the browser rather
@@ -179,6 +200,57 @@ function saveCalibration(rollWidth: number, values: Calibration): boolean {
   }
 }
 
+// Confirmed length scales, keyed by "<roll width>-<mesh>". Mesh is part of
+// the key deliberately — 13-mesh canvas feeds differently from 18-mesh
+// (different physical fabric), so a value confirmed for one mesh says
+// nothing about the other.
+//
+// Both are the same deliberate, prescriptive policy, not fitted
+// printer-feed curves — real woven canvas doesn't hold to a perfectly exact
+// holes-per-inch count, so chasing an exact ruler-length match (18-mesh went
+// through a 1.007 lock on 2026-08-28, then 0.986 on 2026-08-29, before
+// landing here) kept moving as new data came in, and along the way visibly
+// compressed the stitch pattern to hit an exact-length target that wasn't
+// physically achievable to begin with. Instead: accept a known, small,
+// per-mesh amount of stitch drift rather than fight for exact-length
+// precision the fabric itself doesn't support.
+//
+// 10"/18-mesh (0.9889, since 2026-08-30): 1 stitch of drift per 5" of print
+// length — (5*18-1)/(5*18) = 89/90.
+// 10"/13-mesh (0.9846, since 2026-08-30): measured directly by counting real
+// canvas holes (192 over 15", i.e. exactly 1 stitch short of the 195 nominal
+// — also a 1-per-5" rate), then confirmed spot on at a 4" print —
+// (5*13-1)/(5*13) = 64/65.
+const CALIBRATED_Y_SCALES: Record<string, number> = {
+  '10-18': 89 / 90,
+  '10-13': 64 / 65,
+}
+
+// The 8" roll's error is NOT flat — short prints need much more correction
+// than long ones (a fixed feed shortfall matters more on a short print). Fit
+// least-squares from three (target length @ yScale → actual measured length)
+// points: 1.6"@1.062→1.6875", 3.9"@1.0265→3.9", 4.0"@1.024→4.0". Solving
+// "what yScale makes the actual length equal the target" gives this formula.
+function eightInchYScaleForLength(designLengthInches: number): number {
+  return 1.038756 - 0.053153 / designLengthInches
+}
+
+// Distinct colors per mesh count (not just text) so a mismatched mesh jumps
+// out while scanning a list of rows, rather than requiring you to read every
+// number — that's the whole point of making this "more visible."
+function MeshBadge({ meshCount }: { meshCount: number | null | undefined }) {
+  const style = meshCount === 18
+    ? { color: '#2c5a8a', background: '#e3edf7', border: '1px solid #b8cfe8' }
+    : meshCount === 13
+      ? { color: '#6a3a8a', background: '#f0e7f7', border: '1px solid #d3bce8' }
+      : { color: '#7A817A', background: '#f0efec', border: '1px solid #d9d5cc' }
+  return (
+    <span style={{ ...style, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>
+      {meshCount ? `${meshCount} mesh` : 'mesh ?'}
+    </span>
+  )
+}
+
 export default function AdminPage() {
   const { session, loading } = useAuth()
   const router = useRouter()
@@ -205,12 +277,44 @@ export default function AdminPage() {
   const [xOffsetInches, setXOffsetInches] = useState(0)
   const [skewCorrectionInches, setSkewCorrectionInches] = useState(0)
   const [skewCorrectionYInches, setSkewCorrectionYInches] = useState(0)
+
+  // Skew is a rate (drift per inch fed), not a fixed offset — a measurement
+  // taken over one print length has to be rescaled before it means anything
+  // for a job of a different length. See print_runs.page_length_inches: "a
+  // 0.3in skew means nothing without knowing it spanned 18in."
+  const [skewCalcAxis, setSkewCalcAxis] = useState<'feed' | 'width'>('feed')
+  const [skewCalcMesh, setSkewCalcMesh] = useState(18)
+  const [skewCalcPixels, setSkewCalcPixels] = useState('')
+  const [skewCalcSpanInches, setSkewCalcSpanInches] = useState('')
+  const [skewCalcTargetInches, setSkewCalcTargetInches] = useState('')
   const [yScale, setYScale] = useState(1.0)
+  const [eightInchDesignLength, setEightInchDesignLength] = useState('')
+  const isEightInchDerived = Math.abs(rollWidthInches - 8) < 0.01
+  // A locked value only means something if every selected design shares one
+  // mesh — mixing meshes in one job means at least one of them is printing
+  // at the wrong scale no matter what's picked, so that case falls back to
+  // manual rather than silently locking to a value that's only right for
+  // some of the selection.
+  const selectedMeshCounts = new Set<number>([
+    ...orders.filter(o => selectedOrderIds.includes(o.id) && o.mesh_count != null).map(o => o.mesh_count as number),
+    ...projects.filter(p => selectedIds.includes(p.id)).map(p => p.mesh_count ?? 13),
+  ])
+  const singleSelectedMesh = selectedMeshCounts.size === 1 ? Array.from(selectedMeshCounts)[0] : null
+  const calibratedYScale = singleSelectedMesh != null
+    ? CALIBRATED_Y_SCALES[`${rollWidthInches}-${singleSelectedMesh}`]
+    : undefined
+  const [yScaleOverride, setYScaleOverride] = useState(false)
   const [includeAlignmentTest, setIncludeAlignmentTest] = useState(false)
   const [calibBusy, setCalibBusy] = useState(false)
   const [regBusy, setRegBusy] = useState(false)
   const [blankBusy, setBlankBusy] = useState(false)
   const [rollBusy, setRollBusy] = useState(false)
+  const [testLineInches, setTestLineInches] = useState('')
+  // Defaults to beige rather than gray — swappable so a calibration run
+  // doesn't have to compete with real jobs for whichever cartridge is low.
+  const [testLineColor, setTestLineColor] = useState<TestLineColor>('beige')
+  const [testLineBusy, setTestLineBusy] = useState(false)
+  const [testLineError, setTestLineError] = useState('')
   const [calibError, setCalibError] = useState('')
   const [regError, setRegError] = useState('')
   const [blankError, setBlankError] = useState('')
@@ -335,7 +439,11 @@ export default function AdminPage() {
   useEffect(() => {
     const saved = loadCalibration()[String(rollWidthInches)]
     if (!saved) return
-    setYScale(saved.yScale)
+    // 8" has its length scale derived below rather than remembered
+    // per-session, and a calibrated mesh/width pair is locked unless
+    // explicitly overridden — a stale saved value here must not clobber
+    // either one.
+    if (!isEightInchDerived && !(calibratedYScale != null && !yScaleOverride)) setYScale(saved.yScale)
     setXOffsetInches(saved.xOffsetInches)
     setSkewCorrectionInches(saved.skewCorrectionInches)
     setSkewCorrectionYInches(saved.skewCorrectionYInches ?? 0)
@@ -351,6 +459,27 @@ export default function AdminPage() {
       + (yScaleLooksOff ? ' ⚠ Length scale is outside the normal 0.9–1.1 range — check before printing.' : '')
     )
   }, [rollWidthInches])
+
+  // 8" derives its length scale from design length. A calibrated mesh/width
+  // pair (see CALIBRATED_Y_SCALES) locks to its confirmed value unless the
+  // operator explicitly opts into overriding it for testing.
+  useEffect(() => {
+    if (isEightInchDerived) {
+      const length = parseFloat(eightInchDesignLength)
+      if (length > 0) setYScale(eightInchYScaleForLength(length))
+      return
+    }
+    if (calibratedYScale != null && !yScaleOverride) {
+      setYScale(calibratedYScale)
+    }
+  }, [rollWidthInches, eightInchDesignLength, isEightInchDerived, calibratedYScale, yScaleOverride])
+
+  // Selection changed to a mix of meshes, a different width, or an
+  // uncalibrated mesh — don't leave a stale override switched on for next
+  // time this same combination becomes locked again.
+  useEffect(() => {
+    if (calibratedYScale == null) setYScaleOverride(false)
+  }, [calibratedYScale])
 
   function toggleOrder(id: string) {
     setSelectedOrderIds(prev =>
@@ -400,6 +529,21 @@ export default function AdminPage() {
       setBlankError(e instanceof Error ? e.message : 'Error')
     } finally {
       setBlankBusy(false)
+    }
+  }
+
+  async function handleTestLine() {
+    if (!session) return
+    const length = parseFloat(testLineInches)
+    if (!length || length <= 0) return
+    setTestLineBusy(true)
+    setTestLineError('')
+    try {
+      await downloadTestLinePdf(session.access_token, length, rollWidthInches, yScale, testLineColor)
+    } catch (e: unknown) {
+      setTestLineError(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setTestLineBusy(false)
     }
   }
 
@@ -457,6 +601,7 @@ export default function AdminPage() {
     <div style={styles.page}>
       <h1 style={styles.h1}>Roll Print Admin</h1>
       <p style={styles.subtitle}>P900 · 18 mesh · up to {MAX_ROLL_WIDTH_INCHES}″ roll · admin only</p>
+      <a href="/admin/spend" style={styles.spendLink}>Spend Management &rarr;</a>
 
       {/* Calibration */}
       <div style={styles.section}>
@@ -565,6 +710,7 @@ export default function AdminPage() {
                     {o.width_inches.toFixed(1)}″ × {o.height_inches.toFixed(1)}″
                   </span>
                 )}
+                <MeshBadge meshCount={o.mesh_count} />
                 {o.pdf_generated_at && (
                   <span
                     title={`PDF generated ${new Date(o.pdf_generated_at).toLocaleString()}`}
@@ -632,6 +778,7 @@ export default function AdminPage() {
                     </span>
                   )
                 })()}
+                <MeshBadge meshCount={p.mesh_count ?? 13} />
                 {selected && <span style={styles.selectedBadge}>#{idx + 1}</span>}
               </div>
             )
@@ -735,6 +882,106 @@ export default function AdminPage() {
             style={styles.copiesInput}
           />
         </div>
+        <div style={styles.calcBox}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#2D332F', marginBottom: 8 }}>
+            Skew Calculator
+          </div>
+          <div style={{ fontSize: 11, color: '#7A817A', marginBottom: 10, lineHeight: 1.5 }}>
+            Count the drift in stitches (pixels) on the physical print rather than measuring fractions of an
+            inch with a ruler. Fill in the target length only if this job&rsquo;s page length differs from what
+            you measured — skew scales with length, so the same drift means a different correction on a
+            longer or shorter print.
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="skewCalcAxis">Correcting:</label>
+            <select
+              id="skewCalcAxis"
+              value={skewCalcAxis}
+              onChange={e => setSkewCalcAxis(e.target.value as 'feed' | 'width')}
+              style={styles.copiesInput}
+            >
+              <option value="feed">Feed skew (down the length)</option>
+              <option value="width">Width skew (across the roll)</option>
+            </select>
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="skewCalcMesh">Mesh count:</label>
+            <input
+              id="skewCalcMesh"
+              type="number"
+              min={1}
+              step={1}
+              value={skewCalcMesh}
+              onChange={e => setSkewCalcMesh(parseInt(e.target.value) || 1)}
+              style={styles.copiesInput}
+            />
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="skewCalcPixels">Drift observed (stitches):</label>
+            <input
+              id="skewCalcPixels"
+              type="number"
+              step={0.5}
+              value={skewCalcPixels}
+              onChange={e => setSkewCalcPixels(e.target.value)}
+              style={styles.copiesInput}
+            />
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="skewCalcSpan">Measured across (inches):</label>
+            <input
+              id="skewCalcSpan"
+              type="number"
+              step={0.5}
+              value={skewCalcSpanInches}
+              onChange={e => setSkewCalcSpanInches(e.target.value)}
+              style={styles.copiesInput}
+            />
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="skewCalcTarget">Target length (inches, optional):</label>
+            <input
+              id="skewCalcTarget"
+              type="number"
+              step={0.5}
+              placeholder="same as above"
+              value={skewCalcTargetInches}
+              onChange={e => setSkewCalcTargetInches(e.target.value)}
+              style={styles.copiesInput}
+            />
+          </div>
+          {(() => {
+            const pixels = parseFloat(skewCalcPixels)
+            const span = parseFloat(skewCalcSpanInches)
+            const target = skewCalcTargetInches === '' ? span : parseFloat(skewCalcTargetInches)
+            if (!Number.isFinite(pixels) || !Number.isFinite(span) || span <= 0 || !skewCalcMesh) return null
+            const rawInches = pixels / skewCalcMesh
+            const scaledInches = Number.isFinite(target) && target > 0 ? rawInches * (target / span) : rawInches
+            return (
+              <>
+                <div style={styles.calcResult}>
+                  = <strong>{scaledInches.toFixed(4)}″</strong>
+                  {target !== span && Number.isFinite(target) && (
+                    <span style={{ color: '#7A817A' }}>
+                      {' '}({rawInches.toFixed(4)}″ measured over {span}″, scaled to {target}″)
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  style={{ ...styles.btnSecondary, marginTop: 10 }}
+                  onClick={() => {
+                    if (skewCalcAxis === 'feed') setSkewCorrectionInches(scaledInches)
+                    else setSkewCorrectionYInches(scaledInches)
+                  }}
+                >
+                  Use as {skewCalcAxis === 'feed' ? 'feed' : 'width'} skew correction
+                </button>
+              </>
+            )
+          })()}
+        </div>
+
         <div style={styles.copiesRow}>
           <label htmlFor="skewCorrection">Skew correction (inches):</label>
           <input
@@ -757,18 +1004,115 @@ export default function AdminPage() {
             style={styles.copiesInput}
           />
         </div>
-        <div style={styles.copiesRow}>
-          <label htmlFor="yScale">Length scale (1.0 = no stretch):</label>
-          <input
-            id="yScale"
-            type="number"
-            step={0.001}
-            min={0.9}
-            max={1.1}
-            value={yScale}
-            onChange={e => setYScale(parseFloat(e.target.value) || 1.0)}
-            style={styles.copiesInput}
-          />
+        {isEightInchDerived ? (
+          <div style={styles.copiesRow}>
+            <label htmlFor="eightInchDesignLength">Design length (inches):</label>
+            <input
+              id="eightInchDesignLength"
+              type="number"
+              step={0.1}
+              min={0.1}
+              value={eightInchDesignLength}
+              onChange={e => setEightInchDesignLength(e.target.value)}
+              style={styles.copiesInput}
+            />
+            <span style={{ fontSize: 11, color: '#7A817A' }}>
+              {parseFloat(eightInchDesignLength) > 0 ? `→ length scale ${yScale.toFixed(4)}` : '→ enter a length to derive the length scale'}
+            </span>
+          </div>
+        ) : calibratedYScale != null && !yScaleOverride ? (
+          <div style={styles.copiesRow}>
+            <label>Length scale (1.0 = no stretch):</label>
+            <span style={{ ...styles.copiesInput, display: 'inline-flex', alignItems: 'center', background: '#F0F4EF', color: '#3f6b38', fontWeight: 700, border: '1px solid #b6ccb0' }}>
+              {calibratedYScale.toFixed(3)}
+            </span>
+            <span style={{ fontSize: 11, color: '#7A817A' }}>
+              locked — confirmed for {rollWidthInches}″ roll, {singleSelectedMesh} mesh
+            </span>
+            <button
+              type="button"
+              style={{ ...styles.btnSecondary, padding: '4px 10px', fontSize: 11 }}
+              onClick={() => setYScaleOverride(true)}
+            >
+              Override
+            </button>
+          </div>
+        ) : (
+          <div style={styles.copiesRow}>
+            <label htmlFor="yScale">Length scale (1.0 = no stretch):</label>
+            <input
+              id="yScale"
+              type="number"
+              step={0.001}
+              min={0.9}
+              max={1.1}
+              value={yScale}
+              onChange={e => setYScale(parseFloat(e.target.value) || 1.0)}
+              style={styles.copiesInput}
+            />
+            {calibratedYScale != null && (
+              <button
+                type="button"
+                style={{ ...styles.btnSecondary, padding: '4px 10px', fontSize: 11 }}
+                onClick={() => setYScaleOverride(false)}
+              >
+                Re-lock to {calibratedYScale.toFixed(3)}
+              </button>
+            )}
+          </div>
+        )}
+        {selectedMeshCounts.size > 1 && (
+          <div style={{ fontSize: 11, color: '#8a6d1f', marginTop: -4, marginBottom: 12 }}>
+            ⚠ Selection mixes mesh counts ({Array.from(selectedMeshCounts).sort().join(', ')}) — no single length scale is
+            correct for all of them. Printing them in separate batches is the only way to get each one right.
+          </div>
+        )}
+
+        <div style={styles.calcBox}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#2D332F', marginBottom: 8 }}>
+            Test Line
+          </div>
+          <div style={{ fontSize: 11, color: '#7A817A', marginBottom: 10, lineHeight: 1.5 }}>
+            Generates one continuous line, two 18-mesh stitch widths thick, exactly this length tall,
+            with the same 2&Prime;-per-side blank margin a real design gets before the length scale is
+            applied to the whole thing — a real design&rsquo;s total commanded feed distance is
+            (content + 4&Prime;) &times; scale, not just content &times; scale. Measure the line itself,
+            not the blank margin above/below it, with a ruler. Uses the roll width and length scale set
+            above.
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="testLineInches">Test length (inches):</label>
+            <input
+              id="testLineInches"
+              type="number"
+              step={0.1}
+              min={0.1}
+              value={testLineInches}
+              onChange={e => setTestLineInches(e.target.value)}
+              style={styles.copiesInput}
+            />
+          </div>
+          <div style={styles.copiesRow}>
+            <label htmlFor="testLineColor">Ink color:</label>
+            <select
+              id="testLineColor"
+              value={testLineColor}
+              onChange={e => setTestLineColor(e.target.value as TestLineColor)}
+              style={styles.copiesInput}
+            >
+              <option value="gray">Gray</option>
+              <option value="beige">Beige</option>
+              <option value="yellow">Yellow</option>
+            </select>
+          </div>
+          <button
+            style={{ ...styles.btnSecondary, ...((testLineBusy || !testLineInches) ? styles.btnDisabled : {}) }}
+            disabled={testLineBusy || !testLineInches}
+            onClick={handleTestLine}
+          >
+            {testLineBusy ? 'Generating…' : 'Download Test Line PDF'}
+          </button>
+          {testLineError && <div style={styles.error}>{testLineError}</div>}
         </div>
 
         <div style={styles.copiesRow}>
@@ -830,6 +1174,7 @@ export default function AdminPage() {
                   {o.width_inches.toFixed(1)}″ × {o.height_inches.toFixed(1)}″
                 </span>
               )}
+              <MeshBadge meshCount={o.mesh_count} />
               {o.printed_at && (
                 <span style={{ fontSize: 11, color: '#9a9287', whiteSpace: 'nowrap' }}>
                   {new Date(o.printed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}

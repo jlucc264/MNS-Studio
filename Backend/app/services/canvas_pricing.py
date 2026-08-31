@@ -23,14 +23,38 @@ TARGET_MATERIAL_MARGIN = 0.80
 # which are in ROLL_COST_CENTS. Margin on the *total* therefore lands above the
 # target at small sizes and converges down toward it as area grows.
 _MATERIAL_COST_PER_SQ_IN_CENTS = ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN
-PRICE_PER_SQ_IN_CENTS = _MATERIAL_COST_PER_SQ_IN_CENTS / (1 - TARGET_MATERIAL_MARGIN)
+
+# Price increase (owner's call), on top of the margin-derived rate above
+# rather than folded into TARGET_MATERIAL_MARGIN, so the 80% material basis
+# stays legible on its own. Calibrated so a 4x4 print-own design (an 8x8
+# canvas, the flagship reference point) lands at exactly $18.00 before the
+# round-up-to-50-cents step below: $18.00 / $13.57 original price. (A first
+# pass targeted $15.00 = 1500/1357 for 2026-09-01; superseded before launch
+# by this larger increase, done at the same time as opening the gallery to
+# larger designs below.)
+PRICE_INCREASE_MULTIPLIER = 1800 / 1357
+PRICE_PER_SQ_IN_CENTS = (
+    _MATERIAL_COST_PER_SQ_IN_CENTS / (1 - TARGET_MATERIAL_MARGIN) * PRICE_INCREASE_MULTIPLIER
+)
+
+
+def round_up_to_50_cents(cents: int) -> int:
+    """Every customer-facing price rounds up to the nearest 50 cents — cleaner
+    price tags, and rounding up (never down) is deliberate for the 2026-09-01
+    increase: it never gives back any of the raise."""
+    return -(-cents // 50) * 50
+
 
 # Floor for pathologically small canvases (the smallest design the editor
 # allows is 0.5", i.e. a 4.5x4.5 canvas at ~20 sq in). Retained from the
 # previous model so a canvas is never priced at a couple of dollars.
-MIN_CANVAS_PRICE_CENTS = 500
+# $5.00 originally, scaled by PRICE_INCREASE_MULTIPLIER and rounded up.
+MIN_CANVAS_PRICE_CENTS = 700
 
-PRINT_OWN_BASE_CENTS = 700        # $7
+PRINT_OWN_BASE_CENTS = 950        # $9.50 ($7 originally, scaled + rounded up)
+# Kept at the original $5 — owner's call, not scaled with the rest of the
+# increase. This is a flat PDF-only product (no printing/material cost), not
+# something the rest of this file's margin reasoning applies to.
 TEMPLATE_PRICE_CENTS = 500        # $5
 
 # A gallery print costs this much more than printing your own design. The
@@ -52,37 +76,46 @@ CREATOR_SHARE_OF_PRINT_OWN = 0.20
 # 5"-tall canvas and ~80% of a flat-rate belt charge would be margin the
 # customer never sees. Owner's call (2026-08): 1.5x the previous belt price.
 BELT_PRICE_MULTIPLIER = 1.5
+# Anchor prices scaled by PRICE_INCREASE_MULTIPLIER (originally $9/$12/$14).
+# These are curve inputs, not a price shown to anyone directly, so they're
+# rounded to the cent rather than to 50 cents — belt_canvas_price_cents
+# rounds the final output instead.
 _LEGACY_ANCHORS = [
-    (30, 900),    # 5×6  = $9
-    (48, 1200),   # 6×8  = $12
-    (96, 1400),   # 8×12 = $14
+    (30, 1194),   # 5×6  = $11.94
+    (48, 1592),   # 6×8  = $15.92
+    (96, 1857),   # 8×12 = $18.57
 ]
 
 # Widest canvas the printer can feed. Rolls arrive 40" wide from the supplier
 # and get cut down to whatever feed width a job needs, so this is a property of
-# the printer, not of the stock.
-MAX_ROLL_WIDTH_IN = 19.0
+# the printer, not of the stock. Corrected 2026-08-30 from an assumed 19" —
+# 17" is the printer's real practical max, and even a 17" print struggled.
+MAX_ROLL_WIDTH_IN = 17.0
 
 # Unstitched canvas left around the design for blocking and framing. 2" is what
 # we want; 1" is the least that's still workable. Designs wide enough that 2"
 # per side would overrun the roll get the margin trimmed toward the floor rather
-# than being refused — that's what lets a 17" design (19" at 1") print at all.
-# Anything needing less than the floor is genuinely unprintable.
+# than being refused. Anything needing less than the floor is genuinely
+# unprintable.
 CANVAS_MARGIN_IN = 2.0
 MIN_CANVAS_MARGIN_IN = 1.0
 
-# Maximum printable design dimensions (short side × long side).
-# Short side is the roll minus the *minimum* margin on both edges; long side is
-# bounded by the editor's 20" canvas stage, not by the printer, since the long
-# axis runs down the roll's unbounded feed direction.
-_MAX_PRINT_SHORT_IN = MAX_ROLL_WIDTH_IN - 2 * MIN_CANVAS_MARGIN_IN  # 15.0
+# Maximum printable design dimensions (short side × long side) — the hard
+# ceiling on what can even be drafted in studio, deliberately below what
+# MAX_ROLL_WIDTH_IN - 2*MIN_CANVAS_MARGIN_IN would allow (15"): the owner
+# wants real headroom under the printer's practical max, not the theoretical
+# one. Long side is bounded by the editor's 20" canvas stage, not the
+# printer, since the long axis runs down the roll's unbounded feed direction.
+_MAX_PRINT_SHORT_IN = 14.0
 _MAX_PRINT_LONG_IN = 20.0
 
-# Self-serve envelope — see is_standard_order. A 10x6 design is a 14x10 canvas,
-# which is what the flat $7 shipping is sized to cover. Anything larger still
+# Self-serve/gallery envelope — see is_standard_order. Short side up to 12"
+# (needing at most the 16" roll tier, see STANDARD_WIDTH_TIERS_IN below);
+# long side has no separate cap beyond the overall printable ceiling above.
+# Anything with a short side over 12" (up to the 14" printable ceiling) still
 # prints, but is quoted by hand and cannot be posted to the gallery.
-STANDARD_MAX_SHORT_IN = 6.0
-STANDARD_MAX_LONG_IN = 10.0
+STANDARD_MAX_SHORT_IN = 12.0
+STANDARD_MAX_LONG_IN = _MAX_PRINT_LONG_IN
 
 # Belt mode: a long, narrow strip that doesn't fit the normal short/long
 # envelope above. Mirrors the frontend's belt constants (studio/page.tsx) —
@@ -118,12 +151,11 @@ def is_standard_order(width_inches: float, height_inches: float) -> bool:
     """Whether a design can be bought self-serve and posted to the gallery.
 
     Narrower than is_design_printable, which only asks whether the roll can
-    physically print it. The flat $7 shipping is sized for a 14x10 canvas
-    (a 10x6 design); past that the parcel costs more than the buyer is charged,
-    so large prints are quoted and invoiced by hand instead. This was the whole
-    printable envelope until 2026-07-12, when the Stitchly importer raised
-    is_design_printable to 13x20 and unintentionally opened self-serve checkout
-    with it.
+    physically print it. Gated on short side alone (up to 12", the largest
+    size that still fits a pre-cut roll tier — see STANDARD_WIDTH_TIERS_IN);
+    past that, large prints are quoted and invoiced by hand instead. Raised
+    from 6"x10" to 12"x(printable long max) on 2026-08-30 alongside adding the
+    12" and 16" roll tiers.
 
     Belts are exempt: they are long but narrow, ship in the same tube, and are
     priced off their own curve.
@@ -164,16 +196,21 @@ def canvas_price_cents(sq_in: float) -> int:
     while the invoice still shows an honest canvas + fulfillment split.
 
     The floor is applied after the subtraction, so the smallest canvases still
-    total $12 (a $5 canvas line plus the $7 fee) exactly as before.
+    total $16.50 (a $7 canvas line plus the $9.50 fee) exactly as before.
 
     Rounds half UP via floor(x + 0.5) rather than using round(), which is
     banker's rounding and would disagree with JavaScript's Math.round on exact
     .5 values (783 sq in lands on exactly 16602.5). The frontend mirrors this
     function to quote prices in the editor, so any divergence shows the user
     one price and charges another at checkout.
+
+    The result is then rounded up to the nearest 50 cents (round_up_to_50_cents)
+    — the 2026-09-01 clean-pricing policy — so this is the last place the raw,
+    unrounded per-sq-in math is visible.
     """
     item_total = math.floor(PRICE_PER_SQ_IN_CENTS * sq_in + 0.5)
-    return max(MIN_CANVAS_PRICE_CENTS, item_total - PRINT_OWN_BASE_CENTS)
+    raw = max(MIN_CANVAS_PRICE_CENTS, item_total - PRINT_OWN_BASE_CENTS)
+    return round_up_to_50_cents(raw)
 
 
 def _legacy_anchor_price_cents(sq_in: float) -> int:
@@ -199,29 +236,52 @@ def belt_canvas_price_cents(sq_in: float) -> int:
     """Belt material charge, set so the print-own TOTAL comes out at exactly
     BELT_PRICE_MULTIPLIER x the old total (base fee included, which is what the
     customer actually sees). Solving base + price = mult * (base + legacy) gives
-    price = mult * legacy + (mult - 1) * base."""
+    price = mult * legacy + (mult - 1) * base. Rounded up to the nearest 50
+    cents like canvas_price_cents, for the same clean-pricing policy."""
     legacy = _legacy_anchor_price_cents(sq_in)
-    return math.floor(
+    raw = math.floor(
         BELT_PRICE_MULTIPLIER * legacy + (BELT_PRICE_MULTIPLIER - 1) * PRINT_OWN_BASE_CENTS + 0.5
     )
+    return round_up_to_50_cents(raw)
 
 
 def _fmt_canvas(n: float) -> str:
     return str(int(n)) if n == int(n) else f"{n:.1f}"
 
 
+# Standard orders (see is_standard_order) are cut from a small set of
+# pre-cut roll widths rather than a bespoke width per design — 8", 10", 12"
+# and 16" are what's actually kept cut (added the latter two 2026-08-30 when
+# the standard envelope grew to a 12" short side), so a design whose required
+# width rounds to, say, 8.5" prints on the 10" stock rather than a one-off
+# 8.5"/9" cut. This always tops out at STANDARD_MAX_SHORT_IN +
+# 2*CANVAS_MARGIN_IN (16"), so 16" is always a safe last resort. Non-standard
+# orders and belts stay fully continuous.
+STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
+
+
 def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
     """Canvas dimensions (design plus waste on each side, rounded to the nearest
-    0.5") and the material price for that area."""
+    0.5") and the material price for that area.
+
+    Standard orders snap their short side up to the nearest tier in
+    STANDARD_WIDTH_TIERS_IN instead of a continuous width — see the comment
+    there. Whichever of width/height is shorter gets the tiered value; the
+    longer side stays continuous (it's the roll's feed direction, cut to
+    length per job regardless of which width stock is loaded).
+    """
     margin = canvas_margin_inches(width_inches, height_inches)
-    canvas_w = round((width_inches + 2 * margin) * 2) / 2
-    canvas_h = round((height_inches + 2 * margin) * 2) / 2
+    is_belt = is_belt_design(width_inches, height_inches)
+    if is_standard_order(width_inches, height_inches) and not is_belt:
+        short_side = min(width_inches, height_inches) + 2 * margin
+        long_side = round((max(width_inches, height_inches) + 2 * margin) * 2) / 2
+        tier = next(t for t in STANDARD_WIDTH_TIERS_IN if t >= short_side)
+        canvas_w, canvas_h = (tier, long_side) if width_inches <= height_inches else (long_side, tier)
+    else:
+        canvas_w = round((width_inches + 2 * margin) * 2) / 2
+        canvas_h = round((height_inches + 2 * margin) * 2) / 2
     sq_in = canvas_w * canvas_h
-    price = (
-        belt_canvas_price_cents(sq_in)
-        if is_belt_design(width_inches, height_inches)
-        else canvas_price_cents(sq_in)
-    )
+    price = belt_canvas_price_cents(sq_in) if is_belt else canvas_price_cents(sq_in)
     return {
         "label": f"{_fmt_canvas(canvas_w)}×{_fmt_canvas(canvas_h)}",
         "width": canvas_w,
@@ -236,8 +296,14 @@ def print_own_total_cents(canvas: dict) -> int:
 
 def print_gallery_total_cents(canvas: dict) -> int:
     """Print-own plus the creator markup. Derived from the print-own total (not
-    a separate base fee) so the two can never drift apart."""
-    return math.floor(print_own_total_cents(canvas) * (1 + GALLERY_MARKUP) + 0.5)
+    a separate base fee) so the two can never drift apart.
+
+    print_own_total_cents is always already a multiple of 50 (base fee plus a
+    canvas price that's already rounded), but the 1.2x markup on top of that
+    doesn't generally land on one — e.g. $14.00 * 1.2 = $16.80 — so this rounds
+    up again rather than assuming the input's cleanliness carries through."""
+    raw = math.floor(print_own_total_cents(canvas) * (1 + GALLERY_MARKUP) + 0.5)
+    return round_up_to_50_cents(raw)
 
 
 def creator_earnings_cents(gallery_total_cents: int) -> int:
