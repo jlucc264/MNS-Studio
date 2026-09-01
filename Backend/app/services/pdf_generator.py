@@ -1,24 +1,32 @@
+import json
 import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from io import BytesIO
 from collections import Counter
 from datetime import datetime
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
+from uuid import uuid4
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfdoc import ViewerPreferencesPDFDictionary
 from PIL import Image, ImageDraw, ImageFont
+import qrcode
 import reportlab
 
 from .canvas_pricing import MAX_ROLL_WIDTH_IN, CANVAS_MARGIN_IN, canvas_margin_inches
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
+from .supabase_storage import upload_file_to_supabase
 
 logger = logging.getLogger(__name__)
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 DISPLAY_CELL_SIZE = 12
 
@@ -372,6 +380,47 @@ def _build_report_rows(cells: list[list[str]], palette: list[dict], mesh_count: 
     return rows
 
 
+def _build_thread_list_qr_url(
+    rows: list[dict],
+    width_inches: float,
+    height_inches: float,
+    mesh_count: int,
+) -> str | None:
+    """Uploads the same color/skein data as the report table to a small public
+    JSON blob and returns a link to the mobile-friendly /thread-list page that
+    renders it — the target for the report page's QR code. Lets someone pull
+    the color list up on their phone in a thread store instead of squinting at
+    printed codes. Returns None (and the caller skips drawing a QR at all)
+    when Supabase storage isn't configured, same fallback upload_pdf_to_supabase
+    and upload_png_to_supabase already use elsewhere in this pipeline — a
+    broken/unreachable QR code is worse than no QR code."""
+    payload = {
+        "width_inches": round(width_inches, 2),
+        "height_inches": round(height_inches, 2),
+        "mesh_count": mesh_count,
+        "colors_used": len(rows),
+        "total_stitches": sum(row["count"] for row in rows),
+        "rows": [
+            {
+                "hex": row["hex"],
+                "dmc_code": row["dmc_code"],
+                "dmc_name": row["dmc_name"],
+                "count": row["count"],
+                "skeins": row["skeins"],
+            }
+            for row in rows
+        ],
+    }
+    json_path = FINALIZED_DIR / f"thread-list_{uuid4().hex}.json"
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+    public_json_url = upload_file_to_supabase(
+        json_path, prefix="public-thread-lists", content_type="application/json",
+    )
+    if not public_json_url:
+        return None
+    return f"{FRONTEND_URL}/thread-list?src={quote(public_json_url, safe='')}"
+
+
 def _draw_report_page(
     pdf: canvas.Canvas,
     page_size: tuple[float, float],
@@ -383,6 +432,7 @@ def _draw_report_page(
     palette: list[dict],
     cells: list[list[str]],
     has_outline: bool = False,
+    qr_url: str | None = None,
 ) -> None:
     page_width, page_height = page_size
     margin = PAGE_MARGIN
@@ -423,6 +473,20 @@ def _draw_report_page(
     pdf.setFont("Helvetica", 8)
     pdf.setFillColor(colors.HexColor("#7A817A"))
     pdf.drawRightString(thumb_x + thumb_size, thumb_y - 10, f"Exported {export_date}")
+
+    if qr_url:
+        qr_size = 62
+        qr_x = thumb_x - qr_size - 16
+        qr_y = thumb_y + (thumb_size - qr_size) / 2
+        qr_image = qrcode.make(qr_url, box_size=8, border=1)
+        qr_buffer = BytesIO()
+        qr_image.save(qr_buffer, format="PNG")
+        qr_buffer.seek(0)
+        pdf.drawImage(ImageReader(qr_buffer), qr_x, qr_y, width=qr_size, height=qr_size)
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColor(colors.HexColor("#7A817A"))
+        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 10, "Scan for mobile")
+        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 19, "color list")
 
     summary_x = margin + 18
     summary_y = page_height - 112
@@ -699,10 +763,11 @@ def generate_preview_pdf(
     thumb_image = _render_preview_image_from_cells(
         preview_cells, mesh_count, show_grid, include_border=False,
     )
-    report_rows = _build_report_rows(cells, palette)
+    report_rows = _build_report_rows(cells, palette, mesh_count)
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
     has_outline = any(cell == FINISH_OUTLINE_CELL for row in cells for cell in row)
+    qr_url = _build_thread_list_qr_url(report_rows, design_w, design_h, mesh_count)
 
     def draw_public_pages(pdf: canvas.Canvas) -> None:
         _draw_cover_page(
@@ -731,6 +796,7 @@ def generate_preview_pdf(
             palette,
             cells,
             has_outline,
+            qr_url,
         )
 
     public_pdf = canvas.Canvas(str(public_path), pagesize=page_size)
@@ -956,6 +1022,7 @@ _TEST_LINE_COLORS = {
     "gray": ("#CCCCCC", "#888888"),
     "beige": ("#E8D9A0", "#A89060"),
     "yellow": ("#F0E68C", "#B8A030"),
+    "pink": ("#F5C6D0", "#C08494"),
 }
 
 
@@ -965,14 +1032,32 @@ def generate_test_line_pdf(
     y_scale: float = 1.0,
     leading_blank_inches: float = 0.5,
     line_color: str = "gray",
+    mesh_count: int | None = None,
+    tick_every_stitches: int | None = None,
 ) -> Path:
-    """A length-calibration aid: a single continuous line, two 18-mesh stitch
-    widths thick, running exactly design_length_inches * y_scale tall, with
+    """A length-calibration aid: a single continuous line, two stitch widths
+    thick, running exactly design_length_inches * y_scale tall, with
     the same 2"-per-side canvas margin (CANVAS_MARGIN_IN) a real design gets
     — blank above and below the line — before y_scale is applied to the
     whole thing. Print it, then measure the line's own length on the canvas
     with a ruler: if it matches design_length_inches, this y_scale is
     correct for a print of this length.
+
+    Pass mesh_count to switch from length calibration to STITCH calibration
+    (added 2026-08-31): cross-ticks are drawn every tick_every_stitches
+    (default: 5 nominal inches' worth) and labelled with the cumulative
+    stitch count they are supposed to land on. Instead of measuring the
+    line, count real canvas holes from the top tick to each labelled tick.
+    A tick reading "195 st" that sits over the 192nd hole means the print
+    is running 3 stitches short over that span, and the correction is
+    new_y_scale = y_scale * (195 / 192) — expected over counted, using
+    whatever y_scale this sheet was actually printed at.
+
+    Length-accurate and stitch-accurate are NOT the same target and do not
+    share a scale: they differ by exactly nominal_mesh / real_holes_per_inch,
+    which is ~1.6% on 13-mesh stock measured at ~12.8 holes/in. A scale
+    tuned by ruler will be wrong by that factor for stitch alignment, which
+    is why this mode exists rather than reusing the length numbers.
 
     The margin matters (added 2026-08-29): generate_roll_print_pdf scales
     content-plus-margin together as one combined length (see draw_h below),
@@ -1009,19 +1094,48 @@ def generate_test_line_pdf(
 
     pdf.setFont("Helvetica", 8)
     pdf.setFillColor(colors.HexColor("#999999"))
-    pdf.drawCentredString(
-        roll_width_pts / 2, top_y - 14,
-        f'Testing {design_length_inches:.2f}" @ yScale {y_scale:.4f}  ·  measure the line, not the blank margin above/below it',
+    caption = (
+        f'Testing {design_length_inches:.2f}" @ yScale {y_scale:.4f}  ·  '
+        f'{mesh_count} mesh  ·  count canvas HOLES from the top tick to each label'
+        if mesh_count
+        else f'Testing {design_length_inches:.2f}" @ yScale {y_scale:.4f}  ·  measure the line, not the blank margin above/below it'
     )
+    pdf.drawCentredString(roll_width_pts / 2, top_y - 14, caption)
 
-    # Two 18-mesh stitch widths (2/18" = 8pt exactly), centered on the roll.
-    line_width_pts = 2 * (1 / 18) * 72
+    # Two stitch widths at the mesh under test, so the line reads as a real
+    # two-column run of stitches rather than an arbitrary rule. Falls back to
+    # 18 mesh (2/18" = 8pt) for the original length-only mode.
+    line_width_pts = 2 * (1 / (mesh_count or 18)) * 72
     line_x = (roll_width_pts - line_width_pts) / 2
     fill_hex, stroke_hex = _TEST_LINE_COLORS.get(line_color, _TEST_LINE_COLORS["gray"])
     pdf.setFillColor(colors.HexColor(fill_hex))
     pdf.setStrokeColor(colors.HexColor(stroke_hex))
     pdf.setLineWidth(0.75)
     pdf.rect(line_x, bar_bottom, line_width_pts, bar_h_pts, fill=1, stroke=1)
+
+    if mesh_count:
+        # Ticks sit at the scaled position of stitch k — k/mesh nominal inches
+        # in, times y_scale — so the last tick lands exactly on bar_bottom.
+        total_stitches = int(round(design_length_inches * mesh_count))
+        interval = tick_every_stitches or mesh_count * 5
+        marks = list(range(0, total_stitches + 1, interval))
+        if marks[-1] != total_stitches:
+            marks.append(total_stitches)
+
+        tick_reach = 0.3 * 72
+        pdf.setFont("Helvetica", 7)
+        for k in marks:
+            tick_y = bar_top - (k / mesh_count) * y_scale * 72
+            pdf.setStrokeColor(colors.HexColor(stroke_hex))
+            pdf.setLineWidth(0.5)
+            pdf.line(line_x - tick_reach, tick_y, line_x + line_width_pts + tick_reach, tick_y)
+            nominal_in = k / mesh_count
+            pdf.setFillColor(colors.HexColor("#666666"))
+            pdf.drawString(line_x + line_width_pts + tick_reach + 4, tick_y - 2.5, f"{k} st")
+            pdf.drawRightString(
+                line_x - tick_reach - 4, tick_y - 2.5,
+                f'{nominal_in:g}"' if nominal_in == int(nominal_in) else f'{nominal_in:.2f}"',
+            )
 
     _set_print_actual_size(pdf)
     pdf.save()

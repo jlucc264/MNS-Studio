@@ -1249,10 +1249,16 @@ def admin_test_line_pdf(
     roll_width: float = 8.0,
     y_scale: float = 1.0,
     color: str = "gray",
+    mesh: int = 0,
     user_id: str = Depends(get_current_user_id),
 ):
     _require_admin(user_id)
-    path = generate_test_line_pdf(design_length_inches=length, roll_width_inches=roll_width, y_scale=y_scale, line_color=color)
+    # mesh=0 keeps the original length-only line (no ticks); any real mesh
+    # switches it to the stitch-counting variant.
+    path = generate_test_line_pdf(
+        design_length_inches=length, roll_width_inches=roll_width,
+        y_scale=y_scale, line_color=color, mesh_count=mesh or None,
+    )
     return FileResponse(str(path), media_type="application/pdf", filename="mns_test_line.pdf")
 
 

@@ -116,6 +116,15 @@ create table if not exists public.notifications (
 alter table public.print_orders
 add column if not exists amount_total_cents integer;
 
+-- How the design was actually created ('blank' or 'import'), so the gallery
+-- publish flow can tag it correctly even if the studio session that created
+-- it ended and the draft was resumed later. Distinct from source_type, which
+-- is a stitching-algorithm hint that defaults to 'photo' regardless of origin
+-- and was previously (wrongly) read as an origin signal, mislabeling every
+-- from-scratch canvas as "from photo".
+alter table public.projects
+add column if not exists design_origin text;
+
 -- A reusable starting point for expenses that recur but vary in amount each
 -- time (e.g. a canvas roll purchase) — default_amount_cents just prefills the
 -- log form, it is never treated as authoritative.

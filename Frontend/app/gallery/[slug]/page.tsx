@@ -9,7 +9,7 @@ import { NavAccountControls } from '../../../components/NavAccountControls'
 import { NotificationBell } from '../../../components/NotificationBell'
 import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
-import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -658,7 +658,17 @@ export default function CreatorProfilePage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
+                  const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                  const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
+                  // Creator credit mirrors the actual payout formula, so it's kept
+                  // as-is; the canvas line absorbs the rounding remainder instead of
+                  // showing its own independently-rounded value, so the three lines
+                  // always sum to exactly what the button charges. Mirrors the same
+                  // fix in gallery/page.tsx.
+                  const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                  const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
+                    ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
+                    : null
                   return (
                     <>
                       <button
@@ -676,12 +686,12 @@ export default function CreatorProfilePage() {
                             ? `Order print — ${printPrice}`
                             : 'Print unavailable'}
                       </button>
-                      {canvas && printPrice && (
+                      {canvas && printPrice && canvasDisplayCents !== null && creatorCreditCents !== null && (
                         <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                           <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
-                          <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
+                          <div>{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} — {formatCents(canvasDisplayCents)}</div>
                           <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
-                          <div>Creator credit (20%) — {formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))}</div>
+                          <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
                         </div>
                       )}
                       {canvas && printPrice && (

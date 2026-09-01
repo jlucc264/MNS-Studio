@@ -200,40 +200,74 @@ function saveCalibration(rollWidth: number, values: Calibration): boolean {
   }
 }
 
-// Confirmed length scales, keyed by "<roll width>-<mesh>". Mesh is part of
-// the key deliberately — 13-mesh canvas feeds differently from 18-mesh
-// (different physical fabric), so a value confirmed for one mesh says
-// nothing about the other.
+// Confirmed scales, keyed by "<roll width>-<mesh>". Mesh is part of the key
+// deliberately — 13-mesh canvas feeds differently from 18-mesh (different
+// physical fabric), so a value confirmed for one mesh says nothing about the
+// other.
 //
-// Both are the same deliberate, prescriptive policy, not fitted
-// printer-feed curves — real woven canvas doesn't hold to a perfectly exact
-// holes-per-inch count, so chasing an exact ruler-length match (18-mesh went
-// through a 1.007 lock on 2026-08-28, then 0.986 on 2026-08-29, before
-// landing here) kept moving as new data came in, and along the way visibly
-// compressed the stitch pattern to hit an exact-length target that wasn't
-// physically achievable to begin with. Instead: accept a known, small,
-// per-mesh amount of stitch drift rather than fight for exact-length
-// precision the fabric itself doesn't support.
+// IMPORTANT — two different targets live in this table, and they are not
+// interchangeable. Length-accurate ("the print measures 15in with a ruler")
+// and stitch-accurate ("the print spans exactly 195 real canvas holes") only
+// coincide if the canvas has exactly <mesh> holes per inch. It does not. The
+// two targets differ by nominal_mesh / real_holes_per_inch, which measured
+// ~2% on 13-mesh stock. A value tuned by ruler is therefore WRONG for stitch
+// alignment by that factor, which is what stitchers actually notice — they
+// follow holes, not printed marks.
 //
-// 10"/18-mesh (0.9889, since 2026-08-30): 1 stitch of drift per 5" of print
-// length — (5*18-1)/(5*18) = 89/90.
-// 10"/13-mesh (0.9846, since 2026-08-30): measured directly by counting real
-// canvas holes (192 over 15", i.e. exactly 1 stitch short of the 195 nominal
-// — also a 1-per-5" rate), then confirmed spot on at a 4" print —
-// (5*13-1)/(5*13) = 64/65.
+// All values below are STITCH-calibrated (2026-08-31) except where noted,
+// measured with the tick mode of generate_test_line_pdf: print at a known
+// scale, count canvas holes to each labelled tick, correct by expected /
+// counted. Two independent sheet lengths per width, and a confirmation sheet
+// at the resulting value for anything that came out materially off 1.000.
+//
+//   8-13  = 1.021  At 1.000 it ran 4 stitches short over 15in (191 of 195).
+//                  Confirmed: a 15in sheet at 1.021 read exactly 195. Error
+//                  was uniform per segment, not front-loaded, which is why
+//                  this is a flat constant and not a length curve.
+//   10-13 = 1.000  Read 196 of 195 over 15in (+1). Supersedes the old
+//   12-13 = 1.000  Read 193.5 of 195 (-1.5).      0.9846, which was
+//   16-13 = 1.000  Read exactly 195.              length-derived.
+//
+//   8-18  = 1.021  Read 123.5 of 126 on a 7in sheet and 70.5 of 72 on a 4in,
+//                  implying 1.020 and 1.021.
+//   10-18 = 0.992  Read 127 of 126 and 72.6 of 72 — both ~0.8% long, giving
+//                  ~18.145 holes per commanded inch. Supersedes 89/90
+//                  (0.9889), which was length-derived and slightly
+//                  over-corrected: it encoded "1 stitch of drift per 5in"
+//                  where the measured rate is closer to 0.7.
+//   12-18 = 1.000  Read exactly 72 of 72 on a 4in and 126 of 126 on a 7in.
+//   16-18 = 1.000  NOT MEASURED — see PROVISIONAL_Y_SCALE_KEYS below.
+//
+// Two findings worth keeping. First, 8" needs the same 1.021 at BOTH mesh
+// counts while 10" moved from 1.000 to 0.992 between them — so the 8" deficit
+// is the printer losing ~2% of feed to poor grip on narrow stock, largely
+// indifferent to the fabric, whereas the wider widths track the weave. Second,
+// the wide widths all land within ~1.5 stitches over a full-length design
+// (~0.1in), so they share one number rather than each carrying a per-width
+// correction resting on a single sheet.
+//
+// Retired 2026-08-31: eightInchYScaleForLength, a least-squares fit over three
+// short LENGTH measurements that gave 8" a 1/L curve climbing toward 1.0388.
+// The stitch run disproved its shape at both mesh counts — the real
+// per-segment shortfall is flat, and the curve called for 1.035 where the
+// truth was 1.021. Both 8" pairs are now ordinary locked constants.
 const CALIBRATED_Y_SCALES: Record<string, number> = {
-  '10-18': 89 / 90,
-  '10-13': 64 / 65,
+  '8-13': 1.021,
+  '10-13': 1.0,
+  '12-13': 1.0,
+  '16-13': 1.0,
+  '8-18': 1.021,
+  '10-18': 0.992,
+  '12-18': 1.0,
+  '16-18': 1.0,
 }
 
-// The 8" roll's error is NOT flat — short prints need much more correction
-// than long ones (a fixed feed shortfall matters more on a short print). Fit
-// least-squares from three (target length @ yScale → actual measured length)
-// points: 1.6"@1.062→1.6875", 3.9"@1.0265→3.9", 4.0"@1.024→4.0". Solving
-// "what yScale makes the actual length equal the target" gives this formula.
-function eightInchYScaleForLength(designLengthInches: number): number {
-  return 1.038756 - 0.053153 / designLengthInches
-}
+// Entries defaulted to 1.000 without a stitch test behind them. They still
+// lock the field (1.000 is the best guess given every other width at that mesh
+// landed there) but the UI labels them provisional rather than confirmed —
+// mislabelling an untested value as measured is exactly what sent the 13-mesh
+// numbers wrong for a week.
+const PROVISIONAL_Y_SCALE_KEYS = new Set(['16-18'])
 
 // Distinct colors per mesh count (not just text) so a mismatched mesh jumps
 // out while scanning a list of rows, rather than requiring you to read every
@@ -288,8 +322,6 @@ export default function AdminPage() {
   const [skewCalcSpanInches, setSkewCalcSpanInches] = useState('')
   const [skewCalcTargetInches, setSkewCalcTargetInches] = useState('')
   const [yScale, setYScale] = useState(1.0)
-  const [eightInchDesignLength, setEightInchDesignLength] = useState('')
-  const isEightInchDerived = Math.abs(rollWidthInches - 8) < 0.01
   // A locked value only means something if every selected design shares one
   // mesh — mixing meshes in one job means at least one of them is printing
   // at the wrong scale no matter what's picked, so that case falls back to
@@ -300,9 +332,11 @@ export default function AdminPage() {
     ...projects.filter(p => selectedIds.includes(p.id)).map(p => p.mesh_count ?? 13),
   ])
   const singleSelectedMesh = selectedMeshCounts.size === 1 ? Array.from(selectedMeshCounts)[0] : null
+  const calibratedKey = `${rollWidthInches}-${singleSelectedMesh}`
   const calibratedYScale = singleSelectedMesh != null
-    ? CALIBRATED_Y_SCALES[`${rollWidthInches}-${singleSelectedMesh}`]
+    ? CALIBRATED_Y_SCALES[calibratedKey]
     : undefined
+  const calibratedIsProvisional = calibratedYScale != null && PROVISIONAL_Y_SCALE_KEYS.has(calibratedKey)
   const [yScaleOverride, setYScaleOverride] = useState(false)
   const [includeAlignmentTest, setIncludeAlignmentTest] = useState(false)
   const [calibBusy, setCalibBusy] = useState(false)
@@ -313,6 +347,9 @@ export default function AdminPage() {
   // Defaults to beige rather than gray — swappable so a calibration run
   // doesn't have to compete with real jobs for whichever cartridge is low.
   const [testLineColor, setTestLineColor] = useState<TestLineColor>('beige')
+  // 0 = the original length-only line. Picking a mesh switches it to the
+  // stitch-counting variant with labelled ticks.
+  const [testLineMesh, setTestLineMesh] = useState(0)
   const [testLineBusy, setTestLineBusy] = useState(false)
   const [testLineError, setTestLineError] = useState('')
   const [calibError, setCalibError] = useState('')
@@ -439,11 +476,9 @@ export default function AdminPage() {
   useEffect(() => {
     const saved = loadCalibration()[String(rollWidthInches)]
     if (!saved) return
-    // 8" has its length scale derived below rather than remembered
-    // per-session, and a calibrated mesh/width pair is locked unless
-    // explicitly overridden — a stale saved value here must not clobber
-    // either one.
-    if (!isEightInchDerived && !(calibratedYScale != null && !yScaleOverride)) setYScale(saved.yScale)
+    // A calibrated width/mesh pair is locked unless explicitly overridden — a
+    // stale saved value must not clobber it.
+    if (!(calibratedYScale != null && !yScaleOverride)) setYScale(saved.yScale)
     setXOffsetInches(saved.xOffsetInches)
     setSkewCorrectionInches(saved.skewCorrectionInches)
     setSkewCorrectionYInches(saved.skewCorrectionYInches ?? 0)
@@ -460,19 +495,14 @@ export default function AdminPage() {
     )
   }, [rollWidthInches])
 
-  // 8" derives its length scale from design length. A calibrated mesh/width
-  // pair (see CALIBRATED_Y_SCALES) locks to its confirmed value unless the
-  // operator explicitly opts into overriding it for testing.
+  // A calibrated width/mesh pair (see CALIBRATED_Y_SCALES) locks to its
+  // confirmed value unless the operator explicitly opts into overriding it for
+  // testing. Anything with no entry falls through to the manual field.
   useEffect(() => {
-    if (isEightInchDerived) {
-      const length = parseFloat(eightInchDesignLength)
-      if (length > 0) setYScale(eightInchYScaleForLength(length))
-      return
-    }
     if (calibratedYScale != null && !yScaleOverride) {
       setYScale(calibratedYScale)
     }
-  }, [rollWidthInches, eightInchDesignLength, isEightInchDerived, calibratedYScale, yScaleOverride])
+  }, [rollWidthInches, calibratedYScale, yScaleOverride])
 
   // Selection changed to a mix of meshes, a different width, or an
   // uncalibrated mesh — don't leave a stale override switched on for next
@@ -539,7 +569,7 @@ export default function AdminPage() {
     setTestLineBusy(true)
     setTestLineError('')
     try {
-      await downloadTestLinePdf(session.access_token, length, rollWidthInches, yScale, testLineColor)
+      await downloadTestLinePdf(session.access_token, length, rollWidthInches, yScale, testLineColor, testLineMesh)
     } catch (e: unknown) {
       setTestLineError(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -1004,30 +1034,24 @@ export default function AdminPage() {
             style={styles.copiesInput}
           />
         </div>
-        {isEightInchDerived ? (
-          <div style={styles.copiesRow}>
-            <label htmlFor="eightInchDesignLength">Design length (inches):</label>
-            <input
-              id="eightInchDesignLength"
-              type="number"
-              step={0.1}
-              min={0.1}
-              value={eightInchDesignLength}
-              onChange={e => setEightInchDesignLength(e.target.value)}
-              style={styles.copiesInput}
-            />
-            <span style={{ fontSize: 11, color: '#7A817A' }}>
-              {parseFloat(eightInchDesignLength) > 0 ? `→ length scale ${yScale.toFixed(4)}` : '→ enter a length to derive the length scale'}
-            </span>
-          </div>
-        ) : calibratedYScale != null && !yScaleOverride ? (
+        {calibratedYScale != null && !yScaleOverride ? (
           <div style={styles.copiesRow}>
             <label>Length scale (1.0 = no stretch):</label>
-            <span style={{ ...styles.copiesInput, display: 'inline-flex', alignItems: 'center', background: '#F0F4EF', color: '#3f6b38', fontWeight: 700, border: '1px solid #b6ccb0' }}>
+            <span style={{
+              ...styles.copiesInput,
+              display: 'inline-flex',
+              alignItems: 'center',
+              fontWeight: 700,
+              ...(calibratedIsProvisional
+                ? { background: '#FBF4E4', color: '#8a6d1f', border: '1px solid #e0cfa4' }
+                : { background: '#F0F4EF', color: '#3f6b38', border: '1px solid #b6ccb0' }),
+            }}>
               {calibratedYScale.toFixed(3)}
             </span>
-            <span style={{ fontSize: 11, color: '#7A817A' }}>
-              locked — confirmed for {rollWidthInches}″ roll, {singleSelectedMesh} mesh
+            <span style={{ fontSize: 11, color: calibratedIsProvisional ? '#8a6d1f' : '#7A817A' }}>
+              {calibratedIsProvisional
+                ? `provisional — defaulted for ${rollWidthInches}″ roll, ${singleSelectedMesh} mesh, not yet stitch-tested`
+                : `locked — confirmed for ${rollWidthInches}″ roll, ${singleSelectedMesh} mesh`}
             </span>
             <button
               type="button"
@@ -1073,12 +1097,18 @@ export default function AdminPage() {
             Test Line
           </div>
           <div style={{ fontSize: 11, color: '#7A817A', marginBottom: 10, lineHeight: 1.5 }}>
-            Generates one continuous line, two 18-mesh stitch widths thick, exactly this length tall,
+            Generates one continuous line, two stitch widths thick, exactly this length tall,
             with the same 2&Prime;-per-side blank margin a real design gets before the length scale is
             applied to the whole thing — a real design&rsquo;s total commanded feed distance is
-            (content + 4&Prime;) &times; scale, not just content &times; scale. Measure the line itself,
-            not the blank margin above/below it, with a ruler. Uses the roll width and length scale set
-            above.
+            (content + 4&Prime;) &times; scale, not just content &times; scale. Uses the roll width and
+            length scale set above.
+          </div>
+          <div style={{ fontSize: 11, color: '#7A817A', marginBottom: 10, lineHeight: 1.5 }}>
+            <strong>Length mode</strong> (mesh = off): measure the line itself with a ruler, not the blank
+            margin above/below it. <strong>Stitch mode</strong> (pick a mesh): adds labelled cross-ticks
+            every 5 nominal inches — count canvas <em>holes</em> from the top tick to each label. If the
+            tick marked &ldquo;195 st&rdquo; sits over hole 192, the correction is
+            scale &times; (195 / 192), using the scale this sheet was printed at.
           </div>
           <div style={styles.copiesRow}>
             <label htmlFor="testLineInches">Test length (inches):</label>
@@ -1093,6 +1123,24 @@ export default function AdminPage() {
             />
           </div>
           <div style={styles.copiesRow}>
+            <label htmlFor="testLineMesh">Mesh (ticks):</label>
+            <select
+              id="testLineMesh"
+              value={testLineMesh}
+              onChange={e => setTestLineMesh(Number(e.target.value))}
+              style={styles.copiesInput}
+            >
+              <option value={0}>Off — length only</option>
+              <option value={13}>13 mesh</option>
+              <option value={18}>18 mesh</option>
+            </select>
+            {testLineMesh > 0 && parseFloat(testLineInches) > 0 && (
+              <span style={{ fontSize: 11, color: '#7A817A' }}>
+                → {Math.round(parseFloat(testLineInches) * testLineMesh)} stitches, tick every {testLineMesh * 5}
+              </span>
+            )}
+          </div>
+          <div style={styles.copiesRow}>
             <label htmlFor="testLineColor">Ink color:</label>
             <select
               id="testLineColor"
@@ -1103,6 +1151,7 @@ export default function AdminPage() {
               <option value="gray">Gray</option>
               <option value="beige">Beige</option>
               <option value="yellow">Yellow</option>
+              <option value="pink">Light pink</option>
             </select>
           </div>
           <button

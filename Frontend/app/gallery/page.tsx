@@ -9,7 +9,7 @@ import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { NotificationBell } from '../../components/NotificationBell'
-import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
@@ -18,7 +18,10 @@ import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
 
-const ORIGIN_TAGS = new Set(['remix', 'from photo', 'graphic art'])
+// 'from photo' kept for gallery items published before 2026-08-30, when this
+// tag was replaced by 'original'/'import' (it was being applied to every
+// from-scratch design too, not just actual photo imports).
+const ORIGIN_TAGS = new Set(['remix', 'original', 'import', 'from photo', 'graphic art'])
 const WELCOME_STORAGE_KEY = 'mns_welcome_seen'
 const PAGE_SIZE = 30
 
@@ -1217,7 +1220,18 @@ function GalleryPage() {
                       const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                         ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                         : null
-                      const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
+                      const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                      const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
+                      // Creator credit mirrors the actual payout formula, so it's kept
+                      // as-is; the canvas line absorbs the rounding remainder instead
+                      // of showing its own independently-rounded value, so the three
+                      // lines always sum to exactly what the button charges (they
+                      // previously didn't — canvas + fulfillment + creator credit could
+                      // land a few cents under or over the real total).
+                      const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                      const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
+                        ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
+                        : null
                       return (
                         <>
                           <button
@@ -1238,12 +1252,12 @@ function GalleryPage() {
                           >
                             {addedToCartId === selectedPreview.id ? 'Added to cart!' : printPrice ? `Add to cart — ${printPrice}` : 'Print unavailable'}
                           </button>
-                          {canvas && printPrice && (
+                          {canvas && printPrice && canvasDisplayCents !== null && creatorCreditCents !== null && (
                             <div style={{ fontSize: 11, color: '#8a8177', lineHeight: 1.5 }}>
                               <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
-                              <div>{canvas.label} canvas — {formatCents(canvas.priceCents)}</div>
+                              <div>{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} — {formatCents(canvasDisplayCents)}</div>
                               <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
-                              <div>Creator credit (20%) — {formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))}</div>
+                              <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
                             </div>
                           )}
                           {canvas && printPrice && (
@@ -1389,12 +1403,20 @@ function GalleryPage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
-                  return canvas && printPrice ? (
+                  const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                  const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
+                  // See the desktop breakdown above: canvas line absorbs the rounding
+                  // remainder so canvas + fulfillment + creator credit always sums to
+                  // the total shown, rather than each being independently rounded.
+                  const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                  const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
+                    ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
+                    : null
+                  return canvas && printPrice && canvasDisplayCents !== null && creatorCreditCents !== null ? (
                     <>
                       <div style={{ margin: '0 16px 6px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
                         <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
-                        {' · '}{canvas.label} ({formatCents(canvas.priceCents)}) + printing &amp; fulfillment ({formatCents(PRINT_OWN_BASE_CENTS)}) + creator credit ({formatCents(creatorEarningsCents(printGalleryTotalCents(canvas)))})
+                        {' · '}{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} ({formatCents(canvasDisplayCents)}) + printing &amp; fulfillment ({formatCents(PRINT_OWN_BASE_CENTS)}) + creator credit ({formatCents(creatorCreditCents)})
                       </div>
                       <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Ships within 5–7 business days</div>
                     </>

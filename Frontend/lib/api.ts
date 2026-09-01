@@ -461,6 +461,11 @@ export type Project = {
   preview_image_url: string | null
   pdf_url: string | null
   parent_gallery_item_id: string | null
+  /** How the design was actually created — 'blank' (from-scratch canvas) or
+   *  'import' (photo/graphic/pattern import). Null for projects saved before
+   *  this field existed. Distinct from source_type, which is a stitching
+   *  algorithm hint that defaults to 'photo' even for a blank canvas. */
+  design_origin: 'blank' | 'import' | null
 }
 
 export type ProjectSavePayload = Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>> & {
@@ -1006,7 +1011,7 @@ const _LEGACY_ANCHORS: [number, number][] = [[30, 1194], [48, 1592], [96, 1857]]
 // less the fulfillment fee printOwnTotalCents adds back. The margin applies to
 // canvas + fulfillment together, not the canvas alone — see canvas_price_cents
 // in canvas_pricing.py. Floor applied after the subtraction so the smallest
-// canvases still total $14.
+// canvases still total $16.50 (a $7 canvas line plus the $9.50 fee).
 function _canvasPriceCents(sqIn: number): number {
   const itemTotal = Math.round(PRICE_PER_SQ_IN_CENTS * sqIn)
   const raw = Math.max(MIN_CANVAS_PRICE_CENTS, itemTotal - PRINT_OWN_BASE_CENTS)
@@ -1178,6 +1183,26 @@ export function isStandardOrder(widthInches: number, heightInches: number): bool
   const short = Math.min(widthInches, heightInches)
   const long = Math.max(widthInches, heightInches)
   return short <= STANDARD_MAX_SHORT_SIDE && long <= STANDARD_MAX_LONG_SIDE
+}
+
+/** Customer-facing canvas size wording. Standard, non-belt orders snap their
+ *  short side to a pre-cut roll tier (see STANDARD_WIDTH_TIERS_IN) — naming
+ *  that tier explicitly ("16" roll - 20 inch width") instead of a raw W×H
+ *  makes it visible why, say, a 5x6 and a 6x8 design can price the same:
+ *  they land on the same roll stock. Belts and oversized/quote-only designs
+ *  have no fixed roll tier, so they keep the plain W×H label. Mirrors the
+ *  tiering decision in getCanvasForDesign/get_canvas_for_design — do not use
+ *  this for admin/print-queue or cart line-item titles, which stay in exact
+ *  W×H terms for print records. */
+export function formatCustomerCanvasLabel(canvas: CanvasSize, widthInches: number, heightInches: number): string {
+  if (isBeltDesign(widthInches, heightInches) || !isStandardOrder(widthInches, heightInches)) {
+    return `${canvas.label} canvas`
+  }
+  const [tier, longSide] = widthInches <= heightInches
+    ? [canvas.canvasW, canvas.canvasH]
+    : [canvas.canvasH, canvas.canvasW]
+  const fmt = (n: number) => (n % 1 === 0 ? `${n}` : n.toFixed(1))
+  return `${fmt(tier)}" roll - ${fmt(longSide)} inch width`
 }
 
 // Phrased on width alone — STANDARD_MAX_LONG_SIDE just equals the overall
@@ -1446,7 +1471,7 @@ export async function downloadBlankRollPdf(accessToken: string, height = 4): Pro
  *  distance is (content + 4") * yScale, not just content * yScale. Print it
  *  and measure the line itself (not the blank margin) with a ruler to check
  *  a candidate yScale before committing real canvas to a job. */
-export type TestLineColor = 'gray' | 'beige' | 'yellow'
+export type TestLineColor = 'gray' | 'beige' | 'yellow' | 'pink'
 
 export async function downloadTestLinePdf(
   accessToken: string,
@@ -1454,12 +1479,16 @@ export async function downloadTestLinePdf(
   rollWidthInches = 8,
   yScale = 1,
   color: TestLineColor = 'gray',
+  /** 0 = length-only line. A real mesh adds labelled cross-ticks every 5
+   *  nominal inches for counting canvas holes instead of measuring length. */
+  meshCount = 0,
 ): Promise<void> {
   const params = new URLSearchParams({
     length: String(lengthInches),
     roll_width: String(rollWidthInches),
     y_scale: String(yScale),
     color,
+    mesh: String(meshCount),
   })
   const res = await fetch(`${API_BASE}/admin/test-line-pdf?${params}`, {
     headers: authHeaders(accessToken),

@@ -46,6 +46,7 @@ import {
   fetchGalleryItemByProject,
   finalizePreview,
   formatCents,
+  formatCustomerCanvasLabel,
   getCanvasForDesign,
   printOwnTotalCents,
   printGalleryTotalCents,
@@ -616,6 +617,14 @@ function StudioPage() {
   const [redrawingSku, setRedrawingSku] = useState(false)
   const [skuMode, setSkuMode] = useState<'draw' | 'pixel'>('draw')
   const [activeImagePath, setActiveImagePath] = useState<string | null>(null)
+  // Tracks how this design actually came to exist, independent of
+  // source_type (which is a stitching-algorithm hint, not an origin — it
+  // defaults to 'photo' even for a from-scratch canvas, which previously
+  // leaked into the gallery tag as a false "from photo"). Set once at
+  // creation (handleStartFresh/handleStartBelt -> 'blank', an image or
+  // pattern import -> 'import') and persisted on the project so it survives
+  // saving a draft and resuming it later.
+  const [designOrigin, setDesignOrigin] = useState<'blank' | 'import' | null>(null)
   const [importedAspectRatio, setImportedAspectRatio] = useState<number | null>(null)
   const [lockAspectRatio, setLockAspectRatio] = useState(true)
   // Explicit rather than derived from geometry: PreviewControls allows a
@@ -1380,6 +1389,11 @@ function StudioPage() {
       setOriginalCells(loadedCells)
 
       if (project.parent_gallery_item_id) setParentGalleryItemId(project.parent_gallery_item_id)
+      // Projects saved before design_origin existed have no explicit value —
+      // fall back to source_image_url as the best available signal (a photo
+      // import always sets it; a from-scratch canvas never does), rather than
+      // guessing 'blank' and risking the same mislabel this field exists to fix.
+      setDesignOrigin((project.design_origin as 'blank' | 'import' | null) ?? (project.source_image_url ? 'import' : null))
       if (project.source_image_url) setActiveImagePath(project.source_image_url)
       if (project.preview_image_url) {
         setPreviewImagePath(project.preview_image_url)
@@ -1596,6 +1610,7 @@ function StudioPage() {
   const applyImportedImage = useCallback((url: string, belt: boolean = false, sourceType?: 'photo' | 'stitched_photo' | 'graphic_art') => {
     latestApplyRequestIdRef.current += 1
     setUploadError(null)
+    setDesignOrigin('import')
     setActiveImagePath(url)
     setImportedAspectRatio(null)
     setPreviewImagePath(null)
@@ -1653,6 +1668,7 @@ function StudioPage() {
     const h = BLANK_H * mesh
     const blankGrid = Array.from({ length: h }, () => Array(w).fill(BLANK_CELL))
     const blankSettings = { ...DEFAULT_SETTINGS, width_inches: BLANK_W, height_inches: BLANK_H }
+    setDesignOrigin('blank')
     setActiveImagePath(null)
     setImportedAspectRatio(BLANK_W / BLANK_H)
     setPreviewImagePath(null)
@@ -1692,6 +1708,7 @@ function StudioPage() {
       height_inches: BELT_HEIGHT_INCHES,
       mesh_count: BELT_MESH_COUNT,
     }
+    setDesignOrigin('blank')
     setActiveImagePath(null)
     setImportedAspectRatio(beltLength / BELT_HEIGHT_INCHES)
     setPreviewImagePath(null)
@@ -3445,6 +3462,7 @@ function StudioPage() {
     // source of truth, and arming the photo pipeline with a source image
     // lets the settings-sync effect regenerate (and destroy) the pattern.
     setActiveImagePath(null)
+    setDesignOrigin('import')
     const preview = extras?.previewUrl ?? imageUrl
     if (preview) {
       setPreviewImagePath(preview)
@@ -3584,6 +3602,7 @@ function StudioPage() {
         pdf_url: result.pdf_url,
         finalized: true,
         parent_gallery_item_id: parentGalleryItemId ?? null,
+        design_origin: designOrigin,
       }
       if (existingId) {
         await updateProject(existingId, finalizedPayload, session.access_token)
@@ -3655,8 +3674,9 @@ function StudioPage() {
     try {
       const originTags: string[] = []
       if (parentGalleryItemId) originTags.push('remix')
-      if (lastSettings?.source_type === 'photo' || lastSettings?.source_type === 'stitched_photo') originTags.push('from photo')
-      if (lastSettings?.source_type === 'graphic_art') originTags.push('graphic art')
+      if (designOrigin === 'blank') originTags.push('original')
+      if (designOrigin === 'import') originTags.push('import')
+      if (designOrigin === 'import' && lastSettings?.source_type === 'graphic_art') originTags.push('graphic art')
 
       const userTags = galleryTags.split(',').map((t) => t.trim()).filter(Boolean)
       const allTags = Array.from(new Set([...originTags, ...userTags]))
@@ -3952,6 +3972,7 @@ function StudioPage() {
         pdf_url: finalPdfPath,
         finalized: Boolean(finalPdfPath),
         parent_gallery_item_id: parentGalleryItemId ?? null,
+        design_origin: designOrigin,
       }
       const existingId = activeDraftProjectId
       let isNewProject = false
@@ -5673,7 +5694,7 @@ function StudioPage() {
                     <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>{LARGE_PRINT_MESSAGE}</p>
                   ) : canvas && printTotal !== null ? (
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
-                      <div>{canvas.label} canvas</div>
+                      <div>{formatCustomerCanvasLabel(canvas, designW, designH)}</div>
                       <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
                       <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
                       {parentGalleryItemId && (
@@ -6136,7 +6157,7 @@ function StudioPage() {
                 {bCanvas && (
                   <>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#5f574f' }}>{bCanvas.label} canvas</span>
+                      <span style={{ color: '#5f574f' }}>{formatCustomerCanvasLabel(bCanvas, bW, bH)}</span>
                       <span>{formatCents(bCanvas.priceCents)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
