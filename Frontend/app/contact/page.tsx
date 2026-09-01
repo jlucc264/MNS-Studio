@@ -11,6 +11,9 @@ const CATEGORIES = [
   'Feature request',
   'Order / print issue',
   'Account issue',
+  // Rights holders had no route in and were filing under "Bug report".
+  // Terms 4.4 documents the takedown process this feeds.
+  'Copyright / IP concern',
   'Other',
 ]
 

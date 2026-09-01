@@ -173,13 +173,40 @@ export default function TermsPage() {
                 <li style={li}>Violate any applicable law or regulation</li>
               </ul>
             </Sub>
-            <Sub title="4.4 DMCA Takedown">
+            <Sub title="4.4 DMCA Takedown and Designated Agent">
               <p style={p}>
                 If you believe content on MNS Studio infringes your copyright, or if you have a dispute regarding ownership of a
-                design, please contact us at{' '}
-                <a href="mailto:john@mns.studio" style={{ color: '#6e8d67' }}>john@mns.studio</a> with a description of the
-                claimed infringement and sufficient information to identify the content at issue. We will respond to valid DMCA
-                takedown notices in accordance with applicable law and investigate ownership disputes in good faith.
+                design, send notice to our designated agent:
+              </p>
+              <p style={{ ...p, paddingLeft: 16, borderLeft: '2px solid #e0dbd0' }}>
+                Designated Agent: Copyright Manager<br />
+                Mantoloking Needlepoint Shop LLC<br />
+                65 East 11th Street, 4G<br />
+                New York, NY 10003<br />
+                Phone: (973) 970-8673<br />
+                Email: <a href="mailto:support@mns.studio" style={{ color: '#6e8d67' }}>support@mns.studio</a>
+              </p>
+              <p style={p}>Your notice should include:</p>
+              <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
+                <li style={li}>Identification of the copyrighted work you claim has been infringed</li>
+                <li style={li}>Identification of the material you claim is infringing, with information reasonably sufficient to locate it on our site (a URL is best)</li>
+                <li style={li}>Your name, address, telephone number, and email address</li>
+                <li style={li}>A statement that you have a good faith belief the use is not authorized by the copyright owner, its agent, or the law</li>
+                <li style={li}>A statement, made under penalty of perjury, that the information in your notice is accurate and that you are the copyright owner or authorized to act on their behalf</li>
+                <li style={li}>Your physical or electronic signature</li>
+              </ul>
+              <p style={p}>
+                We respond to valid DMCA takedown notices in accordance with applicable law and investigate ownership disputes in
+                good faith. See Section 4.5 regarding repeat infringers.
+              </p>
+            </Sub>
+            <Sub title="4.5 Repeat Infringers">
+              <p style={p}>
+                MNS Studio terminates, in appropriate circumstances, the accounts of users who are repeat copyright infringers.
+                A design removed following a valid infringement notice counts as a strike against the account that posted it,
+                and accounts accumulating repeated strikes may be suspended or terminated. We may also terminate an account
+                after a single incident where the infringement is clear or willful. We consider counter-notices and evidence of
+                authorization before acting.
               </p>
             </Sub>
           </Section>
