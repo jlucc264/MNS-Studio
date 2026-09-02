@@ -681,6 +681,9 @@ function StudioPage() {
   const [placeTextSignal, setPlaceTextSignal] = useState(0)
   const [cancelTextSignal, setCancelTextSignal] = useState(0)
   const [hasActiveTextBox, setHasActiveTextBox] = useState(false)
+  const [placeShapeSignal, setPlaceShapeSignal] = useState(0)
+  const [cancelShapeSignal, setCancelShapeSignal] = useState(0)
+  const [hasActiveShapeBox, setHasActiveShapeBox] = useState(false)
   const [clearMeasurementsSignal, setClearMeasurementsSignal] = useState(0)
   const [measurementCount, setMeasurementCount] = useState(0)
   // Buyer's border/price choice for this design. Defaults to the standard 2"
@@ -4895,6 +4898,9 @@ function StudioPage() {
       hasActiveTextBox={hasActiveTextBox}
       onPlaceText={() => setPlaceTextSignal((v) => v + 1)}
       onCancelText={() => setCancelTextSignal((v) => v + 1)}
+      hasActiveShapeBox={hasActiveShapeBox}
+      onPlaceShape={() => setPlaceShapeSignal((v) => v + 1)}
+      onCancelShape={() => setCancelShapeSignal((v) => v + 1)}
       onSelect={(color) => {
         setActivePaintColor(color.hex)
         if (toolMode !== 'select') {
@@ -5335,6 +5341,9 @@ function StudioPage() {
                   placeTextSignal={placeTextSignal}
                   cancelTextSignal={cancelTextSignal}
                   onTextBoxActiveChange={setHasActiveTextBox}
+                  placeShapeSignal={placeShapeSignal}
+                  cancelShapeSignal={cancelShapeSignal}
+                  onShapeBoxActiveChange={setHasActiveShapeBox}
                   cells={cells}
                   activeColor={shouldAllowCanvasEditing ? activePaintColor : null}
                   toolMode={toolMode}

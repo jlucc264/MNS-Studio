@@ -53,6 +53,9 @@ type Props = {
   hasActiveTextBox: boolean
   onPlaceText: () => void
   onCancelText: () => void
+  hasActiveShapeBox?: boolean
+  onPlaceShape?: () => void
+  onCancelShape?: () => void
   onSelect: (color: PaletteColor) => void
   onSelectBlankCanvas: () => void
   moreColors: PaletteColor[]
@@ -129,6 +132,9 @@ export default function PalettePanel({
   hasActiveTextBox,
   onPlaceText,
   onCancelText,
+  hasActiveShapeBox = false,
+  onPlaceShape,
+  onCancelShape,
   onSelect,
   onSelectBlankCanvas,
   moreColors,
@@ -1159,7 +1165,7 @@ export default function PalettePanel({
                   lineHeight: 1.4,
                 }}
               >
-                <span>Drag on canvas to place</span>
+                <span>{hasActiveShapeBox ? 'Drag to move, corners to resize' : 'Drag on canvas to draw'}</span>
                 <button
                   type="button"
                   onClick={onResetPalette}
@@ -1171,6 +1177,33 @@ export default function PalettePanel({
                   }}
                 >↺ Reset</button>
               </div>
+
+              {hasActiveShapeBox && (
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 5 }}>
+                  <button
+                    type="button"
+                    onClick={onPlaceShape}
+                    style={{
+                      border: '1px solid #5c7856', borderRadius: 8, background: '#6e8d67',
+                      color: '#fff', padding: '10px 8px', fontFamily: 'inherit',
+                      fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    ✓ Place
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCancelShape}
+                    style={{
+                      border: '1px solid #d5cec6', borderRadius: 8, background: '#fff',
+                      color: '#6f665b', padding: '10px 8px', fontFamily: 'inherit',
+                      fontSize: 13, cursor: 'pointer',
+                    }}
+                  >
+                    ✕ Cancel
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>

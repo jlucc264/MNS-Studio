@@ -25,6 +25,12 @@ type Props = {
   shapeBorderColor?: string | null
   shapeBorderSize?: number
   onApplyShapeCells?: (cells: ShapeCell[]) => void
+  // A drawn shape stays live — repositionable and resizable — until it is
+  // explicitly placed, mirroring the text box. Parent-driven Place/Cancel as
+  // incrementing counters, since the live box's state lives in here.
+  placeShapeSignal?: number
+  cancelShapeSignal?: number
+  onShapeBoxActiveChange?: (active: boolean) => void
   traceImageUrl?: string | null
   traceOpacity?: number
   onTraceOpacityChange?: (value: number) => void
@@ -121,6 +127,66 @@ function distanceToSegment(
     ? 0
     : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared))
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+}
+
+/** The parchment readout box used by the measure tool and by a live shape.
+ *  One renderer so a shape's dimensions read identically to a measurement's —
+ *  they are the same question asked of different things.
+ *
+ *  Returns the box it drew so a caller can hit-test something inside it (the
+ *  measure tool's delete x). `closeWidth` reserves room on the right for that;
+ *  pass 0 when there is nothing to reserve.
+ */
+function drawDimensionLabel(
+  context: CanvasRenderingContext2D,
+  opts: {
+    x1: number; y1: number; x2: number; y2: number
+    label: string; sub: string
+    wrapperWidth: number
+    closeWidth?: number
+    accent?: string
+  }
+): { boxX: number; boxY: number; boxWidth: number; boxHeight: number } {
+  const { x1, y1, x2, y2, label, sub, wrapperWidth } = opts
+  const closeWidth = opts.closeWidth ?? 0
+  const accent = opts.accent ?? '#b0453a'
+
+  context.font = '600 13px Georgia, serif'
+  const textWidth = Math.max(context.measureText(label).width, context.measureText(sub).width)
+  const boxWidth = textWidth + 16 + closeWidth
+  const boxHeight = 38
+  let boxX = (x1 + x2) / 2 - boxWidth / 2
+  let boxY = Math.min(y1, y2) - boxHeight - 10
+  boxX = Math.max(4, Math.min(boxX, wrapperWidth - boxWidth - 4))
+  if (boxY < 4) boxY = Math.max(y1, y2) + 10
+
+  context.fillStyle = 'rgba(255,253,248,0.96)'
+  context.strokeStyle = accent
+  context.lineWidth = 1
+  context.beginPath()
+  context.roundRect(boxX, boxY, boxWidth, boxHeight, 6)
+  context.fill()
+  context.stroke()
+
+  const textCenterX = boxX + (boxWidth - closeWidth) / 2
+  context.fillStyle = '#3f382f'
+  context.textAlign = 'center'
+  context.fillText(label, textCenterX, boxY + 16)
+  context.font = '400 11px Georgia, serif'
+  context.fillStyle = '#8a8177'
+  context.fillText(sub, textCenterX, boxY + 30)
+
+  return { boxX, boxY, boxWidth, boxHeight }
+}
+
+/** Inches x inches, and the stitch count under it. Both tools quote a span the
+ *  same way: inclusive of both end cells, because that is how you count holes
+ *  on the canvas itself. */
+function formatSpan(spanCols: number, spanRows: number, meshCount: number) {
+  return {
+    label: `${(spanCols / meshCount).toFixed(2)}\u2033 \u00d7 ${(spanRows / meshCount).toFixed(2)}\u2033`,
+    sub: `${spanCols} \u00d7 ${spanRows} st`,
+  }
 }
 
 // ── Shape helpers ────────────────────────────────────────────────────────────
@@ -587,6 +653,9 @@ export default function GridEditor({
   clearSelectionSignal = 0,
   clearMeasurementsSignal = 0,
   onMeasurementCountChange,
+  placeShapeSignal = 0,
+  cancelShapeSignal = 0,
+  onShapeBoxActiveChange,
   isPhoneLandscape = false,
   signatureUrl = null,
   skuUrl = null,
@@ -634,6 +703,16 @@ export default function GridEditor({
   const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
   const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
+  // Which corner (or line endpoint) is being dragged, and the grab offset for a
+  // move. Null means the pointer is drawing a brand new shape.
+  const shapeResizeRef = useRef<'start' | 'end' | 'startRow-endCol' | 'endRow-startCol' | null>(null)
+  const shapeMoveRef = useRef<{
+    startRow: number; startCol: number; endRow: number; endCol: number
+    pointerRow: number; pointerCol: number
+  } | null>(null)
+  // Screen rects of the drag handles, published by the overlay draw so the
+  // pointer handler hit-tests exactly what was painted.
+  const shapeHandleRectsRef = useRef<Array<{ kind: 'start' | 'end' | 'startRow-endCol' | 'endRow-startCol'; x: number; y: number; size: number }>>([])
   // Measure tool. Measurements accumulate and survive both pointer-up and a
   // tool change — the point is to take a reading and then work against it, so
   // they stay on the canvas while you paint. The dashed red styling is what
@@ -914,6 +993,63 @@ export default function GridEditor({
     onTextBoxActiveChange?.(Boolean(textAnchorCell && textBoxEnd))
   }, [textAnchorCell, textBoxEnd, onTextBoxActiveChange])
 
+  const discardShapeBox = useCallback(() => {
+    shapeStartCellRef.current = null
+    shapeResizeRef.current = null
+    shapeMoveRef.current = null
+    setShapeStartCell(null)
+    setShapeEndCell(null)
+  }, [])
+
+  /** Burn the live shape into cells. Until this runs the shape is only a
+   *  preview — which is the point of the rework: the old flow committed on
+   *  pointer-up, so a shape that landed a stitch off had to be undone and
+   *  redrawn rather than nudged. */
+  const commitShapeBox = useCallback(() => {
+    const start = shapeStartCell
+    const end = shapeEndCell
+    if (!start || !end || !shapeType || !onApplyShapeCells) { discardShapeBox(); return }
+    const shapeCells = computeShapeCells(
+      shapeType,
+      start.row, start.col,
+      end.row, end.col,
+      shapeFillColor ?? null,
+      shapeBorderColor ?? null,
+      cells.length, cells[0]?.length ?? 0,
+      shapeBorderSize,
+      arcFlipped,
+      arcFullCircle,
+    )
+    if (shapeCells.length) onApplyShapeCells(shapeCells)
+    discardShapeBox()
+  }, [shapeStartCell, shapeEndCell, shapeType, onApplyShapeCells, shapeFillColor,
+      shapeBorderColor, cells, shapeBorderSize, arcFlipped, arcFullCircle, discardShapeBox])
+
+  const lastPlaceShapeSignalRef = useRef(placeShapeSignal)
+  useEffect(() => {
+    if (placeShapeSignal === lastPlaceShapeSignalRef.current) return
+    lastPlaceShapeSignalRef.current = placeShapeSignal
+    commitShapeBox()
+  }, [placeShapeSignal, commitShapeBox])
+
+  const lastCancelShapeSignalRef = useRef(cancelShapeSignal)
+  useEffect(() => {
+    if (cancelShapeSignal === lastCancelShapeSignalRef.current) return
+    lastCancelShapeSignalRef.current = cancelShapeSignal
+    discardShapeBox()
+  }, [cancelShapeSignal, discardShapeBox])
+
+  useEffect(() => {
+    onShapeBoxActiveChange?.(Boolean(shapeStartCell && shapeEndCell))
+  }, [shapeStartCell, shapeEndCell, onShapeBoxActiveChange])
+
+  // Leaving the shape tool discards an unplaced shape rather than silently
+  // carrying a preview into another tool.
+  useEffect(() => {
+    if (toolMode === 'shape') return
+    discardShapeBox()
+  }, [toolMode, discardShapeBox])
+
   useEffect(() => {
     const stopPainting = (event: PointerEvent) => {
       if (event.pointerType === 'touch') {
@@ -950,25 +1086,12 @@ export default function GridEditor({
         return
       }
 
-      if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
-        const start = shapeStartCellRef.current
-        if (shapeType && onApplyShapeCells) {
-          const shapeCells = computeShapeCells(
-            shapeType,
-            start.row, start.col,
-            shapeEndCell.row, shapeEndCell.col,
-            shapeFillColor ?? null,
-            shapeBorderColor ?? null,
-            cells.length, cells[0]?.length ?? 0,
-            shapeBorderSize,
-            arcFlipped,
-            arcFullCircle,
-          )
-          if (shapeCells.length) onApplyShapeCells(shapeCells)
-        }
+      if (toolMode === 'shape') {
+        // The shape is NOT committed here any more. It stays live so it can be
+        // nudged and resized; Place in the palette is what burns it in.
         shapeStartCellRef.current = null
-        setShapeStartCell(null)
-        setShapeEndCell(null)
+        shapeResizeRef.current = null
+        shapeMoveRef.current = null
       }
 
       if (isSelecting && dragSelectionRect) {
@@ -1709,9 +1832,45 @@ export default function GridEditor({
       }
 
       if (toolMode === 'shape') {
+        const point = getOverlayPointFromClient(input.clientX, input.clientY)
+
+        // Grab a drag handle. Hit-tested first and padded, so a corner stays
+        // catchable with a fingertip at small cell sizes.
+        if (point && shapeStartCell && shapeEndCell) {
+          for (const handle of shapeHandleRectsRef.current) {
+            const pad = 8
+            if (
+              point.x >= handle.x - pad && point.x <= handle.x + handle.size + pad &&
+              point.y >= handle.y - pad && point.y <= handle.y + handle.size + pad
+            ) {
+              input.preventDefault()
+              shapeResizeRef.current = handle.kind
+              return
+            }
+          }
+        }
+
         const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
         input.preventDefault()
+
+        // Inside the live shape's bounds: move it rather than start a new one.
+        if (shapeStartCell && shapeEndCell) {
+          const top = Math.min(shapeStartCell.row, shapeEndCell.row)
+          const bottom = Math.max(shapeStartCell.row, shapeEndCell.row)
+          const left = Math.min(shapeStartCell.col, shapeEndCell.col)
+          const right = Math.max(shapeStartCell.col, shapeEndCell.col)
+          if (hit.row >= top && hit.row <= bottom && hit.col >= left && hit.col <= right) {
+            shapeMoveRef.current = {
+              startRow: shapeStartCell.row, startCol: shapeStartCell.col,
+              endRow: shapeEndCell.row, endCol: shapeEndCell.col,
+              pointerRow: hit.row, pointerCol: hit.col,
+            }
+            return
+          }
+        }
+
+        // Otherwise draw a new one, replacing any unplaced preview.
         shapeStartCellRef.current = { row: hit.row, col: hit.col }
         setShapeStartCell({ row: hit.row, col: hit.col })
         setShapeEndCell({ row: hit.row, col: hit.col })
@@ -1784,6 +1943,7 @@ export default function GridEditor({
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
      measurements, activeMeasurementId, cellSize,
+     shapeStartCell, shapeEndCell,
      getOverlayPointFromClient, getOverlayPointFromCell,
      textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, floatingStamp]
   )
@@ -1901,6 +2061,36 @@ export default function GridEditor({
         const next: Measurement = { ...draft, end: { row: hit.row, col: hit.col } }
         measureDraftRef.current = next
         setMeasurements((prev) => prev.map((m) => (m.id === next.id ? next : m)))
+        return
+      }
+
+      if (toolMode === 'shape' && shapeMoveRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        const from = shapeMoveRef.current
+        const dr = hit.row - from.pointerRow
+        const dc = hit.col - from.pointerCol
+        setShapeStartCell({ row: from.startRow + dr, col: from.startCol + dc })
+        setShapeEndCell({ row: from.endRow + dr, col: from.endCol + dc })
+        return
+      }
+
+      if (toolMode === 'shape' && shapeResizeRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        const kind = shapeResizeRef.current
+        // start/end move that corner outright — which is also what a line's two
+        // endpoint handles need, since a line's ends are real points and not a
+        // bounding box to be normalised.
+        if (kind === 'start') setShapeStartCell({ row: hit.row, col: hit.col })
+        else if (kind === 'end') setShapeEndCell({ row: hit.row, col: hit.col })
+        else if (kind === 'startRow-endCol') {
+          setShapeStartCell((prev) => (prev ? { row: hit.row, col: prev.col } : prev))
+          setShapeEndCell((prev) => (prev ? { row: prev.row, col: hit.col } : prev))
+        } else {
+          setShapeStartCell((prev) => (prev ? { row: prev.row, col: hit.col } : prev))
+          setShapeEndCell((prev) => (prev ? { row: hit.row, col: prev.col } : prev))
+        }
         return
       }
 
@@ -2363,6 +2553,70 @@ export default function GridEditor({
         context.lineWidth = 0.5
         context.strokeRect(x, y, cellSize, cellSize)
       }
+
+      // The shape is live until placed, so it needs to look grabbable: a dashed
+      // bounding box, drag handles, and its dimensions in the same readout the
+      // measure tool uses.
+      const sx = (col: number) => gridOriginX + (col + contentOriginCol + borderStitches) * cellSize
+      const sy = (row: number) => gridOriginY + (row + contentOriginRow + borderStitches) * cellSize
+      const top = Math.min(shapeStartCell.row, shapeEndCell.row)
+      const bottom = Math.max(shapeStartCell.row, shapeEndCell.row)
+      const left = Math.min(shapeStartCell.col, shapeEndCell.col)
+      const right = Math.max(shapeStartCell.col, shapeEndCell.col)
+      const bx = sx(left)
+      const by = sy(top)
+      const bw = (right - left + 1) * cellSize
+      const bh = (bottom - top + 1) * cellSize
+
+      context.save()
+      context.strokeStyle = 'rgba(74, 124, 89, 0.95)'
+      context.lineWidth = Math.max(1.5, cellSize * 0.08)
+      context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
+      context.strokeRect(bx, by, bw, bh)
+      context.setLineDash([])
+
+      // A line's ends are real points, so it gets two endpoint handles rather
+      // than four corners — dragging a corner of its bounding box would be
+      // ambiguous about which end moved.
+      const handleSize = Math.max(10, Math.min(16, cellSize * 1.2))
+      const handles: Array<{ kind: 'start' | 'end' | 'startRow-endCol' | 'endRow-startCol'; cx: number; cy: number }> =
+        shapeType === 'line'
+          ? [
+              { kind: 'start', cx: sx(shapeStartCell.col) + cellSize / 2, cy: sy(shapeStartCell.row) + cellSize / 2 },
+              { kind: 'end', cx: sx(shapeEndCell.col) + cellSize / 2, cy: sy(shapeEndCell.row) + cellSize / 2 },
+            ]
+          : [
+              { kind: 'start', cx: bx, cy: by },
+              { kind: 'end', cx: bx + bw, cy: by + bh },
+              { kind: 'startRow-endCol', cx: bx + bw, cy: by },
+              { kind: 'endRow-startCol', cx: bx, cy: by + bh },
+            ]
+
+      shapeHandleRectsRef.current = handles.map((handle) => {
+        const x = handle.cx - handleSize / 2
+        const y = handle.cy - handleSize / 2
+        context.fillStyle = '#fffdf8'
+        context.strokeStyle = 'rgba(74, 124, 89, 0.95)'
+        context.lineWidth = 1.5
+        context.beginPath()
+        context.roundRect(x, y, handleSize, handleSize, 3)
+        context.fill()
+        context.stroke()
+        return { kind: handle.kind, x, y, size: handleSize }
+      })
+
+      const spanCols = right - left + 1
+      const spanRows = bottom - top + 1
+      const span = formatSpan(spanCols, spanRows, meshCount)
+      drawDimensionLabel(context, {
+        x1: bx, y1: by, x2: bx + bw, y2: by + bh,
+        label: span.label, sub: span.sub,
+        wrapperWidth,
+        accent: 'rgba(74, 124, 89, 0.95)',
+      })
+      context.restore()
+    } else {
+      shapeHandleRectsRef.current = []
     }
 
     // Measure overlay. Drawn whatever the active tool is \u2014 measurements are
@@ -2410,42 +2664,21 @@ export default function GridEditor({
         const x2 = cx(active.end.col)
         const y2 = cy(active.end.row)
 
-        // Inclusive of both end cells: dragging across 4 holes reads 4, not 3,
-        // which is how you would count them on the canvas itself.
         const spanCols = Math.abs(active.end.col - active.start.col) + 1
         const spanRows = Math.abs(active.end.row - active.start.row) + 1
-        const label = `${(spanCols / meshCount).toFixed(2)}\u2033 \u00d7 ${(spanRows / meshCount).toFixed(2)}\u2033`
-        const sub = `${spanCols} \u00d7 ${spanRows} st`
+        const { label, sub } = formatSpan(spanCols, spanRows, meshCount)
 
         // The delete affordance only appears in the measure tool, where the
         // pointer handler is actually listening for it.
         const closeWidth = toolMode === 'measure' ? 26 : 0
-
-        context.font = '600 13px Georgia, serif'
-        const textWidth = Math.max(context.measureText(label).width, context.measureText(sub).width)
-        const labelWidth = textWidth + 16 + closeWidth
-        const boxH = 38
-        let boxX = (x1 + x2) / 2 - labelWidth / 2
-        let boxY = Math.min(y1, y2) - boxH - 10
-        boxX = Math.max(4, Math.min(boxX, wrapperWidth - labelWidth - 4))
-        if (boxY < 4) boxY = Math.max(y1, y2) + 10
-        context.fillStyle = 'rgba(255,253,248,0.96)'
-        context.strokeStyle = '#b0453a'
-        context.lineWidth = 1
-        context.beginPath()
-        context.roundRect(boxX, boxY, labelWidth, boxH, 6)
-        context.fill()
-        context.stroke()
-        const textCenterX = boxX + (labelWidth - closeWidth) / 2
-        context.fillStyle = '#3f382f'
-        context.textAlign = 'center'
-        context.fillText(label, textCenterX, boxY + 16)
-        context.font = '400 11px Georgia, serif'
-        context.fillStyle = '#8a8177'
-        context.fillText(sub, textCenterX, boxY + 30)
+        const box = drawDimensionLabel(context, {
+          x1, y1, x2, y2, label, sub, wrapperWidth, closeWidth,
+        })
 
         if (closeWidth) {
-          const closeX = boxX + labelWidth - closeWidth
+          const closeX = box.boxX + box.boxWidth - closeWidth
+          const boxY = box.boxY
+          const boxH = box.boxHeight
           context.strokeStyle = '#e6d5cf'
           context.lineWidth = 1
           context.beginPath()
@@ -2454,8 +2687,9 @@ export default function GridEditor({
           context.stroke()
           context.font = '600 14px Georgia, serif'
           context.fillStyle = '#b0453a'
+          context.textAlign = 'center'
           context.fillText('\u00d7', closeX + closeWidth / 2, boxY + boxH / 2 + 5)
-          measureCloseRectRef.current = { x: closeX, y: boxY, width: closeWidth, height: boxH }
+          measureCloseRectRef.current = { x: closeX, y: boxY, width: closeWidth, height: box.boxHeight }
         }
       }
       context.restore()
