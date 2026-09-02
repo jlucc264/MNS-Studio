@@ -206,6 +206,10 @@ class PrintOwnCheckoutRequest(BaseModel):
     parent_gallery_item_id: Optional[str] = None
     internal_pdf_supabase_path: Optional[str] = None
     project_id: Optional[str] = None
+    # Buyer opted to drop one roll tier by accepting a slightly narrower
+    # border. A boolean, never a margin: the server derives the margin from the
+    # design's own size so a client cannot set its own price.
+    tier_downgrade: bool = False
 
 
 class CheckoutResponse(BaseModel):
@@ -218,6 +222,7 @@ class CartCheckoutItem(BaseModel):
     width_inches: float
     height_inches: float
     quantity: int = 1
+    tier_downgrade: bool = False
     gallery_item_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
     project_id: Optional[str] = None

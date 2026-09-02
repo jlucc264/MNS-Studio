@@ -740,6 +740,22 @@ export default function AdminPage() {
                     {o.width_inches.toFixed(1)}″ × {o.height_inches.toFixed(1)}″
                   </span>
                 )}
+                {/* The buyer bought a narrower border to drop a roll tier, so
+                    this order goes on narrower stock than its size implies.
+                    Loading the standard width would waste the saving and print
+                    a border the buyer did not pay for. */}
+                {o.tier_downgrade && (
+                  <span
+                    title={
+                      o.canvas_margin_inches
+                        ? `Buyer chose a ${o.canvas_margin_inches}″ border instead of 2″ — load the narrower roll`
+                        : 'Buyer chose a narrower border to drop a roll tier'
+                    }
+                    style={{ fontSize: 10, fontWeight: 700, color: '#8a4a3f', background: '#f9ece9', border: '1px solid #e8c9c2', borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}
+                  >
+                    {o.canvas_margin_inches ? `${o.canvas_margin_inches}″ border` : 'trimmed border'}
+                  </span>
+                )}
                 <MeshBadge meshCount={o.mesh_count} />
                 {o.pdf_generated_at && (
                   <span
@@ -1221,6 +1237,20 @@ export default function AdminPage() {
               {o.width_inches && o.height_inches && (
                 <span style={{ fontSize: 11, color: '#7A817A', whiteSpace: 'nowrap' }}>
                   {o.width_inches.toFixed(1)}″ × {o.height_inches.toFixed(1)}″
+                </span>
+              )}
+              {/* Still relevant after printing: a reopened order has to go
+                  back onto the same narrower stock it was sold against. */}
+              {o.tier_downgrade && (
+                <span
+                  title={
+                    o.canvas_margin_inches
+                      ? `Buyer chose a ${o.canvas_margin_inches}″ border instead of 2″ — load the narrower roll`
+                      : 'Buyer chose a narrower border to drop a roll tier'
+                  }
+                  style={{ fontSize: 10, fontWeight: 700, color: '#8a4a3f', background: '#f9ece9', border: '1px solid #e8c9c2', borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}
+                >
+                  {o.canvas_margin_inches ? `${o.canvas_margin_inches}″ border` : 'trimmed border'}
                 </span>
               )}
               <MeshBadge meshCount={o.mesh_count} />

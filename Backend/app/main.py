@@ -916,6 +916,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
             creator_user_id=creator_user_id,
             internal_pdf_supabase_path=request.internal_pdf_supabase_path,
             project_id=request.project_id,
+            tier_downgrade=request.tier_downgrade,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -942,7 +943,11 @@ def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_u
 
 
 @app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
-def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
+def checkout_print_gallery(
+    item_id: str,
+    tier_downgrade: bool = False,
+    user_id: str | None = Depends(get_optional_user_id),
+):
     from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
     item = get_gallery_item(item_id)
     if not item:
@@ -954,7 +959,6 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
     if not is_design_printable(width, height):
         raise HTTPException(status_code=422, detail="Design exceeds maximum printable size.")
     _require_standard_order(width, height)
-    canvas = get_canvas_for_design(width, height)
     try:
         url = create_gallery_print_checkout(
             gallery_item_id=item_id,
@@ -964,6 +968,7 @@ def checkout_print_gallery(item_id: str, user_id: str | None = Depends(get_optio
             width_inches=width,
             height_inches=height,
             buyer_user_id=user_id,
+            tier_downgrade=tier_downgrade,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -991,6 +996,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
             "width_inches": item.width_inches,
             "height_inches": item.height_inches,
             "quantity": item.quantity,
+            "tier_downgrade": item.tier_downgrade,
             "project_id": item.project_id,
             "creator_gallery_item_id": creator_gallery_item_id,
             "creator_user_id": creator_user_id,
@@ -1071,6 +1077,10 @@ def _handle_completed_session(session) -> None:
                 width_inches=float(metadata["width_inches"]) if metadata.get("width_inches") else None,
                 height_inches=float(metadata["height_inches"]) if metadata.get("height_inches") else None,
                 amount_total_cents=session.get("amount_total"),
+                canvas_margin_inches=(
+                    float(metadata["canvas_margin_inches"]) if metadata.get("canvas_margin_inches") else None
+                ),
+                tier_downgrade=metadata.get("tier_downgrade") == "1",
             )
         except Exception:
             logger.exception("Failed to record print order for session %s", session.get("id"))
@@ -1170,6 +1180,8 @@ def _handle_completed_session(session) -> None:
                     width_inches=item_meta.get("w"),
                     height_inches=item_meta.get("h"),
                     amount_total_cents=item_total,
+                    canvas_margin_inches=item_meta.get("mg"),
+                    tier_downgrade=bool(item_meta.get("dg")),
                 )
             except Exception:
                 logger.exception("Failed to record cart print order for session %s item %d", session.get("id"), i)
@@ -1280,7 +1292,7 @@ def admin_calibration_pdf(nozzle: bool = True, header: bool = True, instructions
     )
 
 
-def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, sku_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None) -> dict:
+def _build_roll_print_design(project: dict, project_id: str | None, signature_cache: dict, sku_cache: dict, label_override: str | None = None, known_gallery_item_id: str | None = None, canvas_margin_override: float | None = None) -> dict:
     # A from-scratch canvas is a blank workspace sized to whatever the user
     # set (e.g. 10x6) — the actual design only occupies whatever was
     # stitched into it. Roll print (unlike the customer finalize preview,
@@ -1320,6 +1332,9 @@ def _build_roll_print_design(project: dict, project_id: str | None, signature_ca
         "label": label,
         "signature": signature_cache[creator_id],
         "sku": sku_cache[project_id],
+        # None for an operator reprinting a project directly (no order, so no
+        # buyer choice to honour) — the PDF falls back to the standard margin.
+        "canvas_margin_inches": canvas_margin_override,
     }
 
 
@@ -1361,6 +1376,7 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
             project, project_id, signature_cache, sku_cache,
             label_override=order.get("title"),
             known_gallery_item_id=order.get("gallery_item_id"),
+            canvas_margin_override=order.get("canvas_margin_inches"),
         ))
 
     if request.include_alignment_test:

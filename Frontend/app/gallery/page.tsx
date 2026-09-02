@@ -9,7 +9,8 @@ import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { NotificationBell } from '../../components/NotificationBell'
-import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, tierDowngradeMarginInches, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import CanvasMarginChoice from '../../components/CanvasMarginChoice'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
@@ -178,6 +179,16 @@ function GalleryImage({
   )
 }
 
+/** Lowest price this design can be printed at — the tier-downgraded price
+ *  where one exists, the standard price otherwise. What "Print from" means on
+ *  a card, so the cheaper option is visible without opening the item. */
+function lowestGalleryPrintCents(widthInches: number, heightInches: number): number {
+  const standard = printGalleryTotalCents(getCanvasForDesign(widthInches, heightInches))
+  const margin = tierDowngradeMarginInches(widthInches, heightInches)
+  if (margin === null) return standard
+  return Math.min(standard, printGalleryTotalCents(getCanvasForDesign(widthInches, heightInches, margin)))
+}
+
 function GalleryPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -193,6 +204,11 @@ function GalleryPage() {
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<GalleryItem | null>(null)
+  // Border/price choice for the item being previewed. Always starts on the
+  // standard margin, and resets with the selection so one item's choice never
+  // silently carries into the next.
+  const [tierDowngrade, setTierDowngrade] = useState(false)
+  useEffect(() => { setTierDowngrade(false) }, [selectedPreview?.id])
   const isMobile = useIsMobile(BREAKPOINTS.tablet)
   const [checkoutError] = useState('')
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
@@ -372,7 +388,10 @@ function GalleryPage() {
 
   function handleAddToCart(item: GalleryItem) {
     if (!item.width_inches || !item.height_inches || !item.pdf_url) return
-    const canvas = getCanvasForDesign(item.width_inches, item.height_inches)
+    const margin = tierDowngrade
+      ? tierDowngradeMarginInches(item.width_inches, item.height_inches) ?? undefined
+      : undefined
+    const canvas = getCanvasForDesign(item.width_inches, item.height_inches, margin)
     cartAdd({
       pdf_url: item.pdf_url,
       internal_pdf_supabase_path: null,
@@ -383,6 +402,7 @@ function GalleryPage() {
       canvas_label: canvas.label,
       canvas_price_cents: canvas.priceCents,
       base_price_cents: printGalleryTotalCents(canvas) - canvas.priceCents,
+      tier_downgrade: margin !== undefined,
       gallery_item_id: item.id,
       parent_gallery_item_id: null,
       project_id: null,
@@ -656,7 +676,7 @@ function GalleryPage() {
                       ) : null}
                       {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                         <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
-                          Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
+                          Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches))}
                         </div>
                       )}
                     </div>
@@ -808,7 +828,7 @@ function GalleryPage() {
                     ) : null}
                     {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                       <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
-                        Print from {formatCents(printGalleryTotalCents(getCanvasForDesign(item.width_inches, item.height_inches)))}
+                        Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches))}
                       </span>
                     )}
                   </div>
@@ -1219,8 +1239,15 @@ function GalleryPage() {
                       const printable = selectedPreview.width_inches && selectedPreview.height_inches
                         ? isStandardOrder(selectedPreview.width_inches, selectedPreview.height_inches)
                         : false
+                      const downgradeMargin = printable && selectedPreview.width_inches && selectedPreview.height_inches
+                        ? tierDowngradeMarginInches(selectedPreview.width_inches, selectedPreview.height_inches)
+                        : null
                       const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
-                        ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
+                        ? getCanvasForDesign(
+                            selectedPreview.width_inches,
+                            selectedPreview.height_inches,
+                            tierDowngrade && downgradeMargin !== null ? downgradeMargin : undefined,
+                          )
                         : null
                       const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
                       const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
@@ -1243,6 +1270,16 @@ function GalleryPage() {
                           >
                             Use template
                           </button>
+                          {printable && selectedPreview.width_inches && selectedPreview.height_inches && (
+                            <CanvasMarginChoice
+                              widthInches={selectedPreview.width_inches}
+                              heightInches={selectedPreview.height_inches}
+                              pricing="gallery"
+                              value={tierDowngrade}
+                              onChange={setTierDowngrade}
+                              compact
+                            />
+                          )}
                           <button
                             type="button"
                             onClick={() => { handleAddToCart(selectedPreview); setShowCartDrawer(true) }}

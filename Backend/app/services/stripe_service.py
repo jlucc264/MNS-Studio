@@ -6,9 +6,28 @@ from .canvas_pricing import (
     get_canvas_for_design,
     print_own_total_cents,
     print_gallery_total_cents,
+    tier_downgrade_margin_inches,
     TEMPLATE_PRICE_CENTS,
     PRINT_OWN_BASE_CENTS,
 )
+
+
+def _resolve_margin_inches(width_inches: float, height_inches: float, tier_downgrade: bool):
+    """Margin to price and print this order at, given the buyer's choice.
+
+    The caller passes a boolean, never a margin. The margin is derived here
+    from the design's own dimensions, so a client cannot post an arbitrary
+    margin and set its own price. A request to downgrade a design that does not
+    qualify falls back to the standard margin rather than erroring — the offer
+    is cosmetic, and quietly charging full price is the safe direction.
+
+    Returns (margin_or_None, downgraded). None means "the default", which is
+    what get_canvas_for_design and the PDF border both already assume.
+    """
+    if not tier_downgrade:
+        return None, False
+    margin = tier_downgrade_margin_inches(width_inches, height_inches)
+    return (margin, True) if margin is not None else (None, False)
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -69,8 +88,10 @@ def create_print_own_checkout(
     creator_user_id: str | None = None,
     internal_pdf_supabase_path: str | None = None,
     project_id: str | None = None,
+    tier_downgrade: bool = False,
 ) -> str:
-    canvas = get_canvas_for_design(width_inches, height_inches)
+    margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
+    canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
 
     is_remixed = bool(gallery_item_id and creator_user_id)
     total = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
@@ -86,9 +107,20 @@ def create_print_own_checkout(
         "height_inches": str(height_inches),
         "user_id": user_id,
     }
+    # Carried so the print job uses the stock this was priced against. Absent
+    # means the default margin, which is what every pre-downgrade order is.
+    if downgraded:
+        metadata["tier_downgrade"] = "1"
+        metadata["canvas_margin_inches"] = str(margin)
     if is_remixed:
         metadata["gallery_item_id"] = gallery_item_id
         metadata["creator_user_id"] = creator_user_id
+        # A remix is stamped type=print_gallery, so the webhook pays the
+        # original creator a share of this. Without it that fell back to
+        # Stripe's amount_total, paying out a share of the $7 shipping too —
+        # and with a tier downgrade the item price is the only figure that
+        # tracks what the buyer actually paid for the canvas.
+        metadata["item_total_cents"] = str(total)
     if internal_pdf_supabase_path:
         metadata["internal_pdf_supabase_path"] = internal_pdf_supabase_path
     if project_id:
@@ -180,8 +212,10 @@ def create_gallery_print_checkout(
     width_inches: float,
     height_inches: float,
     buyer_user_id: str | None = None,
+    tier_downgrade: bool = False,
 ) -> str:
-    canvas = get_canvas_for_design(width_inches, height_inches)
+    margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
+    canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
     total = print_gallery_total_cents(canvas)
 
     metadata = {
@@ -196,8 +230,13 @@ def create_gallery_print_checkout(
         # Creator earnings are a share of THIS item, so record it explicitly.
         # Stripe's amount_total includes the $7 shipping, and paying the creator
         # a share of shipping was ~$1.40 per order going out the door.
+        # A tier downgrade lowers this, and creator earnings follow it down:
+        # the creator's share tracks the actual sale price.
         "item_total_cents": str(total),
     }
+    if downgraded:
+        metadata["tier_downgrade"] = "1"
+        metadata["canvas_margin_inches"] = str(margin)
     coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, total)
     if applied_cents:
         metadata["applied_credit_user_id"] = buyer_user_id
@@ -237,7 +276,12 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
     subtotal_for_credit = 0
 
     for i, item in enumerate(items):
-        canvas = get_canvas_for_design(item["width_inches"], item["height_inches"])
+        margin, downgraded = _resolve_margin_inches(
+            item["width_inches"], item["height_inches"], bool(item.get("tier_downgrade"))
+        )
+        canvas = get_canvas_for_design(
+            item["width_inches"], item["height_inches"], margin_inches=margin
+        )
         has_creator = bool(item.get("creator_user_id"))
         qty = item.get("quantity", 1)
         # Gallery pricing is now a markup on the print-own total rather than a
@@ -267,6 +311,11 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
             "b": base,
             "cv": canvas["price_cents"],
         }
+        # Per line, not per cart: two designs in one order can make opposite
+        # calls on the border/price trade.
+        if downgraded:
+            item_meta["dg"] = 1
+            item_meta["mg"] = margin
         ip = item.get("internal_pdf_supabase_path")
         if ip:
             item_meta["ip"] = ip

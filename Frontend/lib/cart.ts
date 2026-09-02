@@ -13,6 +13,11 @@ export type CartItem = {
   canvas_label: string
   canvas_price_cents: number
   base_price_cents: number
+  // Buyer chose to drop a roll tier for a slightly narrower border. Stored per
+  // line, not per cart: two designs in one order can make opposite calls. Only
+  // the flag is sent to the server, which re-derives the margin and the price
+  // — these cents are for display and must never be trusted as the charge.
+  tier_downgrade?: boolean
   gallery_item_id: string | null        // gallery print — links to /gallery?item=<id>
   parent_gallery_item_id: string | null // own design remix (creator attribution)
   project_id: string | null             // own design — links to /studio?project=<id>
@@ -41,6 +46,21 @@ export function cartRemove(id: string): void {
 export function cartSetQty(id: string, qty: number): void {
   if (qty < 1) { cartRemove(id); return }
   cartWrite(cartRead().map(i => i.id === id ? { ...i, quantity: qty } : i))
+}
+
+/** Switch one line between the standard border and one roll tier down. The
+ *  caller passes the recomputed canvas label and price, since only it knows
+ *  whether this line carries the gallery markup. */
+export function cartSetTierDowngrade(
+  id: string,
+  tierDowngrade: boolean,
+  canvasLabel: string,
+  canvasPriceCents: number,
+  basePriceCents: number,
+): void {
+  cartWrite(cartRead().map(i => i.id === id
+    ? { ...i, tier_downgrade: tierDowngrade, canvas_label: canvasLabel, canvas_price_cents: canvasPriceCents, base_price_cents: basePriceCents }
+    : i))
 }
 
 export function cartClear(): void {

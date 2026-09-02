@@ -1296,7 +1296,18 @@ def generate_roll_print_pdf(
         # Margin must match what the customer was charged for — same function
         # feeds get_canvas_for_design. Orientation-independent, so the rotation
         # below can't change it.
-        margin_in = canvas_margin_inches(stitch_w / mesh, stitch_h / mesh)
+        #
+        # An order where the buyer chose a tier downgrade carries its own
+        # margin, and it must win: re-deriving the default here would draw a 2"
+        # border on a canvas cut for a 1.75" one, overrunning the narrower roll
+        # the order was priced and cut for. Explicit None check, not `or` — a
+        # margin is never legitimately 0 but silently falling back would be the
+        # same misprint.
+        stored_margin = design.get("canvas_margin_inches")
+        margin_in = (
+            stored_margin if stored_margin is not None
+            else canvas_margin_inches(stitch_w / mesh, stitch_h / mesh)
+        )
         border_stitches = int(margin_in * mesh)
         # The roll is cut to width before loading, so its physical edge is
         # already the side margin. Overriding lets the imaged area stop at the

@@ -603,7 +603,15 @@ def create_print_order(
     width_inches: float | None,
     height_inches: float | None,
     amount_total_cents: int | None = None,
+    canvas_margin_inches: float | None = None,
+    tier_downgrade: bool = False,
 ) -> None:
+    """canvas_margin_inches is the margin this order was PRICED at, stored
+    because the operator has to load the roll width it was sold against. A
+    tier-downgraded order recomputes to a wider canvas if the margin is derived
+    fresh from the design size, which would print onto stock it does not fit.
+    None means the default margin, which is every order placed before the
+    downgrade option existed."""
     _request("POST", "/print_orders", body={
         "stripe_session_id": stripe_session_id,
         "order_type": order_type,
@@ -614,6 +622,8 @@ def create_print_order(
         "width_inches": width_inches,
         "height_inches": height_inches,
         "amount_total_cents": amount_total_cents,
+        "canvas_margin_inches": canvas_margin_inches,
+        "tier_downgrade": tier_downgrade,
     })
 
 

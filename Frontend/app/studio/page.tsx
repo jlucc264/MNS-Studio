@@ -16,6 +16,7 @@ import ChatPanel from '../../components/ChatPanel'
 import { SignaturePad } from '../../components/SignaturePad'
 import { SignatureGridEditor } from '../../components/SignatureGridEditor'
 import GridEditor, { computeShapeCells, type DesignSelectionRect } from '../../components/GridEditor'
+import CanvasMarginChoice from '../../components/CanvasMarginChoice'
 import { getTextCells, ensureFontLoaded, type FontFamily, type TextOrientation } from '../../lib/bitmapFonts'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
@@ -50,6 +51,7 @@ import {
   getCanvasForDesign,
   printOwnTotalCents,
   printGalleryTotalCents,
+  tierDowngradeMarginInches,
   getMyCreatorProfile,
   getMySignature,
   getProjectSku,
@@ -678,6 +680,11 @@ function StudioPage() {
   const [placeTextSignal, setPlaceTextSignal] = useState(0)
   const [cancelTextSignal, setCancelTextSignal] = useState(0)
   const [hasActiveTextBox, setHasActiveTextBox] = useState(false)
+  const [clearMeasurementsSignal, setClearMeasurementsSignal] = useState(0)
+  const [measurementCount, setMeasurementCount] = useState(0)
+  // Buyer's border/price choice for this design. Defaults to the standard 2"
+  // margin — a downgrade is always an explicit opt-in, never the default.
+  const [tierDowngrade, setTierDowngrade] = useState(false)
   const [settingsGuardAccepted, setSettingsGuardAccepted] = useState(false)
   const [showSettingsGuardModal, setShowSettingsGuardModal] = useState(false)
   const [stampClipboard, setStampClipboard] = useState<(string | null)[][] | null>(null)
@@ -4795,6 +4802,8 @@ function StudioPage() {
       onShapeBorderSizeChange={setShapeBorderSize}
       brushDensity={brushDensity}
       onBrushDensityChange={setBrushDensity}
+      measurementCount={measurementCount}
+      onClearMeasurements={() => setClearMeasurementsSignal((v) => v + 1)}
       hasSelectedRegion={selectedRegions.length > 0}
       selectedRegionCount={selectedRegionCount}
       onApplyColorToSelection={handleApplyColorToSelection}
@@ -5301,6 +5310,8 @@ function StudioPage() {
                   floatingStamp={floatingStamp}
                   onStampMove={handleStampMove}
                   clearSelectionSignal={clearSelectionSignal}
+                  clearMeasurementsSignal={clearMeasurementsSignal}
+                  onMeasurementCountChange={setMeasurementCount}
                   canvasOverlay={showColorBrowser && activeWorkflowStep === 2 && !isFinalizeReview && (
                     // Rendered inside GridEditor's own canvas row (below its
                     // toolbar) via the canvasOverlay prop — top: 0 here means
@@ -5692,6 +5703,19 @@ function StudioPage() {
         const printTotal = canvas
           ? (parentGalleryItemId ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas))
           : null
+        // "from $X" when a narrower border would drop a roll tier, so the range
+        // is visible here without the design itself having to change. The lower
+        // figure is the one quoted, which is what "from" means.
+        const downgradeMargin = standard ? tierDowngradeMarginInches(designW, designH) : null
+        const downgradeTotal = downgradeMargin !== null && lastSettings
+          ? (() => {
+              const c = getCanvasForDesign(designW, designH, downgradeMargin)
+              return parentGalleryItemId ? printGalleryTotalCents(c) : printOwnTotalCents(c)
+            })()
+          : null
+        const fromTotal = downgradeTotal !== null && printTotal !== null
+          ? Math.min(downgradeTotal, printTotal)
+          : printTotal
         return (
           <div
             role="dialog"
@@ -5721,7 +5745,14 @@ function StudioPage() {
                   ) : canvas && printTotal !== null ? (
                     <div style={{ fontSize: 13, color: '#5f574f' }}>
                       <div>{formatCustomerCanvasLabel(canvas, designW, designH)}</div>
-                      <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{formatCents(printTotal)}</div>
+                      <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>
+                        {downgradeTotal !== null && `from `}{formatCents(fromTotal ?? printTotal)}
+                      </div>
+                      {downgradeTotal !== null && (
+                        <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>
+                          {formatCents(printTotal)} with the full 2″ border — choose at checkout
+                        </div>
+                      )}
                       <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
                       {parentGalleryItemId && (
                         <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 20% creator credit</div>
@@ -6200,7 +6231,11 @@ function StudioPage() {
         const bW = finishApplied ? finishW : (contentBounds?.width_inches ?? lastSettings?.width_inches ?? 0)
         const bH = finishApplied ? finishH : (contentBounds?.height_inches ?? lastSettings?.height_inches ?? 0)
         const bStandard = isStandardOrder(bW, bH)
-        const bCanvas = lastSettings && bStandard ? getCanvasForDesign(bW, bH) : null
+        // A tier downgrade only exists for some sizes; tierDowngrade stays
+        // false for the rest, and CanvasMarginChoice renders nothing.
+        const bDowngradeMargin = bStandard ? tierDowngradeMarginInches(bW, bH) : null
+        const bMargin = tierDowngrade && bDowngradeMargin !== null ? bDowngradeMargin : undefined
+        const bCanvas = lastSettings && bStandard ? getCanvasForDesign(bW, bH, bMargin) : null
         const bShipping = 700
         // Everything above the canvas material charge: the print-own base fee,
         // plus the creator markup when this is a gallery remix.
@@ -6245,6 +6280,15 @@ function StudioPage() {
                     </div>
                   </>
                 )}
+                {bStandard && (
+                  <CanvasMarginChoice
+                    widthInches={bW}
+                    heightInches={bH}
+                    pricing={parentGalleryItemId ? 'gallery' : 'own'}
+                    value={tierDowngrade}
+                    onChange={setTierDowngrade}
+                  />
+                )}
                 {!bStandard && <p style={{ margin: 0, fontSize: 13, color: '#8a8177' }}>{LARGE_PRINT_MESSAGE}</p>}
                 {printCheckoutError && <p style={{ margin: 0, fontSize: 12, color: '#b0453a' }}>{printCheckoutError}</p>}
               </div>
@@ -6270,6 +6314,7 @@ function StudioPage() {
                       canvas_label: bCanvas.label,
                       canvas_price_cents: bCanvas.priceCents,
                       base_price_cents: bBase,
+                      tier_downgrade: tierDowngrade && bDowngradeMargin !== null,
                       gallery_item_id: null,
                       parent_gallery_item_id: parentGalleryItemId,
                       project_id: savedProjectId,

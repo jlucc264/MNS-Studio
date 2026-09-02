@@ -116,6 +116,18 @@ create table if not exists public.notifications (
 alter table public.print_orders
 add column if not exists amount_total_cents integer;
 
+-- The margin this order was PRICED at, and whether that was the buyer choosing
+-- to drop a roll tier for a slightly narrower border. Stored rather than
+-- re-derived from width/height: a downgraded order recomputes to the standard
+-- margin and a wider canvas, which would then be printed onto stock it does
+-- not fit. NULL margin means the default, i.e. every order placed before the
+-- option existed.
+alter table public.print_orders
+add column if not exists canvas_margin_inches numeric;
+
+alter table public.print_orders
+add column if not exists tier_downgrade boolean not null default false;
+
 -- How the design was actually created ('blank' or 'import'), so the gallery
 -- publish flow can tag it correctly even if the studio session that created
 -- it ended and the draft was resumed later. Distinct from source_type, which

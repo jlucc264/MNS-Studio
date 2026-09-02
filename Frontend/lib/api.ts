@@ -507,6 +507,13 @@ export type PrintOrder = {
   /** Null for orders placed before this was tracked, or if the Stripe
    *  backfill couldn't recover a price for it. */
   amount_total_cents?: number | null
+  /** The buyer chose a narrower border to drop a roll tier, and the margin
+   *  they were priced at. The operator has to load that narrower stock:
+   *  re-deriving the margin from width/height gives the standard 2" and a
+   *  canvas that doesn't fit the roll it was sold for. Null margin means the
+   *  default, i.e. every order placed before the option existed. */
+  tier_downgrade?: boolean | null
+  canvas_margin_inches?: number | null
   /** Resolved from the underlying gallery listing or project — never stored
    *  on the order itself. Null if both have since been deleted. */
   mesh_count?: number | null
@@ -1080,15 +1087,52 @@ export function canvasMarginInches(widthInches: number, heightInches: number): n
 // last resort. Non-standard orders and belts stay fully continuous.
 const STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
 
-export function getCanvasForDesign(widthInches: number, heightInches: number): CanvasSize {
-  const margin = canvasMarginInches(widthInches, heightInches)
+/** Narrowest pre-cut stock that fits this canvas width. The epsilon matters: a
+ *  downgrade margin is derived as (tier - short)/2, so short + 2*margin lands
+ *  back on the tier through floating point and can come out a hair over it.
+ *  Mirrors _short_side_tier in canvas_pricing.py. */
+function shortSideTier(shortSideInches: number): number {
+  return STANDARD_WIDTH_TIERS_IN.find(t => t >= shortSideInches - 1e-9)
+    ?? STANDARD_WIDTH_TIERS_IN[STANDARD_WIDTH_TIERS_IN.length - 1]
+}
+
+/** The margin that drops this design one roll tier, or null if there isn't one.
+ *  Mirrors tier_downgrade_margin_inches in canvas_pricing.py — keep in step.
+ *  Offers only the tier immediately below, never a cascade, and returns the
+ *  largest margin that still fits it rather than always the floor. */
+export function tierDowngradeMarginInches(widthInches: number, heightInches: number): number | null {
+  if (isBeltDesign(widthInches, heightInches)) return null
+  if (!isStandardOrder(widthInches, heightInches)) return null
+
+  const defaultMargin = canvasMarginInches(widthInches, heightInches)
+  if (defaultMargin <= DOWNGRADE_MIN_MARGIN_INCHES) return null
+
+  const short = Math.min(widthInches, heightInches)
+  const defaultTier = shortSideTier(short + 2 * defaultMargin)
+  const index = STANDARD_WIDTH_TIERS_IN.indexOf(defaultTier)
+  if (index <= 0) return null
+
+  const lowerTier = STANDARD_WIDTH_TIERS_IN[index - 1]
+  const margin = Math.min(defaultMargin, (lowerTier - short) / 2)
+  return margin < DOWNGRADE_MIN_MARGIN_INCHES ? null : margin
+}
+
+/** marginInches overrides the default margin, for a buyer who chose a tier
+ *  downgrade. Pass the same value to the printed border or the canvas will not
+ *  match the stock it was priced against. */
+export function getCanvasForDesign(
+  widthInches: number,
+  heightInches: number,
+  marginInches?: number,
+): CanvasSize {
+  const margin = marginInches ?? canvasMarginInches(widthInches, heightInches)
   const isBelt = isBeltDesign(widthInches, heightInches)
   let canvasW: number
   let canvasH: number
   if (isStandardOrder(widthInches, heightInches) && !isBelt) {
     const shortSide = Math.min(widthInches, heightInches) + 2 * margin
     const longSide = Math.ceil((Math.max(widthInches, heightInches) + 2 * margin) * 2) / 2
-    const tier = STANDARD_WIDTH_TIERS_IN.find(t => t >= shortSide) ?? STANDARD_WIDTH_TIERS_IN[STANDARD_WIDTH_TIERS_IN.length - 1]
+    const tier = shortSideTier(shortSide)
     ;[canvasW, canvasH] = widthInches <= heightInches ? [tier, longSide] : [longSide, tier]
   } else {
     // Ceiling, not nearest: rounding down shaved the margin the buyer paid
@@ -1134,6 +1178,13 @@ export const MAX_ROLL_WIDTH_INCHES = 17
 // canvasMarginInches.
 export const CANVAS_MARGIN_INCHES = 2
 export const MIN_CANVAS_MARGIN_INCHES = 1
+
+// Floor for a *voluntary* margin trim — a different thing from
+// MIN_CANVAS_MARGIN_INCHES, which is physics (below it the roll cannot print
+// the job at all). This is a comfort floor for a buyer who chooses a narrower
+// border to drop a roll tier. Mirrors DOWNGRADE_MIN_MARGIN_IN in
+// canvas_pricing.py.
+export const DOWNGRADE_MIN_MARGIN_INCHES = 1.75
 
 // Max printable — the hard ceiling on what can even be drafted in studio,
 // deliberately below what MAX_ROLL_WIDTH_INCHES - 2*MIN_CANVAS_MARGIN_INCHES
@@ -1228,7 +1279,7 @@ export function formatCents(cents: number): string {
 export type CheckoutResponse = { client_secret: string }
 
 export async function createPrintOwnCheckout(
-  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null; internal_pdf_supabase_path?: string | null; project_id?: string | null },
+  payload: { pdf_url: string; width_inches: number; height_inches: number; parent_gallery_item_id?: string | null; internal_pdf_supabase_path?: string | null; project_id?: string | null; tier_downgrade?: boolean },
   accessToken?: string | null,
 ): Promise<CheckoutResponse> {
   const res = await fetch(`${API_BASE}/checkout/print-own`, {
@@ -1418,8 +1469,12 @@ export async function listCreatorSlugs(): Promise<CreatorSlugEntry[]> {
   return res.json()
 }
 
-export async function createGalleryPrintCheckout(galleryItemId: string): Promise<CheckoutResponse> {
-  const res = await fetch(`${API_BASE}/checkout/print-gallery/${galleryItemId}`, {
+export async function createGalleryPrintCheckout(
+  galleryItemId: string,
+  tierDowngrade = false,
+): Promise<CheckoutResponse> {
+  const query = tierDowngrade ? '?tier_downgrade=true' : ''
+  const res = await fetch(`${API_BASE}/checkout/print-gallery/${galleryItemId}${query}`, {
     method: 'POST',
   })
   if (!res.ok) {
@@ -1436,6 +1491,7 @@ export async function createCartCheckout(
     width_inches: number
     height_inches: number
     quantity: number
+    tier_downgrade?: boolean
     gallery_item_id: string | null
     parent_gallery_item_id: string | null
     project_id: string | null

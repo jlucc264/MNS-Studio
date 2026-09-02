@@ -2,8 +2,16 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { createCartCheckout, formatCents } from '../lib/api'
-import { cartRead, cartRemove, cartSetQty, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem } from '../lib/cart'
+import {
+  createCartCheckout,
+  formatCents,
+  getCanvasForDesign,
+  printGalleryTotalCents,
+  printOwnTotalCents,
+  tierDowngradeMarginInches,
+} from '../lib/api'
+import CanvasMarginChoice from './CanvasMarginChoice'
+import { cartRead, cartRemove, cartSetQty, cartSetTierDowngrade, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem } from '../lib/cart'
 
 interface Props {
   open: boolean
@@ -42,6 +50,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
           width_inches: i.width_inches,
           height_inches: i.height_inches,
           quantity: i.quantity,
+          tier_downgrade: i.tier_downgrade ?? false,
           gallery_item_id: i.gallery_item_id,
           parent_gallery_item_id: i.parent_gallery_item_id,
           project_id: i.project_id,
@@ -65,6 +74,26 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
 
   function setQty(id: string, qty: number) {
     cartSetQty(id, qty)
+    setItems(cartRead())
+  }
+
+  /** Re-price this line for the chosen border. A gallery line carries the
+   *  creator markup and an own-design line does not, so the split between
+   *  canvas and base has to be recomputed here rather than scaled. */
+  function setTierDowngrade(item: CartItem, tierDowngrade: boolean) {
+    const margin = tierDowngrade
+      ? tierDowngradeMarginInches(item.width_inches, item.height_inches) ?? undefined
+      : undefined
+    const canvas = getCanvasForDesign(item.width_inches, item.height_inches, margin)
+    const hasCreator = Boolean(item.gallery_item_id ?? item.parent_gallery_item_id)
+    const unit = hasCreator ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas)
+    cartSetTierDowngrade(
+      item.id,
+      tierDowngrade && margin !== undefined,
+      canvas.label,
+      canvas.priceCents,
+      unit - canvas.priceCents,
+    )
     setItems(cartRead())
   }
 
@@ -146,6 +175,14 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
                   Remove
                 </button>
               </div>
+              <CanvasMarginChoice
+                widthInches={item.width_inches}
+                heightInches={item.height_inches}
+                pricing={(item.gallery_item_id ?? item.parent_gallery_item_id) ? 'gallery' : 'own'}
+                value={item.tier_downgrade ?? false}
+                onChange={(next) => setTierDowngrade(item, next)}
+                compact
+              />
             </div>
           ))}
         </div>

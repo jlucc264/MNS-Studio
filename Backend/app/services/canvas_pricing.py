@@ -100,6 +100,14 @@ MAX_ROLL_WIDTH_IN = 17.0
 CANVAS_MARGIN_IN = 2.0
 MIN_CANVAS_MARGIN_IN = 1.0
 
+# Floor for a *voluntary* margin trim, which is a different thing from
+# MIN_CANVAS_MARGIN_IN entirely. MIN_CANVAS_MARGIN_IN is physics: below it the
+# roll cannot print the job at all. This is a comfort floor for a buyer who
+# chooses a slightly narrower border to drop a roll tier (see
+# tier_downgrade_margin_inches). We would not ship a 1.75" border by default,
+# but we will if the buyer picks it over paying a tier more.
+DOWNGRADE_MIN_MARGIN_IN = 1.75
+
 # Maximum printable design dimensions (short side × long side) — the hard
 # ceiling on what can even be drafted in studio, deliberately below what
 # MAX_ROLL_WIDTH_IN - 2*MIN_CANVAS_MARGIN_IN would allow (15"): the owner
@@ -260,7 +268,68 @@ def _fmt_canvas(n: float) -> str:
 STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
 
 
-def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
+def tier_downgrade_margin_inches(width_inches: float, height_inches: float) -> float | None:
+    """The margin that drops this design one roll tier, or None if there isn't one.
+
+    A design whose short side sits just above a tier boundary pays for a whole
+    tier of canvas it barely uses: 12.15x8.15 needs 12.15" of width, clears the
+    12" tier by 0.15" and lands on 16" — $74.50 against $54.00. We do not tell
+    the designer to resize (a design's size is a design decision, not a pricing
+    one); we offer the buyer the trade at the point of purchase instead.
+
+    Deliberately offers only the tier immediately below, never a cascade down
+    to the smallest stock that DOWNGRADE_MIN_MARGIN_IN would technically reach.
+    One step is a judgement about border width; a cascade is a different design.
+
+    Returns the largest margin that still fits the lower tier — the buyer gives
+    up as little border as the tier actually requires, which is often more than
+    the DOWNGRADE_MIN_MARGIN_IN floor. Qualifying is equivalent to the short
+    side sitting within 0.5" above a tier boundary: it needs
+    short + 2*DOWNGRADE_MIN_MARGIN_IN <= tier while short + 2*CANVAS_MARGIN_IN
+    already exceeds it.
+    """
+    if is_belt_design(width_inches, height_inches):
+        return None
+    if not is_standard_order(width_inches, height_inches):
+        return None
+
+    default_margin = canvas_margin_inches(width_inches, height_inches)
+    if default_margin <= DOWNGRADE_MIN_MARGIN_IN:
+        return None
+
+    short = min(width_inches, height_inches)
+    default_tier = _short_side_tier(short + 2 * default_margin)
+    index = STANDARD_WIDTH_TIERS_IN.index(default_tier)
+    if index == 0:
+        return None  # already on the narrowest stock we keep cut
+
+    lower_tier = STANDARD_WIDTH_TIERS_IN[index - 1]
+    margin = min(default_margin, (lower_tier - short) / 2)
+    if margin < DOWNGRADE_MIN_MARGIN_IN:
+        return None
+    return margin
+
+
+def _short_side_tier(short_side_inches: float) -> float:
+    """Narrowest pre-cut stock that fits this canvas width.
+
+    The epsilon matters: a downgrade margin is derived as (tier - short)/2, so
+    short + 2*margin lands back on the tier through floating point and can come
+    out a hair over it (12.000000000000002). Without the tolerance that design
+    would be quoted the next tier up — exactly the jump the downgrade exists to
+    avoid. 1e-9" is far below any real stitch-quantized dimension.
+    """
+    for tier in STANDARD_WIDTH_TIERS_IN:
+        if tier >= short_side_inches - 1e-9:
+            return tier
+    return STANDARD_WIDTH_TIERS_IN[-1]
+
+
+def get_canvas_for_design(
+    width_inches: float,
+    height_inches: float,
+    margin_inches: float | None = None,
+) -> dict:
     """Canvas dimensions (design plus waste on each side, rounded to the nearest
     0.5", always rounding UP) and the material price for that area.
 
@@ -275,13 +344,22 @@ def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
     there. Whichever of width/height is shorter gets the tiered value; the
     longer side stays continuous (it's the roll's feed direction, cut to
     length per job regardless of which width stock is loaded).
+
+    margin_inches overrides the default margin, for a buyer who chose a tier
+    downgrade (see tier_downgrade_margin_inches). Pass the SAME value here and
+    to the printed border, or the canvas will not match the stock it was
+    priced against.
     """
-    margin = canvas_margin_inches(width_inches, height_inches)
+    margin = (
+        canvas_margin_inches(width_inches, height_inches)
+        if margin_inches is None
+        else margin_inches
+    )
     is_belt = is_belt_design(width_inches, height_inches)
     if is_standard_order(width_inches, height_inches) and not is_belt:
         short_side = min(width_inches, height_inches) + 2 * margin
         long_side = math.ceil((max(width_inches, height_inches) + 2 * margin) * 2) / 2
-        tier = next(t for t in STANDARD_WIDTH_TIERS_IN if t >= short_side)
+        tier = _short_side_tier(short_side)
         canvas_w, canvas_h = (tier, long_side) if width_inches <= height_inches else (long_side, tier)
     else:
         canvas_w = math.ceil((width_inches + 2 * margin) * 2) / 2
