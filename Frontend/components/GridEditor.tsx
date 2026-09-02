@@ -3,6 +3,7 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type FontSize, type FontFamily, type TextOrientation, type TextStyle, getCaretPlacement, getTextCells } from '../lib/bitmapFonts'
 import { useIsPhoneDevice, useIsTouch } from '../lib/useViewport'
+import { CANVAS_MARGIN_INCHES } from '../lib/api'
 
 type ShapeCell = { row: number; col: number; color: string }
 
@@ -939,7 +940,10 @@ export default function GridEditor({
     onDesignAreaMiss, textBoxEnd, focusTextInputForKeyboard, clearPendingTouchEdit,
   ])
 
-  const borderStitches = Math.floor(1 * meshCount)
+  // Matches the real print margin rather than a hardcoded 1". The editor used
+  // to draw half the waste the canvas actually gets, which made the ruler
+  // agree with the screen but disagree with the finished print.
+  const borderStitches = Math.floor(CANVAS_MARGIN_INCHES * meshCount)
   const rows = cells.length
   const cols = cells[0].length
   const totalRows = rows + borderStitches * 2
