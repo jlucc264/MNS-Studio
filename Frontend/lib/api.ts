@@ -1087,12 +1087,14 @@ export function getCanvasForDesign(widthInches: number, heightInches: number): C
   let canvasH: number
   if (isStandardOrder(widthInches, heightInches) && !isBelt) {
     const shortSide = Math.min(widthInches, heightInches) + 2 * margin
-    const longSide = Math.round((Math.max(widthInches, heightInches) + 2 * margin) * 2) / 2
+    const longSide = Math.ceil((Math.max(widthInches, heightInches) + 2 * margin) * 2) / 2
     const tier = STANDARD_WIDTH_TIERS_IN.find(t => t >= shortSide) ?? STANDARD_WIDTH_TIERS_IN[STANDARD_WIDTH_TIERS_IN.length - 1]
     ;[canvasW, canvasH] = widthInches <= heightInches ? [tier, longSide] : [longSide, tier]
   } else {
-    canvasW = Math.round((widthInches + 2 * margin) * 2) / 2
-    canvasH = Math.round((heightInches + 2 * margin) * 2) / 2
+    // Ceiling, not nearest: rounding down shaved the margin the buyer paid
+    // for. See get_canvas_for_design in canvas_pricing.py.
+    canvasW = Math.ceil((widthInches + 2 * margin) * 2) / 2
+    canvasH = Math.ceil((heightInches + 2 * margin) * 2) / 2
   }
   const sqIn = canvasW * canvasH
   const fmt = (n: number) => n % 1 === 0 ? `${n}` : `${n.toFixed(1)}`

@@ -262,7 +262,13 @@ STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
 
 def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
     """Canvas dimensions (design plus waste on each side, rounded to the nearest
-    0.5") and the material price for that area.
+    0.5", always rounding UP) and the material price for that area.
+
+    Rounding to the *nearest* half inch silently shaved the margin: a 12.15"
+    design needs 16.15" of canvas and was given 16.0", so the quoted 2" margin
+    arrived as 1.925". Any dimension landing just above a half-inch mark was
+    affected. Ceiling instead, so the canvas is never smaller than the design
+    plus the margin it was sold with.
 
     Standard orders snap their short side up to the nearest tier in
     STANDARD_WIDTH_TIERS_IN instead of a continuous width — see the comment
@@ -274,12 +280,12 @@ def get_canvas_for_design(width_inches: float, height_inches: float) -> dict:
     is_belt = is_belt_design(width_inches, height_inches)
     if is_standard_order(width_inches, height_inches) and not is_belt:
         short_side = min(width_inches, height_inches) + 2 * margin
-        long_side = round((max(width_inches, height_inches) + 2 * margin) * 2) / 2
+        long_side = math.ceil((max(width_inches, height_inches) + 2 * margin) * 2) / 2
         tier = next(t for t in STANDARD_WIDTH_TIERS_IN if t >= short_side)
         canvas_w, canvas_h = (tier, long_side) if width_inches <= height_inches else (long_side, tier)
     else:
-        canvas_w = round((width_inches + 2 * margin) * 2) / 2
-        canvas_h = round((height_inches + 2 * margin) * 2) / 2
+        canvas_w = math.ceil((width_inches + 2 * margin) * 2) / 2
+        canvas_h = math.ceil((height_inches + 2 * margin) * 2) / 2
     sq_in = canvas_w * canvas_h
     price = belt_canvas_price_cents(sq_in) if is_belt else canvas_price_cents(sq_in)
     return {
