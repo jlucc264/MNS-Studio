@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 export type PreviewSettings = {
   width_inches: number
@@ -48,6 +48,15 @@ export default function PreviewControls({
   onLockAspectRatioChange,
   onDimensionClamped,
 }: Props) {
+  // Dimension fields hold the raw string while you're mid-edit. Parsing on
+  // every keystroke and clamping to the minimum meant clearing the box
+  // produced 1 — so reaching 8 from 10 required typing "18" and deleting the
+  // leading digit. An in-progress value ("", ".", "0") is now held here and
+  // simply not committed; blur discards it and the field re-syncs to the last
+  // good value, so a half-typed number can never reach the canvas.
+  const [widthDraft, setWidthDraft] = useState<string | null>(null)
+  const [heightDraft, setHeightDraft] = useState<string | null>(null)
+
   const {
     width_inches: widthInches,
     height_inches: heightInches,
@@ -208,16 +217,21 @@ export default function PreviewControls({
             min="1"
             max={MAX_PRINTABLE_LONG_SIDE}
             step="0.5"
-            value={widthInches}
+            value={widthDraft ?? String(widthInches)}
             onChange={(e) => {
-              const newWidth = Math.max(1, Math.min(Number(e.target.value), MAX_PRINTABLE_LONG_SIDE))
+              const raw = e.target.value
+              setWidthDraft(raw)
+              const parsed = Number(raw)
+              if (raw === '' || !Number.isFinite(parsed) || parsed < 1) return
+              const newWidth = Math.min(parsed, MAX_PRINTABLE_LONG_SIDE)
               const maxHeight = newWidth > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
               const newHeight = lockAspectRatio && importedAspectRatio
                 ? Math.min(Number((newWidth / importedAspectRatio).toFixed(2)), maxHeight)
                 : Math.min(heightInches, maxHeight)
-              if (Number(e.target.value) > MAX_PRINTABLE_LONG_SIDE || heightInches > maxHeight) onDimensionClamped?.()
+              if (parsed > MAX_PRINTABLE_LONG_SIDE || heightInches > maxHeight) onDimensionClamped?.()
               onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
+            onBlur={() => setWidthDraft(null)}
             style={controlStyle}
           />
         </label>
@@ -229,16 +243,21 @@ export default function PreviewControls({
             min="1"
             max={MAX_PRINTABLE_LONG_SIDE}
             step="0.5"
-            value={heightInches}
+            value={heightDraft ?? String(heightInches)}
             onChange={(e) => {
-              const newHeight = Math.max(1, Math.min(Number(e.target.value), MAX_PRINTABLE_LONG_SIDE))
+              const raw = e.target.value
+              setHeightDraft(raw)
+              const parsed = Number(raw)
+              if (raw === '' || !Number.isFinite(parsed) || parsed < 1) return
+              const newHeight = Math.min(parsed, MAX_PRINTABLE_LONG_SIDE)
               const maxWidth = newHeight > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
               const newWidth = lockAspectRatio && importedAspectRatio
                 ? Math.min(Number((newHeight * importedAspectRatio).toFixed(2)), maxWidth)
                 : Math.min(widthInches, maxWidth)
-              if (Number(e.target.value) > MAX_PRINTABLE_LONG_SIDE || widthInches > maxWidth) onDimensionClamped?.()
+              if (parsed > MAX_PRINTABLE_LONG_SIDE || widthInches > maxWidth) onDimensionClamped?.()
               onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
+            onBlur={() => setHeightDraft(null)}
             style={controlStyle}
           />
         </label>

@@ -18,9 +18,11 @@ import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
 
 
-// 'from photo' kept for gallery items published before 2026-08-30, when this
-// tag was replaced by 'original'/'import' (it was being applied to every
-// from-scratch design too, not just actual photo imports).
+// Only 'remix' is auto-applied — see handlePublishGalleryItem in studio.
+// The provenance tags are listed here purely so any that remain on older rows
+// still render in the muted origin style rather than looking like a user's own
+// hashtag. Once scripts/strip_origin_tags.py has been run against production
+// this set can shrink to just 'remix'.
 const ORIGIN_TAGS = new Set(['remix', 'original', 'import', 'from photo', 'graphic art'])
 const WELCOME_STORAGE_KEY = 'mns_welcome_seen'
 const PAGE_SIZE = 30

@@ -3672,11 +3672,16 @@ function StudioPage() {
     setGalleryStatus('posting')
     setGalleryError('')
     try {
+      // Only 'remix' is auto-applied now. The provenance tags ('from photo',
+      // 'graphic art', and the 'original'/'import' pair that briefly replaced
+      // them) were removed 2026-09-01: they described how a design was made
+      // relative to outside source material, which is not information the site
+      // should be asserting on a user's behalf, and reads as the platform
+      // categorising provenance it cannot actually verify. 'remix' is
+      // different — it records lineage between two gallery items we host, and
+      // drives creator attribution.
       const originTags: string[] = []
       if (parentGalleryItemId) originTags.push('remix')
-      if (designOrigin === 'blank') originTags.push('original')
-      if (designOrigin === 'import') originTags.push('import')
-      if (designOrigin === 'import' && lastSettings?.source_type === 'graphic_art') originTags.push('graphic art')
 
       const userTags = galleryTags.split(',').map((t) => t.trim()).filter(Boolean)
       const allTags = Array.from(new Set([...originTags, ...userTags]))
@@ -4874,6 +4879,15 @@ function StudioPage() {
         background: '#f5f1ea',
         color: '#3f382f',
         isolation: 'isolate',
+        // Nothing in the studio is text meant to be selected, and rapid
+        // tapping — drawing a run of lines, or hammering undo — otherwise
+        // trips the browser's double/triple-click word selection and leaves
+        // button labels highlighted mid-drawing. The WebKit prefix and the
+        // touch callout matter on iPad specifically: without them a long
+        // press still raises the copy/define menu over the canvas.
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
       }}
     >
       {!hideTopChrome && (
