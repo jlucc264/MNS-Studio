@@ -999,27 +999,35 @@ export default function GridEditor({
       })),
     [inchStepPixels, rulerHeightUnits]
   )
+  // gridOrigin is what centres the stage inside the viewport when the canvas
+  // is smaller than the visible area. Hit-testing subtracts it and zoom adds
+  // it, but the rulers used to ignore it — so zero sat at the corner of the
+  // viewport rather than the corner of the canvas, and every reading was off
+  // by the centring gap. Adding it puts 0" on the left edge of the waste
+  // canvas, which is where a ruler laid on the real print would start.
   const visibleHorizontalTicks = useMemo(
     () =>
-      horizontalRulerTicks.map((tick) => ({
-        ...tick,
-        position: tick.offset - scrollPosition.left,
-        visible:
-          tick.offset - scrollPosition.left >= -32 &&
-          tick.offset - scrollPosition.left <= previewViewportWidth + 32,
-      })),
-    [horizontalRulerTicks, previewViewportWidth, scrollPosition.left]
+      horizontalRulerTicks.map((tick) => {
+        const position = tick.offset + gridOriginX - scrollPosition.left
+        return {
+          ...tick,
+          position,
+          visible: position >= -32 && position <= previewViewportWidth + 32,
+        }
+      }),
+    [gridOriginX, horizontalRulerTicks, previewViewportWidth, scrollPosition.left]
   )
   const visibleVerticalTicks = useMemo(
     () =>
-      verticalRulerTicks.map((tick) => ({
-        ...tick,
-        position: tick.offset - scrollPosition.top,
-        visible:
-          tick.offset - scrollPosition.top >= -32 &&
-          tick.offset - scrollPosition.top <= previewViewportHeight + 32,
-      })),
-    [previewViewportHeight, scrollPosition.top, verticalRulerTicks]
+      verticalRulerTicks.map((tick) => {
+        const position = tick.offset + gridOriginY - scrollPosition.top
+        return {
+          ...tick,
+          position,
+          visible: position >= -32 && position <= previewViewportHeight + 32,
+        }
+      }),
+    [gridOriginY, previewViewportHeight, scrollPosition.top, verticalRulerTicks]
   )
 
   const getDefaultCenteredScroll = useCallback(() => {
@@ -1163,11 +1171,25 @@ export default function GridEditor({
   const updateLiveRulers = useCallback(
     (nextZoom: number, scrollLeft: number, scrollTop: number) => {
       const nextCellSize = Math.max(1, (baseCellSize * nextZoom) / 100)
+      // Mirrors getZoomMetrics — the centring gap changes with zoom, so it has
+      // to be recomputed here rather than closing over the rendered value, or
+      // the rulers drift away from the grid mid-gesture and snap back on
+      // release when the memoized ticks take over.
+      const nextStageWidth = stageCols * nextCellSize
+      const nextStageHeight = stageRows * nextCellSize
+      const nextGridOriginX = Math.max(
+        0,
+        (Math.max(previewViewportWidth, Math.round(nextStageWidth)) - Math.round(nextStageWidth)) / 2
+      )
+      const nextGridOriginY = Math.max(
+        0,
+        (Math.max(previewViewportHeight, Math.round(nextStageHeight)) - Math.round(nextStageHeight)) / 2
+      )
 
       horizontalRulerTickRefs.current.forEach((tickNode, index) => {
         if (!tickNode) return
 
-        const position = index * meshCount * nextCellSize - scrollLeft
+        const position = index * meshCount * nextCellSize + nextGridOriginX - scrollLeft
         tickNode.style.left = `${position}px`
         tickNode.style.display =
           position >= -32 && position <= previewViewportWidth + 32 ? 'block' : 'none'
@@ -1176,13 +1198,13 @@ export default function GridEditor({
       verticalRulerTickRefs.current.forEach((tickNode, index) => {
         if (!tickNode) return
 
-        const position = index * meshCount * nextCellSize - scrollTop
+        const position = index * meshCount * nextCellSize + nextGridOriginY - scrollTop
         tickNode.style.top = `${position}px`
         tickNode.style.display =
           position >= -32 && position <= previewViewportHeight + 32 ? 'block' : 'none'
       })
     },
-    [baseCellSize, meshCount, previewViewportHeight, previewViewportWidth]
+    [baseCellSize, meshCount, previewViewportHeight, previewViewportWidth, stageCols, stageRows]
   )
 
   const applyViewportScroll = useCallback(
