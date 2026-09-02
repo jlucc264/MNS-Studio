@@ -10,7 +10,7 @@ type ShapeCell = { row: number; col: number; color: string }
 type Props = {
   cells: string[][]
   activeColor: string | null
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill' | 'measure'
   meshCount: 13 | 18
   brushDensity: number
   centerKey?: number
@@ -600,6 +600,21 @@ export default function GridEditor({
   const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
   const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
+  // Measure tool. Deliberately survives pointer-up — the reading is the whole
+  // point, so it stays on screen until the next measurement or a tool change,
+  // rather than vanishing the instant you lift your finger to read it.
+  const [measureStart, setMeasureStart] = useState<{ row: number; col: number } | null>(null)
+  const [measureEnd, setMeasureEnd] = useState<{ row: number; col: number } | null>(null)
+  const measureStartRef = useRef<{ row: number; col: number } | null>(null)
+
+  // Leaving the tool clears the reading, so a stale measurement can't sit on
+  // the canvas while you're painting and be mistaken for part of the design.
+  useEffect(() => {
+    if (toolMode === 'measure') return
+    measureStartRef.current = null
+    setMeasureStart(null)
+    setMeasureEnd(null)
+  }, [toolMode])
   const [textAnchorCell, setTextAnchorCell] = useState<{ row: number; col: number } | null>(null)
   const [textBoxEnd, setTextBoxEnd] = useState<{ row: number; col: number } | null>(null)
   const textBoxStartRef = useRef<{ row: number; col: number } | null>(null)
@@ -870,6 +885,11 @@ export default function GridEditor({
         textBoxStartRef.current = null
         setTextAnchorCell({ row: anchorRow, col: anchorCol })
         focusTextInputForKeyboard()
+      }
+
+      if (toolMode === 'measure') {
+        measureStartRef.current = null
+        return
       }
 
       if (toolMode === 'shape' && shapeStartCellRef.current && shapeEndCell) {
@@ -1556,6 +1576,16 @@ export default function GridEditor({
         return
       }
 
+      if (toolMode === 'measure') {
+        const hit = getCellFromClientPoint(input.clientX, input.clientY)
+        if (!hit) return
+        input.preventDefault()
+        measureStartRef.current = { row: hit.row, col: hit.col }
+        setMeasureStart({ row: hit.row, col: hit.col })
+        setMeasureEnd({ row: hit.row, col: hit.col })
+        return
+      }
+
       if (toolMode === 'shape') {
         const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
@@ -1732,6 +1762,13 @@ export default function GridEditor({
         }
         liveSelectionRectRef.current = nextRect
         setDragSelectionRect(nextRect)
+        return
+      }
+
+      if (toolMode === 'measure' && measureStartRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        setMeasureEnd({ row: hit.row, col: hit.col })
         return
       }
 
@@ -2196,6 +2233,61 @@ export default function GridEditor({
       }
     }
 
+    // Measure overlay
+    if (toolMode === 'measure' && measureStart && measureEnd) {
+      const cx = (col: number) => gridOriginX + (col + contentOriginCol + borderStitches) * cellSize + cellSize / 2
+      const cy = (row: number) => gridOriginY + (row + contentOriginRow + borderStitches) * cellSize + cellSize / 2
+      const x1 = cx(measureStart.col)
+      const y1 = cy(measureStart.row)
+      const x2 = cx(measureEnd.col)
+      const y2 = cy(measureEnd.row)
+
+      context.save()
+      context.strokeStyle = '#b0453a'
+      context.lineWidth = 2
+      context.setLineDash([6, 4])
+      context.beginPath()
+      context.moveTo(x1, y1)
+      context.lineTo(x2, y2)
+      context.stroke()
+      context.setLineDash([])
+      for (const [px, py] of [[x1, y1], [x2, y2]] as const) {
+        context.beginPath()
+        context.arc(px, py, Math.max(3, cellSize / 3), 0, Math.PI * 2)
+        context.fillStyle = '#b0453a'
+        context.fill()
+      }
+
+      // Inclusive of both end cells: dragging across 4 holes reads 4, not 3,
+      // which is how you would count them on the canvas itself.
+      const spanCols = Math.abs(measureEnd.col - measureStart.col) + 1
+      const spanRows = Math.abs(measureEnd.row - measureStart.row) + 1
+      const label = `${(spanCols / meshCount).toFixed(2)}\u2033 \u00d7 ${(spanRows / meshCount).toFixed(2)}\u2033`
+      const sub = `${spanCols} \u00d7 ${spanRows} st`
+
+      context.font = '600 13px Georgia, serif'
+      const labelWidth = Math.max(context.measureText(label).width, context.measureText(sub).width) + 16
+      const boxH = 38
+      let boxX = (x1 + x2) / 2 - labelWidth / 2
+      let boxY = Math.min(y1, y2) - boxH - 10
+      boxX = Math.max(4, Math.min(boxX, wrapperWidth - labelWidth - 4))
+      if (boxY < 4) boxY = Math.max(y1, y2) + 10
+      context.fillStyle = 'rgba(255,253,248,0.96)'
+      context.strokeStyle = '#b0453a'
+      context.lineWidth = 1
+      context.beginPath()
+      context.roundRect(boxX, boxY, labelWidth, boxH, 6)
+      context.fill()
+      context.stroke()
+      context.fillStyle = '#3f382f'
+      context.textAlign = 'center'
+      context.fillText(label, boxX + labelWidth / 2, boxY + 16)
+      context.font = '400 11px Georgia, serif'
+      context.fillStyle = '#8a8177'
+      context.fillText(sub, boxX + labelWidth / 2, boxY + 30)
+      context.restore()
+    }
+
     const designCenterX = gridOriginX + (contentOriginCol + borderStitches + cols / 2) * cellSize
     const designCenterY = gridOriginY + (contentOriginRow + borderStitches + rows / 2) * cellSize
     drawCenterReferenceCross({
@@ -2270,6 +2362,8 @@ export default function GridEditor({
     shapeBorderColor,
     shapeFillColor,
     shapeEndCell,
+    measureStart,
+    measureEnd,
     shapeStartCell,
     shapeType,
     toolMode,

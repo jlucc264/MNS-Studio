@@ -652,7 +652,7 @@ function StudioPage() {
   const [viewMode, setViewMode] = useState<'original' | 'stitch'>('original')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [gridKey, setGridKey] = useState(0)
-  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'>('paint')
+  const [toolMode, setToolMode] = useState<'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill' | 'measure'>('paint')
   const [textFontSize, setTextFontSize] = useState<'small' | 'medium' | 'large'>('medium')
   const [textFontFamily, setTextFontFamily] = useState<FontFamily>('sans')
   const [textOrientation, setTextOrientation] = useState<TextOrientation>('horizontal')
@@ -4765,7 +4765,7 @@ function StudioPage() {
       colorCountsByHex={displayColorCounts}
       toolMode={toolMode}
       onToolModeChange={(mode) => {
-        setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill')
+        setToolMode(mode as 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill' | 'measure')
         if (mode !== 'select') setSelectedRegions([])
         if (mode === 'select') setActivePaintColor(null)
       }}

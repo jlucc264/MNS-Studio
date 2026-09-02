@@ -16,8 +16,8 @@ type Props = {
   selectionColors?: PaletteColor[]
   activeColor: string | null
   colorCountsByHex?: Record<string, number>
-  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill'
-  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill') => void
+  toolMode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill' | 'measure'
+  onToolModeChange: (mode: 'paint' | 'select' | 'shape' | 'merge' | 'text' | 'eyedropper' | 'fill' | 'measure') => void
   textFontSize: FontSize
   onTextFontSizeChange: (size: FontSize) => void
   textFontFamily: FontFamily
@@ -266,7 +266,7 @@ export default function PalettePanel({
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr 1fr',
+              gridTemplateColumns: 'repeat(5, 1fr)',
               gap: 3,
               padding: 3,
               border: '1px solid #d7d0c8',
@@ -285,6 +285,18 @@ export default function PalettePanel({
               }}
             >
               ✏ Paint
+            </button>
+            <button
+              type="button"
+              onClick={() => onToolModeChange('measure')}
+              style={{
+                ...pill,
+                background: toolMode === 'measure' ? '#6e8d67' : 'transparent',
+                color: toolMode === 'measure' ? '#fff' : '#8a8177',
+                fontSize: 11,
+              }}
+            >
+              ↔ Measure
             </button>
             <button
               type="button"
