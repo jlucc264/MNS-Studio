@@ -32,6 +32,8 @@ type Props = {
   onTextOutlineChange: (v: boolean) => void
   brushDensity: number
   onBrushDensityChange: (value: number) => void
+  measurementCount?: number
+  onClearMeasurements?: () => void
   hasSelectedRegion: boolean
   selectedRegionCount: number
   onApplyColorToSelection: (hex: string) => void
@@ -106,6 +108,8 @@ export default function PalettePanel({
   onTextOutlineChange,
   brushDensity,
   onBrushDensityChange,
+  measurementCount = 0,
+  onClearMeasurements,
   hasSelectedRegion,
   selectedRegionCount,
   onApplyColorToSelection,
@@ -214,6 +218,10 @@ export default function PalettePanel({
   const isMergeTab = toolMode === 'merge'
   const isTextTab = toolMode === 'text'
   const isFillTab = toolMode === 'fill'
+  // Paint, Fill and the eyedropper are one pill: they share the same colour
+  // configuration block, and five pills did not fit the row comfortably.
+  // Brush vs bucket is a sub-toggle inside that block.
+  const isPaintTab = toolMode === 'paint' || toolMode === 'fill' || toolMode === 'eyedropper'
 
   return (
     <div
@@ -262,11 +270,11 @@ export default function PalettePanel({
       {/* Create tab content */}
       {isCreateTab && (
         <>
-          {/* Paint | Shape | Text | Fill sub-toggle */}
+          {/* Paint | Measure | Shape | Text sub-toggle */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(5, 1fr)',
+              gridTemplateColumns: 'repeat(4, 1fr)',
               gap: 3,
               padding: 3,
               border: '1px solid #d7d0c8',
@@ -276,11 +284,14 @@ export default function PalettePanel({
           >
             <button
               type="button"
-              onClick={() => onToolModeChange('paint')}
+              // Leave the brush/bucket sub-toggle where the user set it, but
+              // still act as the way out of the eyedropper, which is a
+              // transient state within this pill rather than a chosen one.
+              onClick={() => { if (toolMode !== 'paint' && !isFillTab) onToolModeChange('paint') }}
               style={{
                 ...pill,
-                background: toolMode === 'paint' ? '#6e8d67' : 'transparent',
-                color: toolMode === 'paint' ? '#fff' : '#8a8177',
+                background: isPaintTab ? '#6e8d67' : 'transparent',
+                color: isPaintTab ? '#fff' : '#8a8177',
                 fontSize: 11,
               }}
             >
@@ -322,19 +333,47 @@ export default function PalettePanel({
             >
               Aa Text
             </button>
-            <button
-              type="button"
-              onClick={() => onToolModeChange('fill')}
-              style={{
-                ...pill,
-                background: isFillTab ? '#6e8d67' : 'transparent',
-                color: isFillTab ? '#fff' : '#8a8177',
-                fontSize: 11,
-              }}
-            >
-              ◍ Fill
-            </button>
           </div>
+
+          {/* Measure mode */}
+          {toolMode === 'measure' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div
+                style={{
+                  fontSize: 12, color: '#8a8177', padding: '6px 10px',
+                  borderRadius: 8, border: '1px solid #e4ddd5', background: '#faf7f3',
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Drag</strong> on canvas to measure. Measurements stay up while you work in other tools. <strong>Tap a line</strong> to show its size; <strong>×</strong> on the label removes it.
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: 12, color: '#8a8177' }}>
+                  {measurementCount === 0
+                    ? 'No measurements'
+                    : `${measurementCount} measurement${measurementCount === 1 ? '' : 's'}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={onClearMeasurements}
+                  disabled={measurementCount === 0}
+                  style={{
+                    border: '1px solid #d5cec6',
+                    borderRadius: 8,
+                    padding: '5px 10px',
+                    background: '#fff',
+                    color: measurementCount === 0 ? '#bdb5ab' : '#b0453a',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    fontFamily: 'inherit',
+                    cursor: measurementCount === 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  Clear all
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Text mode */}
           {isTextTab && (
@@ -558,7 +597,7 @@ export default function PalettePanel({
             </div>
           )}
 
-          {/* Paint mode: active color + brush size */}
+          {/* Paint mode: brush/bucket + active color + brush size */}
           {(toolMode === 'paint' || toolMode === 'fill') && (
             <div
               style={{
@@ -570,6 +609,42 @@ export default function PalettePanel({
                 background: !activeColor ? '#fff7f5' : '#faf7f3',
               }}
             >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 3,
+                  padding: 3,
+                  border: '1px solid #d7d0c8',
+                  borderRadius: 999,
+                  background: '#f0ece5',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => onToolModeChange('paint')}
+                  style={{
+                    ...pill,
+                    fontSize: 11,
+                    background: toolMode === 'paint' ? '#3f382f' : 'transparent',
+                    color: toolMode === 'paint' ? '#fff' : '#8a8177',
+                  }}
+                >
+                  ✏ Brush
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToolModeChange('fill')}
+                  style={{
+                    ...pill,
+                    fontSize: 11,
+                    background: isFillTab ? '#3f382f' : 'transparent',
+                    color: isFillTab ? '#fff' : '#8a8177',
+                  }}
+                >
+                  ◍ Bucket
+                </button>
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div
                   style={{
@@ -596,28 +671,31 @@ export default function PalettePanel({
                   </div>
                 </div>
               </div>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12,
-                  color: '#6f665b',
-                }}
-              >
-                <span style={{ flexShrink: 0 }}>Brush size</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  step={1}
-                  value={brushDensity}
-                  onChange={(event) => onBrushDensityChange(Number(event.target.value))}
-                  disabled={!activeColor}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ minWidth: 14, textAlign: 'right', fontWeight: 600 }}>{brushDensity}</span>
-              </label>
+              {/* Bucket floods a whole region, so brush size means nothing to it */}
+              {!isFillTab && (
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 12,
+                    color: '#6f665b',
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>Brush size</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    value={brushDensity}
+                    onChange={(event) => onBrushDensityChange(Number(event.target.value))}
+                    disabled={!activeColor}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ minWidth: 14, textAlign: 'right', fontWeight: 600 }}>{brushDensity}</span>
+                </label>
+              )}
             </div>
           )}
 

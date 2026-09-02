@@ -39,6 +39,13 @@ type Props = {
   floatingStamp?: { cells: (string | null)[][]; anchorRow: number; anchorCol: number } | null
   onStampMove?: (anchor: { row: number; col: number }) => void
   clearSelectionSignal?: number
+  // "Clear all" for the measure tool lives in the Palette panel while the
+  // measurements themselves live here, so it comes in as an incrementing
+  // counter (same shape as clearSelectionSignal) with the count going back
+  // out so the panel can report it and disable the button when there is
+  // nothing to clear.
+  clearMeasurementsSignal?: number
+  onMeasurementCountChange?: (count: number) => void
   signatureUrl?: string | null
   skuUrl?: string | null
   // Phone landscape has so little horizontal room in this toolbar that the
@@ -89,6 +96,31 @@ export type DesignSelectionRect = {
   startCol: number
   endRow: number
   endCol: number
+}
+
+type Measurement = {
+  id: number
+  start: { row: number; col: number }
+  end: { row: number; col: number }
+}
+
+// Distance from a point to a line segment, in the overlay's own pixel space.
+// The whole segment is the measure tool's tap target — the endpoint dots are
+// deliberately not used, since precision-tapping something that small on touch
+// is the exact difficulty the tool exists to relieve.
+function distanceToSegment(
+  px: number, py: number,
+  x1: number, y1: number,
+  x2: number, y2: number
+): number {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const lengthSquared = dx * dx + dy * dy
+  // A zero-length segment is just a point; fall through to the plain distance.
+  const t = lengthSquared === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared))
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 }
 
 // ── Shape helpers ────────────────────────────────────────────────────────────
@@ -553,6 +585,8 @@ export default function GridEditor({
   floatingStamp = null,
   onStampMove,
   clearSelectionSignal = 0,
+  clearMeasurementsSignal = 0,
+  onMeasurementCountChange,
   isPhoneLandscape = false,
   signatureUrl = null,
   skuUrl = null,
@@ -600,21 +634,37 @@ export default function GridEditor({
   const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
   const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
-  // Measure tool. Deliberately survives pointer-up — the reading is the whole
-  // point, so it stays on screen until the next measurement or a tool change,
-  // rather than vanishing the instant you lift your finger to read it.
-  const [measureStart, setMeasureStart] = useState<{ row: number; col: number } | null>(null)
-  const [measureEnd, setMeasureEnd] = useState<{ row: number; col: number } | null>(null)
-  const measureStartRef = useRef<{ row: number; col: number } | null>(null)
+  // Measure tool. Measurements accumulate and survive both pointer-up and a
+  // tool change — the point is to take a reading and then work against it, so
+  // they stay on the canvas while you paint. The dashed red styling is what
+  // keeps them from being read as part of the design.
+  const [measurements, setMeasurements] = useState<Measurement[]>([])
+  // Only the active measurement is labelled. Several labels at once cover the
+  // design and overlap each other badly on an iPad.
+  const [activeMeasurementId, setActiveMeasurementId] = useState<number | null>(null)
+  const measureIdRef = useRef(0)
+  // The in-progress drag, mirrored out of state so pointer-up can inspect its
+  // final geometry without waiting for a re-render.
+  const measureDraftRef = useRef<Measurement | null>(null)
+  const measureActiveBeforeDraftRef = useRef<number | null>(null)
+  // Screen rect of the × on the active label, published by the overlay draw so
+  // the pointer handler can hit-test exactly what was painted.
+  const measureCloseRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
 
-  // Leaving the tool clears the reading, so a stale measurement can't sit on
-  // the canvas while you're painting and be mistaken for part of the design.
+  const lastClearMeasurementsSignalRef = useRef(clearMeasurementsSignal)
   useEffect(() => {
-    if (toolMode === 'measure') return
-    measureStartRef.current = null
-    setMeasureStart(null)
-    setMeasureEnd(null)
-  }, [toolMode])
+    if (clearMeasurementsSignal === lastClearMeasurementsSignalRef.current) return
+    lastClearMeasurementsSignalRef.current = clearMeasurementsSignal
+    measureDraftRef.current = null
+    setMeasurements([])
+    setActiveMeasurementId(null)
+  }, [clearMeasurementsSignal])
+
+  const onMeasurementCountChangeRef = useRef(onMeasurementCountChange)
+  useEffect(() => { onMeasurementCountChangeRef.current = onMeasurementCountChange })
+  useEffect(() => {
+    onMeasurementCountChangeRef.current?.(measurements.length)
+  }, [measurements.length])
   const [textAnchorCell, setTextAnchorCell] = useState<{ row: number; col: number } | null>(null)
   const [textBoxEnd, setTextBoxEnd] = useState<{ row: number; col: number } | null>(null)
   const textBoxStartRef = useRef<{ row: number; col: number } | null>(null)
@@ -888,7 +938,15 @@ export default function GridEditor({
       }
 
       if (toolMode === 'measure') {
-        measureStartRef.current = null
+        const draft = measureDraftRef.current
+        measureDraftRef.current = null
+        // A press that never became a drag is not a measurement. Drop it
+        // instead of littering the canvas with zero-length dots, and hand
+        // "active" back to whichever measurement had it.
+        if (draft && draft.start.row === draft.end.row && draft.start.col === draft.end.col) {
+          setMeasurements((prev) => prev.filter((m) => m.id !== draft.id))
+          setActiveMeasurementId(measureActiveBeforeDraftRef.current)
+        }
         return
       }
 
@@ -1199,6 +1257,24 @@ export default function GridEditor({
       stageCols,
       stageRows,
     ]
+  )
+
+  // Overlay-space geometry for the measure tool. The overlay canvas is inset
+  // over the grid canvas at the same CSS size, so one conversion serves both
+  // the drawing and the hit-testing.
+  const getOverlayPointFromClient = useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }, [])
+
+  const getOverlayPointFromCell = useCallback(
+    (cell: { row: number; col: number }) => ({
+      x: gridOriginX + (cell.col + contentOriginCol + borderStitches) * cellSize + cellSize / 2,
+      y: gridOriginY + (cell.row + contentOriginRow + borderStitches) * cellSize + cellSize / 2,
+    }),
+    [borderStitches, cellSize, contentOriginCol, contentOriginRow, gridOriginX, gridOriginY]
   )
 
   const updateLiveRulers = useCallback(
@@ -1577,12 +1653,58 @@ export default function GridEditor({
       }
 
       if (toolMode === 'measure') {
+        const point = getOverlayPointFromClient(input.clientX, input.clientY)
+
+        // The × on the active label deletes that one measurement. Hit-tested
+        // first, and padded, so it stays reachable with a fingertip without
+        // the pad stealing taps meant for the line underneath.
+        const closeRect = measureCloseRectRef.current
+        if (point && closeRect && activeMeasurementId !== null) {
+          const pad = 6
+          if (
+            point.x >= closeRect.x - pad && point.x <= closeRect.x + closeRect.width + pad &&
+            point.y >= closeRect.y - pad && point.y <= closeRect.y + closeRect.height + pad
+          ) {
+            input.preventDefault()
+            setMeasurements((prev) => prev.filter((m) => m.id !== activeMeasurementId))
+            setActiveMeasurementId(null)
+            return
+          }
+        }
+
+        // Tapping anywhere along an existing line makes it the active one —
+        // the whole segment is the target, never the endpoint dots.
+        if (point) {
+          const threshold = Math.max(14, cellSize * 0.75)
+          let closest: { id: number; distance: number } | null = null
+          for (const measurement of measurements) {
+            const a = getOverlayPointFromCell(measurement.start)
+            const b = getOverlayPointFromCell(measurement.end)
+            const distance = distanceToSegment(point.x, point.y, a.x, a.y, b.x, b.y)
+            if (distance <= threshold && (closest === null || distance < closest.distance)) {
+              closest = { id: measurement.id, distance }
+            }
+          }
+          if (closest) {
+            input.preventDefault()
+            setActiveMeasurementId(closest.id)
+            return
+          }
+        }
+
         const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
         input.preventDefault()
-        measureStartRef.current = { row: hit.row, col: hit.col }
-        setMeasureStart({ row: hit.row, col: hit.col })
-        setMeasureEnd({ row: hit.row, col: hit.col })
+        measureIdRef.current += 1
+        const draft: Measurement = {
+          id: measureIdRef.current,
+          start: { row: hit.row, col: hit.col },
+          end: { row: hit.row, col: hit.col },
+        }
+        measureDraftRef.current = draft
+        measureActiveBeforeDraftRef.current = activeMeasurementId
+        setMeasurements((prev) => [...prev, draft])
+        setActiveMeasurementId(draft.id)
         return
       }
 
@@ -1661,6 +1783,8 @@ export default function GridEditor({
     [getCellFromClientPoint, highlightSelection, toolMode, onPaintStart, paintCell,
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
+     measurements, activeMeasurementId, cellSize,
+     getOverlayPointFromClient, getOverlayPointFromCell,
      textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, floatingStamp]
   )
 
@@ -1696,6 +1820,10 @@ export default function GridEditor({
           toolMode === 'eyedropper' ||
           toolMode === 'fill' ||
           toolMode === 'merge' ||
+          // Measure is a drag tool like shape, so it needs the same
+          // pan-vs-edit grace. Without it listed, whether a measure drag was
+          // deferred depended on a paint colour happening to be selected.
+          toolMode === 'measure' ||
           Boolean(activeColorRef.current)
 
         if (hasTouchEditAction) {
@@ -1765,10 +1893,14 @@ export default function GridEditor({
         return
       }
 
-      if (toolMode === 'measure' && measureStartRef.current) {
+      if (toolMode === 'measure' && measureDraftRef.current) {
         const hit = getCellFromClientPoint(event.clientX, event.clientY)
         if (!hit) return
-        setMeasureEnd({ row: hit.row, col: hit.col })
+        const draft = measureDraftRef.current
+        if (draft.end.row === hit.row && draft.end.col === hit.col) return
+        const next: Measurement = { ...draft, end: { row: hit.row, col: hit.col } }
+        measureDraftRef.current = next
+        setMeasurements((prev) => prev.map((m) => (m.id === next.id ? next : m)))
         return
       }
 
@@ -2233,58 +2365,99 @@ export default function GridEditor({
       }
     }
 
-    // Measure overlay
-    if (toolMode === 'measure' && measureStart && measureEnd) {
+    // Measure overlay. Drawn whatever the active tool is \u2014 measurements are
+    // meant to stay up while you paint against them.
+    measureCloseRectRef.current = null
+    if (measurements.length) {
       const cx = (col: number) => gridOriginX + (col + contentOriginCol + borderStitches) * cellSize + cellSize / 2
       const cy = (row: number) => gridOriginY + (row + contentOriginRow + borderStitches) * cellSize + cellSize / 2
-      const x1 = cx(measureStart.col)
-      const y1 = cy(measureStart.row)
-      const x2 = cx(measureEnd.col)
-      const y2 = cy(measureEnd.row)
 
       context.save()
-      context.strokeStyle = '#b0453a'
-      context.lineWidth = 2
-      context.setLineDash([6, 4])
-      context.beginPath()
-      context.moveTo(x1, y1)
-      context.lineTo(x2, y2)
-      context.stroke()
-      context.setLineDash([])
-      for (const [px, py] of [[x1, y1], [x2, y2]] as const) {
+
+      // Every line, faded unless it is the active one, so the labelled
+      // measurement is identifiable at a glance among several.
+      for (const measurement of measurements) {
+        const isActive = measurement.id === activeMeasurementId
+        const x1 = cx(measurement.start.col)
+        const y1 = cy(measurement.start.row)
+        const x2 = cx(measurement.end.col)
+        const y2 = cy(measurement.end.row)
+
+        context.globalAlpha = isActive ? 1 : 0.45
+        context.strokeStyle = '#b0453a'
+        context.lineWidth = isActive ? 2 : 1.5
+        context.setLineDash([6, 4])
         context.beginPath()
-        context.arc(px, py, Math.max(3, cellSize / 3), 0, Math.PI * 2)
-        context.fillStyle = '#b0453a'
-        context.fill()
+        context.moveTo(x1, y1)
+        context.lineTo(x2, y2)
+        context.stroke()
+        context.setLineDash([])
+        for (const [px, py] of [[x1, y1], [x2, y2]] as const) {
+          context.beginPath()
+          context.arc(px, py, Math.max(3, cellSize / 3), 0, Math.PI * 2)
+          context.fillStyle = '#b0453a'
+          context.fill()
+        }
       }
+      context.globalAlpha = 1
 
-      // Inclusive of both end cells: dragging across 4 holes reads 4, not 3,
-      // which is how you would count them on the canvas itself.
-      const spanCols = Math.abs(measureEnd.col - measureStart.col) + 1
-      const spanRows = Math.abs(measureEnd.row - measureStart.row) + 1
-      const label = `${(spanCols / meshCount).toFixed(2)}\u2033 \u00d7 ${(spanRows / meshCount).toFixed(2)}\u2033`
-      const sub = `${spanCols} \u00d7 ${spanRows} st`
+      // Label, for the active measurement only, drawn last so it sits over
+      // every line rather than under a later one.
+      const active = measurements.find((measurement) => measurement.id === activeMeasurementId)
+      if (active) {
+        const x1 = cx(active.start.col)
+        const y1 = cy(active.start.row)
+        const x2 = cx(active.end.col)
+        const y2 = cy(active.end.row)
 
-      context.font = '600 13px Georgia, serif'
-      const labelWidth = Math.max(context.measureText(label).width, context.measureText(sub).width) + 16
-      const boxH = 38
-      let boxX = (x1 + x2) / 2 - labelWidth / 2
-      let boxY = Math.min(y1, y2) - boxH - 10
-      boxX = Math.max(4, Math.min(boxX, wrapperWidth - labelWidth - 4))
-      if (boxY < 4) boxY = Math.max(y1, y2) + 10
-      context.fillStyle = 'rgba(255,253,248,0.96)'
-      context.strokeStyle = '#b0453a'
-      context.lineWidth = 1
-      context.beginPath()
-      context.roundRect(boxX, boxY, labelWidth, boxH, 6)
-      context.fill()
-      context.stroke()
-      context.fillStyle = '#3f382f'
-      context.textAlign = 'center'
-      context.fillText(label, boxX + labelWidth / 2, boxY + 16)
-      context.font = '400 11px Georgia, serif'
-      context.fillStyle = '#8a8177'
-      context.fillText(sub, boxX + labelWidth / 2, boxY + 30)
+        // Inclusive of both end cells: dragging across 4 holes reads 4, not 3,
+        // which is how you would count them on the canvas itself.
+        const spanCols = Math.abs(active.end.col - active.start.col) + 1
+        const spanRows = Math.abs(active.end.row - active.start.row) + 1
+        const label = `${(spanCols / meshCount).toFixed(2)}\u2033 \u00d7 ${(spanRows / meshCount).toFixed(2)}\u2033`
+        const sub = `${spanCols} \u00d7 ${spanRows} st`
+
+        // The delete affordance only appears in the measure tool, where the
+        // pointer handler is actually listening for it.
+        const closeWidth = toolMode === 'measure' ? 26 : 0
+
+        context.font = '600 13px Georgia, serif'
+        const textWidth = Math.max(context.measureText(label).width, context.measureText(sub).width)
+        const labelWidth = textWidth + 16 + closeWidth
+        const boxH = 38
+        let boxX = (x1 + x2) / 2 - labelWidth / 2
+        let boxY = Math.min(y1, y2) - boxH - 10
+        boxX = Math.max(4, Math.min(boxX, wrapperWidth - labelWidth - 4))
+        if (boxY < 4) boxY = Math.max(y1, y2) + 10
+        context.fillStyle = 'rgba(255,253,248,0.96)'
+        context.strokeStyle = '#b0453a'
+        context.lineWidth = 1
+        context.beginPath()
+        context.roundRect(boxX, boxY, labelWidth, boxH, 6)
+        context.fill()
+        context.stroke()
+        const textCenterX = boxX + (labelWidth - closeWidth) / 2
+        context.fillStyle = '#3f382f'
+        context.textAlign = 'center'
+        context.fillText(label, textCenterX, boxY + 16)
+        context.font = '400 11px Georgia, serif'
+        context.fillStyle = '#8a8177'
+        context.fillText(sub, textCenterX, boxY + 30)
+
+        if (closeWidth) {
+          const closeX = boxX + labelWidth - closeWidth
+          context.strokeStyle = '#e6d5cf'
+          context.lineWidth = 1
+          context.beginPath()
+          context.moveTo(closeX, boxY + 7)
+          context.lineTo(closeX, boxY + boxH - 7)
+          context.stroke()
+          context.font = '600 14px Georgia, serif'
+          context.fillStyle = '#b0453a'
+          context.fillText('\u00d7', closeX + closeWidth / 2, boxY + boxH / 2 + 5)
+          measureCloseRectRef.current = { x: closeX, y: boxY, width: closeWidth, height: boxH }
+        }
+      }
       context.restore()
     }
 
@@ -2362,8 +2535,9 @@ export default function GridEditor({
     shapeBorderColor,
     shapeFillColor,
     shapeEndCell,
-    measureStart,
-    measureEnd,
+    measurements,
+    activeMeasurementId,
+    meshCount,
     shapeStartCell,
     shapeType,
     toolMode,
@@ -2791,8 +2965,8 @@ export default function GridEditor({
                   onPointerMove={handleCanvasPointerMove}
                   style={{
                     display: 'block',
-                    cursor: toolMode === 'text' ? 'text' : (toolMode === 'eyedropper' || toolMode === 'fill') ? 'crosshair' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
-                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || toolMode === 'fill' || highlightSelection) ? 'none' : 'pan-x pan-y',
+                    cursor: toolMode === 'text' ? 'text' : (toolMode === 'eyedropper' || toolMode === 'fill' || toolMode === 'measure') ? 'crosshair' : (toolMode === 'merge' || activeColor) ? (highlightSelection ? 'crosshair' : PAINTBRUSH_CURSOR) : 'default',
+                    touchAction: (activeColor || toolMode === 'merge' || toolMode === 'shape' || toolMode === 'text' || toolMode === 'eyedropper' || toolMode === 'fill' || toolMode === 'measure' || highlightSelection) ? 'none' : 'pan-x pan-y',
                   }}
                 />
                 <canvas
