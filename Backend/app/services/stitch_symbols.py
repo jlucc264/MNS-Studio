@@ -206,3 +206,116 @@ def worst_pairs(limit: int = 10, size: int = 24) -> list[tuple[str, str, float]]
             scored.append((a.key, b.key, confusability(a, b, size)))
     scored.sort(key=lambda row: row[2], reverse=True)
     return scored[:limit]
+
+
+# ── Assignment ───────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def _oklab(hex_color: str) -> tuple[float, float, float]:
+    from .stitch_visualizer import srgb_to_oklab
+    return srgb_to_oklab(_hex_to_rgb(hex_color))
+
+
+def color_distance(a: str, b: str) -> float:
+    """Perceptual distance in OKLab — the same space the quantizer works in, so
+    "these two colours look alike" means the same thing here as it does there."""
+    la, aa, ba = _oklab(a)
+    lb, ab, bb = _oklab(b)
+    return ((la - lb) ** 2 + (aa - ab) ** 2 + (ba - bb) ** 2) ** 0.5
+
+
+class PaletteTooLargeForSymbols(Exception):
+    """More colours than the symbol set can keep apart. The caller falls back to
+    the colour chart — never to a reused symbol or a merged palette, both of
+    which mislead the stitcher rather than inconveniencing them."""
+
+    def __init__(self, color_count: int):
+        self.color_count = color_count
+        self.max_colors = MAX_GUIDE_COLORS
+        super().__init__(
+            f"This design uses {color_count} colours. Stitch guides support up to "
+            f"{MAX_GUIDE_COLORS} distinct symbols. A colour chart is included instead."
+        )
+
+
+def assign_symbols(
+    palette: list[dict],
+    confusable_at: float = 0.80,
+) -> dict[str, Glyph]:
+    """Map each palette colour to a symbol, keyed by hex.
+
+    `palette` is [{"hex": "#RRGGBB", "count": int}, ...]; count is stitch usage.
+
+    Primary rule is value matching: dark threads get heavy symbols and pale
+    threads light ones, so the chart reads as a picture of the finished piece
+    and the stitcher can orient on it at a glance instead of decoding cell by
+    cell.
+
+    That rule fights the second one in principle — glyphs of similar weight are
+    the ones most likely to be confused, and value matching deliberately puts
+    them on similar colours. A repair pass exists for it: a confusable pair
+    landing on two near-identical colours gets swapped apart.
+
+    In practice the pass is inert for the current set, and deliberately so. The
+    default threshold sits above every remaining pair, because culling the
+    redundant families already did this job properly — separating glyphs is a
+    better fix than shuffling which colour wears them. Set lower only after
+    adding a glyph that measures close to an existing one, and expect the value
+    ordering to suffer where it fires: an early draft at 0.70 chased the
+    disc/square false positive and put the heaviest symbol on the palest
+    thread.
+
+    Raises PaletteTooLargeForSymbols when there are more colours than symbols.
+    """
+    if len(palette) > MAX_GUIDE_COLORS:
+        raise PaletteTooLargeForSymbols(len(palette))
+
+    # Light threads to light symbols. Both sorted ascending, then zipped.
+    by_lightness = sorted(palette, key=lambda entry: _oklab(entry["hex"])[0])
+    by_ink = sorted(SYMBOLS, key=ink_coverage, reverse=True)
+    assignment: dict[str, Glyph] = {
+        entry["hex"]: glyph for entry, glyph in zip(by_lightness, by_ink)
+    }
+
+    # Precompute confusable glyph pairs once; the set is small and fixed.
+    keys = list(assignment.values())
+    pairs = [
+        (a, b)
+        for i, a in enumerate(keys)
+        for b in keys[i + 1:]
+        if confusability(a, b) >= confusable_at
+    ]
+    if not pairs:
+        return assignment
+
+    glyph_to_hex = {glyph.key: hex_value for hex_value, glyph in assignment.items()}
+    hexes = list(assignment.keys())
+
+    for a, b in pairs:
+        hex_a, hex_b = glyph_to_hex[a.key], glyph_to_hex[b.key]
+        if color_distance(hex_a, hex_b) >= 0.15:
+            continue  # already far enough apart to be unambiguous
+        # Swap one of them with whichever colour puts the most distance between
+        # this pair, leaving every other colour's symbol untouched.
+        best, best_gain = None, 0.0
+        for candidate in hexes:
+            if candidate in (hex_a, hex_b):
+                continue
+            gain = min(
+                color_distance(hex_a, candidate),
+                color_distance(candidate, hex_b),
+            ) - color_distance(hex_a, hex_b)
+            if gain > best_gain:
+                best, best_gain = candidate, gain
+        if best is None:
+            continue
+        moved = assignment[best]
+        assignment[best], assignment[hex_b] = assignment[hex_b], moved
+        glyph_to_hex[assignment[best].key] = best
+        glyph_to_hex[assignment[hex_b].key] = hex_b
+
+    return assignment
