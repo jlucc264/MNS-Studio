@@ -17,6 +17,7 @@ import { SignaturePad } from '../../components/SignaturePad'
 import { SignatureGridEditor } from '../../components/SignatureGridEditor'
 import GridEditor, { computeShapeCells, type DesignSelectionRect } from '../../components/GridEditor'
 import CanvasMarginChoice from '../../components/CanvasMarginChoice'
+import { applySilhouetteMask, deriveSilhouetteMask, maskCoverage } from '../../lib/silhouette'
 import { getTextCells, ensureFontLoaded, type FontFamily, type TextOrientation } from '../../lib/bitmapFonts'
 import ImagePanel from '../../components/ImagePanel'
 import PalettePanel from '../../components/PalettePanel'
@@ -685,6 +686,23 @@ function StudioPage() {
   // Buyer's border/price choice for this design. Defaults to the standard 2"
   // margin — a downgrade is always an explicit opt-in, never the default.
   const [tierDowngrade, setTierDowngrade] = useState(false)
+  // Shaped-template masking. Captured when a gallery template is loaded, NOT
+  // derived from the cells present at import time — re-generating an already
+  // imported photo would otherwise crop the new render to the old render's
+  // footprint, permanently baking in wherever the user had erased.
+  const [silhouetteMask, setSilhouetteMask] = useState<boolean[][] | null>(null)
+  const [silhouetteTemplateCells, setSilhouetteTemplateCells] = useState<string[][] | null>(null)
+  // The outline is the line you cut and sew to, so it survives the photo by
+  // default. A filled silhouette wants the opposite and can turn it off.
+  const [keepTemplateStitches, setKeepTemplateStitches] = useState(true)
+  // Read through refs at import time: applyPreviewSettings is a long-lived
+  // callback and a stale closure here would silently skip the crop.
+  const silhouetteMaskRef = useRef(silhouetteMask)
+  const silhouetteTemplateCellsRef = useRef(silhouetteTemplateCells)
+  const keepTemplateStitchesRef = useRef(keepTemplateStitches)
+  useEffect(() => { silhouetteMaskRef.current = silhouetteMask }, [silhouetteMask])
+  useEffect(() => { silhouetteTemplateCellsRef.current = silhouetteTemplateCells }, [silhouetteTemplateCells])
+  useEffect(() => { keepTemplateStitchesRef.current = keepTemplateStitches }, [keepTemplateStitches])
   const [settingsGuardAccepted, setSettingsGuardAccepted] = useState(false)
   const [showSettingsGuardModal, setShowSettingsGuardModal] = useState(false)
   const [stampClipboard, setStampClipboard] = useState<(string | null)[][] | null>(null)
@@ -827,6 +845,9 @@ function StudioPage() {
     setOriginalCells([])
     setEnabledColorHexes([])
     setCells([])
+    // A fresh canvas is not the shaped template any more.
+    setSilhouetteMask(null)
+    setSilhouetteTemplateCells(null)
     setActivePaintColor(null)
     setRemovalMode('fill')
     setUndoStack([])
@@ -1362,6 +1383,14 @@ function StudioPage() {
       if (pendingTemplate) {
         removePendingTemplateSnapshot()
         applyDesignSnapshot(pendingTemplate)
+        // A shaped template (a stocking, an ornament) becomes the boundary for
+        // anything imported on top of it. deriveSilhouetteMask returns null for
+        // an ordinary rectangular design, which leaves import behaviour alone.
+        const templateCells = pendingTemplate.cells ?? null
+        const mask = templateCells ? deriveSilhouetteMask(templateCells) : null
+        setSilhouetteMask(mask)
+        setSilhouetteTemplateCells(mask ? templateCells : null)
+        setKeepTemplateStitches(true)
         markCurrentDesignClean()
         return
       }
@@ -1682,6 +1711,9 @@ function StudioPage() {
     setOriginalCells(blankGrid)
     setEnabledColorHexes([])
     setCells(blankGrid)
+    // A fresh canvas is not the shaped template any more.
+    setSilhouetteMask(null)
+    setSilhouetteTemplateCells(null)
     setActivePaintColor(null)
     setManualCellOverrides({})
     setFinishOutlineBackups({})
@@ -1722,6 +1754,9 @@ function StudioPage() {
     setOriginalCells(blankGrid)
     setEnabledColorHexes([])
     setCells(blankGrid)
+    // A fresh canvas is not the shaped template any more.
+    setSilhouetteMask(null)
+    setSilhouetteTemplateCells(null)
     setActivePaintColor(null)
     setManualCellOverrides({})
     setFinishOutlineBackups({})
@@ -1953,7 +1988,19 @@ function StudioPage() {
             : nextFullPaletteHexes
       )
       setOriginalCells(nextOriginalCells)
-      setCells(finalCells)
+      // Crop the import to the shaped template's bounds. Resamples internally,
+      // so changing mesh or size between loading the template and importing
+      // still lands the photo inside the shape.
+      setCells(
+        silhouetteMaskRef.current
+          ? applySilhouetteMask(
+              finalCells,
+              silhouetteMaskRef.current,
+              silhouetteTemplateCellsRef.current,
+              keepTemplateStitchesRef.current,
+            )
+          : finalCells
+      )
       setActivePaintColor(toolModeRef.current === 'select' ? null : nextActivePaintColor)
       setRemovalMode(shouldReapplyPaletteState ? previousRemovalMode : 'fill')
       setManualCellOverrides(shouldReapplyManualOverrides ? previousManualCellOverrides : {})
@@ -4317,6 +4364,31 @@ function StudioPage() {
             </label>
             {activeImagePath && <p style={{ margin: 0, color: '#5f7f5a' }}>Image loaded.</p>}
           </div>
+          {silhouetteMask && (
+            <div style={{ display: 'grid', gap: 6, padding: '10px 12px', border: '1px solid #cfdcc9', borderRadius: 10, background: '#f4f7f2' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#3f382f' }}>Cropping to the template shape</div>
+              <div style={{ fontSize: 12, color: '#6f665b', lineHeight: 1.5 }}>
+                Anything you import lands inside the shape and is trimmed at its edge — it covers
+                about {Math.round(maskCoverage(silhouetteMask) * 100)}% of the canvas.
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#6f665b' }}>
+                <input
+                  type="checkbox"
+                  checked={keepTemplateStitches}
+                  onChange={(e) => setKeepTemplateStitches(e.target.checked)}
+                  style={{ accentColor: '#6e8d67' }}
+                />
+                Keep the template's stitches on top
+              </label>
+              <button
+                type="button"
+                onClick={() => { setSilhouetteMask(null); setSilhouetteTemplateCells(null) }}
+                style={{ justifySelf: 'start', border: 'none', background: 'none', padding: 0, fontFamily: 'inherit', fontSize: 12, color: '#b0453a', textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                Import to the full canvas instead
+              </button>
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, height: 1, background: '#e7e1d8' }} />
             <span style={{ fontSize: 12, color: '#a09890' }}>or</span>
