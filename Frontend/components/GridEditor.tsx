@@ -999,35 +999,44 @@ export default function GridEditor({
       })),
     [inchStepPixels, rulerHeightUnits]
   )
-  // gridOrigin is what centres the stage inside the viewport when the canvas
-  // is smaller than the visible area. Hit-testing subtracts it and zoom adds
-  // it, but the rulers used to ignore it — so zero sat at the corner of the
-  // viewport rather than the corner of the canvas, and every reading was off
-  // by the centring gap. Adding it puts 0" on the left edge of the waste
-  // canvas, which is where a ruler laid on the real print would start.
+  // Two separate offsets stand between a tick and where it belongs.
+  //
+  // gridOrigin is the gap that centres the stage inside the viewport when the
+  // canvas is smaller than the visible area. Hit-testing subtracts it and zoom
+  // adds it, but the rulers ignored it, so every reading was off by the
+  // centring gap.
+  //
+  // contentOrigin is the bigger one: the stage is a fixed 20" square and the
+  // design sits centred in it, so measuring from the stage edge put zero
+  // wherever the padding happened to fall — 7" across and 6" down on a 4x6
+  // design. Ticks now start at the waste canvas edge instead, so 0" is the
+  // corner of the material that actually gets printed and the design begins
+  // at the border mark.
+  const rulerOriginX = contentOriginCol * cellSize
+  const rulerOriginY = contentOriginRow * cellSize
   const visibleHorizontalTicks = useMemo(
     () =>
       horizontalRulerTicks.map((tick) => {
-        const position = tick.offset + gridOriginX - scrollPosition.left
+        const position = tick.offset + gridOriginX + rulerOriginX - scrollPosition.left
         return {
           ...tick,
           position,
           visible: position >= -32 && position <= previewViewportWidth + 32,
         }
       }),
-    [gridOriginX, horizontalRulerTicks, previewViewportWidth, scrollPosition.left]
+    [gridOriginX, horizontalRulerTicks, previewViewportWidth, rulerOriginX, scrollPosition.left]
   )
   const visibleVerticalTicks = useMemo(
     () =>
       verticalRulerTicks.map((tick) => {
-        const position = tick.offset + gridOriginY - scrollPosition.top
+        const position = tick.offset + gridOriginY + rulerOriginY - scrollPosition.top
         return {
           ...tick,
           position,
           visible: position >= -32 && position <= previewViewportHeight + 32,
         }
       }),
-    [gridOriginY, previewViewportHeight, scrollPosition.top, verticalRulerTicks]
+    [gridOriginY, previewViewportHeight, rulerOriginY, scrollPosition.top, verticalRulerTicks]
   )
 
   const getDefaultCenteredScroll = useCallback(() => {
@@ -1189,7 +1198,8 @@ export default function GridEditor({
       horizontalRulerTickRefs.current.forEach((tickNode, index) => {
         if (!tickNode) return
 
-        const position = index * meshCount * nextCellSize + nextGridOriginX - scrollLeft
+        const position =
+          index * meshCount * nextCellSize + nextGridOriginX + contentOriginCol * nextCellSize - scrollLeft
         tickNode.style.left = `${position}px`
         tickNode.style.display =
           position >= -32 && position <= previewViewportWidth + 32 ? 'block' : 'none'
@@ -1198,13 +1208,17 @@ export default function GridEditor({
       verticalRulerTickRefs.current.forEach((tickNode, index) => {
         if (!tickNode) return
 
-        const position = index * meshCount * nextCellSize + nextGridOriginY - scrollTop
+        const position =
+          index * meshCount * nextCellSize + nextGridOriginY + contentOriginRow * nextCellSize - scrollTop
         tickNode.style.top = `${position}px`
         tickNode.style.display =
           position >= -32 && position <= previewViewportHeight + 32 ? 'block' : 'none'
       })
     },
-    [baseCellSize, meshCount, previewViewportHeight, previewViewportWidth, stageCols, stageRows]
+    [
+      baseCellSize, contentOriginCol, contentOriginRow, meshCount,
+      previewViewportHeight, previewViewportWidth, stageCols, stageRows,
+    ]
   )
 
   const applyViewportScroll = useCallback(
