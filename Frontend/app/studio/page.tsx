@@ -756,6 +756,9 @@ function StudioPage() {
   const [showRefinalizeConfirm, setShowRefinalizeConfirm] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showRegeneratePreviewConfirm, setShowRegeneratePreviewConfirm] = useState(false)
+  // Settings that would rebuild the grid and discard painted work, held until
+  // the operator confirms. See the blank-canvas resize effect below.
+  const [pendingResize, setPendingResize] = useState<PreviewSettings | null>(null)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
@@ -1486,13 +1489,6 @@ function StudioPage() {
     () => cells.some((row) => row.some((cell) => cell !== BLANK_CELL)),
     [cells]
   )
-  // Resizing (width/height/orientation) rebuilds cells as a brand-new blank
-  // grid (see the draftSettings effect below) — safe for a from-scratch
-  // canvas with nothing painted yet, but would silently wipe an imported
-  // pattern or already-painted design, both of which also satisfy the
-  // broader isBlankCanvas check above. Only offer resize before any content
-  // exists.
-  const canResizeBlankCanvas = isBlankCanvas && !hasStitchedContent
   const isUnauthenticatedWithCanvas = !session && hasActiveCanvas
   const currentDesignPalette = useMemo(() => buildPaletteForCells(deferredCells), [allDmcColors, allPalette, deferredCells, previewPalette])
   // Tracks whichever swatch is currently active, not just whichever one the
@@ -2026,6 +2022,20 @@ function StudioPage() {
     return () => window.clearTimeout(timeoutId)
   }, [activeImagePath, draftSettings, hasGeneratedPreview, lastSettings])
 
+  const applyBlankResize = useCallback((settings: PreviewSettings) => {
+    const w = Math.max(1, Math.round(settings.width_inches * settings.mesh_count))
+    const h = Math.max(1, Math.round(settings.height_inches * settings.mesh_count))
+    const blankGrid = Array.from({ length: h }, () => Array(w).fill(BLANK_CELL))
+    setOriginalCells(blankGrid)
+    setCells(blankGrid)
+    setManualCellOverrides({})
+    setUndoStack([])
+    setRedoStack([])
+    setLastSettings(settings)
+    setImportedAspectRatio(settings.width_inches / settings.height_inches)
+    setGridKey((k) => k + 1)
+  }, [])
+
   useEffect(() => {
     if (!hasGeneratedPreview || activeImagePath || !lastSettings) return
 
@@ -2056,19 +2066,22 @@ function StudioPage() {
       }
     }
 
+    // Resizing rebuilds the grid from scratch, so anything painted is lost.
+    // Previously this was prevented by disabling the size inputs the moment a
+    // canvas had content, which meant a design was locked to whatever size it
+    // started at — usually the 10x6 blank default. Confirm instead of either
+    // silently wiping or refusing.
+    if (hasContent) {
+      setPendingResize(draftSettings)
+      return
+    }
+
     const timeoutId = window.setTimeout(() => {
-      const blankGrid = Array.from({ length: newH }, () => Array(newW).fill(BLANK_CELL))
-      setOriginalCells(blankGrid)
-      setCells(blankGrid)
-      setManualCellOverrides({})
-      setUndoStack([])
-      setRedoStack([])
-      setLastSettings(draftSettings)
-      setImportedAspectRatio(draftSettings.width_inches / draftSettings.height_inches)
+      applyBlankResize(draftSettings)
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [activeImagePath, cells, draftSettings, hasGeneratedPreview, lastSettings])
+  }, [activeImagePath, applyBlankResize, cells, draftSettings, hasGeneratedPreview, lastSettings])
 
   function updateSettings(patch: Partial<PreviewSettings>) {
     setDraftSettings((current) => {
@@ -3837,7 +3850,6 @@ function StudioPage() {
           settings={draftSettings}
           lockAspectRatio={lockAspectRatio}
           isBlankCanvas={isBlankCanvas}
-          canResizeBlankCanvas={canResizeBlankCanvas}
           compact={isMobile}
           onSettingsChange={setDraftSettings}
           onLockAspectRatioChange={setLockAspectRatio}
@@ -6138,6 +6150,46 @@ function StudioPage() {
                 style={btnPrimary}
               >
                 Regenerate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingResize && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10100, padding: 18 }}
+        >
+          <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Resize canvas?</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>
+                Changing the size to {pendingResize.width_inches}&Prime; &times; {pendingResize.height_inches}&Prime; rebuilds the
+                grid at the new dimensions. Everything you&rsquo;ve drawn will be cleared, along with your undo history. This
+                can&rsquo;t be undone.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  // Put the controls back where they were, so the size shown
+                  // matches the grid that's actually on screen.
+                  if (lastSettings) setDraftSettings(lastSettings)
+                  setPendingResize(null)
+                }}
+                style={btnSecondary}
+              >
+                Keep my design
+              </button>
+              <button
+                type="button"
+                onClick={() => { applyBlankResize(pendingResize); setPendingResize(null) }}
+                style={btnPrimary}
+              >
+                Resize and clear
               </button>
             </div>
           </div>
