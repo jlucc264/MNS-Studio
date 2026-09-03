@@ -421,11 +421,68 @@ def _build_report_rows(cells: list[list[str]], palette: list[dict], mesh_count: 
     return rows
 
 
+CHART_BLANK = -1
+CHART_OUTLINE = -2
+
+
+def _encode_chart(
+    cells: list[list[str]],
+    rows: list[dict],
+    symbols: dict[str, Glyph],
+) -> dict:
+    """The chart as the web viewer needs it: run-length encoded cells plus the
+    glyph programs themselves.
+
+    Shipping the ops rather than glyph names keeps SYMBOLS the single source of
+    truth. The viewer needs only a generic interpreter for the six primitives,
+    so adding or changing a glyph never requires a matching frontend release,
+    and there is no third hand-maintained copy of the set to drift out of sync
+    with the raster and the PDF.
+
+    Row-major RLE, indices into `rows` so a legend entry and its cells share an
+    id. Large flat regions are what this is for — a design compresses to a small
+    fraction of its stitch count.
+    """
+    index_by_hex = {row["hex"]: index for index, row in enumerate(rows)}
+    runs: list[list[int]] = []
+    previous: int | None = None
+    run_length = 0
+    for line in cells:
+        for value in line:
+            if value == BLANK_CELL:
+                index = CHART_BLANK
+            elif value == FINISH_OUTLINE_CELL:
+                index = CHART_OUTLINE
+            else:
+                index = index_by_hex.get(value, CHART_BLANK)
+            if index == previous:
+                run_length += 1
+            else:
+                if previous is not None:
+                    runs.append([previous, run_length])
+                previous, run_length = index, 1
+    if previous is not None:
+        runs.append([previous, run_length])
+
+    return {
+        "cols": len(cells[0]) if cells else 0,
+        "rows": len(cells),
+        "runs": runs,
+        "tint": CHART_TINT,
+        "inset": CHART_GLYPH_INSET,
+        "symbols": [
+            [list(op) for op in symbols[row["hex"]].ops] if row["hex"] in symbols else None
+            for row in rows
+        ],
+    }
+
+
 def _build_thread_list_qr_url(
     rows: list[dict],
     width_inches: float,
     height_inches: float,
     mesh_count: int,
+    chart: dict | None = None,
 ) -> str | None:
     """Uploads the same color/skein data as the report table to a small public
     JSON blob and returns a link to the mobile-friendly /thread-list page that
@@ -452,6 +509,8 @@ def _build_thread_list_qr_url(
             for row in rows
         ],
     }
+    if chart is not None:
+        payload["chart"] = chart
     json_path = FINALIZED_DIR / f"thread-list_{uuid4().hex}.json"
     json_path.write_text(json.dumps(payload), encoding="utf-8")
     public_json_url = upload_file_to_supabase(
@@ -546,8 +605,8 @@ def _draw_report_page(
         pdf.drawImage(ImageReader(qr_buffer), qr_x, qr_y, width=qr_size, height=qr_size)
         pdf.setFont("Helvetica", 7)
         pdf.setFillColor(colors.HexColor("#7A817A"))
-        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 10, "Scan for mobile")
-        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 19, "color list")
+        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 10, "Scan for chart")
+        pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 19, "and color list")
 
     summary_x = margin + 18
     summary_y = page_height - 112
@@ -720,21 +779,30 @@ def _draw_chart_glyph(
 CHART_LABEL_GUTTER = 26
 CHART_HEADER_HEIGHT = 46
 
+# The chart goes on paper someone can actually print. Growing the page to fit
+# any design was tried and produces a 25x34in sheet for an ordinary 12x16in
+# piece — a screen artifact wearing paper's clothes, since nobody prints that
+# at home and panning a huge PDF page is worse than a real viewer. Tabloid is
+# the ceiling because a copy shop will run it cheaply; past that the chart
+# belongs on the /thread-list page, where size stops mattering.
+TABLOID = (11 * 72, 17 * 72)
 
-def _chart_page_size(rows: int, cols: int) -> tuple[float, float]:
-    """The single page the whole chart is drawn on.
 
-    Letter (or landscape letter) whenever the design fits, so an ornament still
-    arrives on ordinary paper; otherwise the page grows to the design rather
-    than the design shrinking to the page. Same trade
-    _draw_true_size_reference_page already makes.
-    """
+def _chart_page_size(rows: int, cols: int) -> tuple[float, float] | None:
+    """The smallest printable page the whole chart fits on, or None if it needs
+    more room than tabloid — in which case the PDF carries no chart and the note
+    points at the web one."""
     needed_width = PAGE_MARGIN * 2 + CHART_LABEL_GUTTER + cols * CHART_CELL_PTS
     needed_height = PAGE_MARGIN * 2 + CHART_HEADER_HEIGHT + rows * CHART_CELL_PTS
-    page_size = landscape(letter) if cols > rows else letter
-    if needed_width > page_size[0] or needed_height > page_size[1]:
-        return (needed_width, needed_height)
-    return page_size
+    wide = cols > rows
+    for base in (letter, TABLOID):
+        # Try the orientation that matches the design first; same area either
+        # way, so this only decides which one it lands on.
+        options = (landscape(base), base) if wide else (base, landscape(base))
+        for size in options:
+            if needed_width <= size[0] and needed_height <= size[1]:
+                return size
+    return None
 
 
 def _draw_chart_page(
@@ -746,8 +814,11 @@ def _draw_chart_page(
     """The whole symbol chart, on one page. Caller has already decided it fits."""
     n_rows = len(cells)
     n_cols = len(cells[0]) if n_rows else 0
-    page_width, page_height = _chart_page_size(n_rows, n_cols)
-    pdf.setPageSize((page_width, page_height))
+    page_size = _chart_page_size(n_rows, n_cols)
+    if page_size is None:  # caller checked; belt and braces
+        return
+    page_width, page_height = page_size
+    pdf.setPageSize(page_size)
     margin = PAGE_MARGIN
     cell = CHART_CELL_PTS
 
@@ -1002,12 +1073,11 @@ def generate_preview_pdf(
     total_stitches = sum(row["count"] for row in report_rows)
     used_colors = len(report_rows)
     has_outline = any(cell == FINISH_OUTLINE_CELL for row in cells for cell in row)
-    qr_url = _build_thread_list_qr_url(report_rows, design_w, design_h, mesh_count)
 
-    # The stitch guide is best-effort: two things can put it out of reach, and
-    # in both cases the palette table is still a complete colour reference, so
-    # neither is worth failing a paid order over. Say which one happened —
-    # a guide that is silently absent reads as a bug.
+    # The stitch guide is best-effort: nothing here is worth failing a paid
+    # order over, and the palette table remains a complete colour reference in
+    # every fallback. Each one says which case it hit — a guide that is silently
+    # absent reads as a bug.
     symbol_assignment: dict[str, Glyph] | None = None
     symbol_notice: str | None = None
     try:
@@ -1017,15 +1087,40 @@ def generate_preview_pdf(
     except PaletteTooLargeForSymbols as exc:
         symbol_notice = str(exc)
 
-    if symbol_assignment is not None:
-        chart_rows = len(preview_cells)
-        chart_cols = len(preview_cells[0]) if chart_rows else 0
-        if chart_rows * chart_cols > MAX_CHART_STITCHES:
-            symbol_assignment = None
-            symbol_notice = (
-                f"This design is {chart_cols} x {chart_rows} stitches, too large to "
-                f"chart. The palette table below is the full colour reference."
-            )
+    chart_rows = len(preview_cells)
+    chart_cols = len(preview_cells[0]) if chart_rows else 0
+    if symbol_assignment is not None and chart_rows * chart_cols > MAX_CHART_STITCHES:
+        symbol_assignment = None
+        symbol_notice = (
+            f"This design is {chart_cols} x {chart_rows} stitches, too large to "
+            f"chart. The palette table below is the full colour reference."
+        )
+
+    # The web chart carries whatever the symbols allow, independent of whether a
+    # printable page exists for it — that is the whole point of having it.
+    chart_payload = (
+        _encode_chart(preview_cells, report_rows, symbol_assignment)
+        if symbol_assignment is not None
+        else None
+    )
+    qr_url = _build_thread_list_qr_url(
+        report_rows, design_w, design_h, mesh_count, chart_payload
+    )
+
+    # Whether the chart also goes in the PDF is a separate question: it only
+    # does when it fits paper someone can print.
+    chart_page = (
+        _chart_page_size(chart_rows, chart_cols) if symbol_assignment is not None else None
+    )
+    if symbol_assignment is not None and chart_page is None:
+        symbol_notice = (
+            f"This design is {chart_cols} x {chart_rows} stitches — larger than a "
+            f"printable chart page. Scan the code above for the full chart."
+            if qr_url
+            else f"This design is {chart_cols} x {chart_rows} stitches — larger than "
+            f"a printable chart page. The palette table below is the full "
+            f"colour reference."
+        )
 
     def draw_public_pages(pdf: canvas.Canvas) -> None:
         _draw_cover_page(
@@ -1059,7 +1154,7 @@ def generate_preview_pdf(
             symbol_notice,
         )
 
-        if symbol_assignment is not None:
+        if symbol_assignment is not None and chart_page is not None:
             pdf.showPage()
             _draw_chart_page(pdf, preview_cells, symbol_assignment, mesh_count)
 
