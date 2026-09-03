@@ -58,14 +58,21 @@ CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
 
-# Symbol chart geometry. 12pt cells are about the smallest that keep the open
-# glyphs legible once printed, and the block is a whole number of ten-counts on
-# both axes so the heavy rules land on tile boundaries — that alignment is what
-# lets someone carry a stitch position from one page of a tiled chart onto the
-# next without recounting.
-CHART_CELL_PTS = 12
-CHART_COLS_PER_PAGE = 40
-CHART_ROWS_PER_PAGE = 50
+# The chart is always ONE page, grown to fit the design, the same way
+# _draw_true_size_reference_page already handles an oversized true-size render.
+# Tiling was tried and rejected: it put a 10x12in design at 13 mesh on six
+# sheets that then have to be aligned by hand, and the buyer already has the
+# design printed on the canvas, so the chart is a reference for which thread
+# goes where rather than something counted along stitch by stitch.
+#
+# 8pt cells are 9 squares to the inch, in line with commercial charts and about
+# 1.4x a real 13-mesh stitch. Rendering the set at 12, 10, 9, 8, 7 and 6pt over
+# the same physical area, the open glyphs (star_open, tri_up_open) close up
+# first and still read cleanly at 8. Shrinking cells to force a big design onto
+# letter is not an option: 10x12in at 13 mesh needs 3.9pt cells, where a filled
+# disc and a filled square are the same blob and the symbol set stops meaning
+# anything.
+CHART_CELL_PTS = 8
 
 # Cells carry their thread colour, but heavily washed out. Full strength would
 # put a dark symbol on a dark cell and lose the symbol, which is the one thing
@@ -82,11 +89,14 @@ CHART_TINT = 0.30
 # the darkest regions.
 CHART_GLYPH_INSET = 0.10
 
-# A chart is one page per 40x50 block, so a big design at fine mesh grows fast:
-# 216x288 stitches is already 36 pages. Past this the PDF stops being something
-# anyone prints and starts being a content stream tens of megabytes wide, so the
-# chart is skipped with a note and the palette table stands as the reference.
-MAX_CHART_PAGES = 40
+# /finalize builds this synchronously, and cost tracks the stitch count rather
+# than anything about the page: every cell is a fill plus a few vector ops.
+# Measured end to end, 130x156 (a 10x12in at 13 mesh) is 7s, 216x288 is 20s,
+# and this cap lands at 59s for a 9MB file, which is where a synchronous
+# request starts risking a proxy timeout. Past it the chart is
+# skipped with a note and the palette table stands as the reference. Lower this
+# if finalize starts timing out before anyone complains about a missing chart.
+MAX_CHART_STITCHES = 190_000
 
 # Bitstream Vera Bold ships as installed package data with reportlab (an
 # existing hard dependency), so this is available in every environment
@@ -707,35 +717,39 @@ def _draw_chart_glyph(
     )
 
 
-def _chart_tiles(rows: int, cols: int) -> list[tuple[int, int]]:
-    """Top-left (row, col) of each chart page, in reading order."""
-    return [
-        (row, col)
-        for row in range(0, rows, CHART_ROWS_PER_PAGE)
-        for col in range(0, cols, CHART_COLS_PER_PAGE)
-    ]
+CHART_LABEL_GUTTER = 26
+CHART_HEADER_HEIGHT = 46
+
+
+def _chart_page_size(rows: int, cols: int) -> tuple[float, float]:
+    """The single page the whole chart is drawn on.
+
+    Letter (or landscape letter) whenever the design fits, so an ornament still
+    arrives on ordinary paper; otherwise the page grows to the design rather
+    than the design shrinking to the page. Same trade
+    _draw_true_size_reference_page already makes.
+    """
+    needed_width = PAGE_MARGIN * 2 + CHART_LABEL_GUTTER + cols * CHART_CELL_PTS
+    needed_height = PAGE_MARGIN * 2 + CHART_HEADER_HEIGHT + rows * CHART_CELL_PTS
+    page_size = landscape(letter) if cols > rows else letter
+    if needed_width > page_size[0] or needed_height > page_size[1]:
+        return (needed_width, needed_height)
+    return page_size
 
 
 def _draw_chart_page(
     pdf: canvas.Canvas,
     cells: list[list[str]],
     symbols: dict[str, Glyph],
-    row0: int,
-    col0: int,
-    tile_index: int,
-    tile_count: int,
+    mesh_count: int,
 ) -> None:
-    """One tile of the symbol chart: a 40x50 block of stitches at CHART_CELL_PTS."""
-    page_width, page_height = letter
-    pdf.setPageSize(letter)
+    """The whole symbol chart, on one page. Caller has already decided it fits."""
+    n_rows = len(cells)
+    n_cols = len(cells[0]) if n_rows else 0
+    page_width, page_height = _chart_page_size(n_rows, n_cols)
+    pdf.setPageSize((page_width, page_height))
     margin = PAGE_MARGIN
-
-    rows_total = len(cells)
-    cols_total = len(cells[0]) if rows_total else 0
-    row_end = min(rows_total, row0 + CHART_ROWS_PER_PAGE)
-    col_end = min(cols_total, col0 + CHART_COLS_PER_PAGE)
-    n_rows = row_end - row0
-    n_cols = col_end - col0
+    cell = CHART_CELL_PTS
 
     pdf.setFillColor(colors.HexColor("#173F2A"))
     pdf.setFont("Helvetica-Bold", 14)
@@ -745,28 +759,29 @@ def _draw_chart_page(
     pdf.drawString(
         margin,
         page_height - margin - 20,
-        f"Section {tile_index} of {tile_count}  —  rows {row0 + 1}–{row_end}, "
-        f"columns {col0 + 1}–{col_end}",
-    )
-    pdf.drawRightString(
-        page_width - margin,
-        page_height - margin - 20,
-        "Symbols match the palette table",
+        f"{n_cols} x {n_rows} stitches at {mesh_count} mesh  —  "
+        f"symbols match the palette table",
     )
 
-    cell = CHART_CELL_PTS
-    grid_left = margin + 26
-    grid_top = page_height - margin - 46
-    grid_right = grid_left + n_cols * cell
-    grid_bottom = grid_top - n_rows * cell
+    # Centred in whatever slack the page has. Exact-fit on an oversized page, so
+    # this only matters when a small design lands on letter and would otherwise
+    # hang off the top of an obviously empty sheet.
+    grid_width = n_cols * cell
+    grid_height = n_rows * cell
+    slack_x = max(0.0, (page_width - margin * 2 - CHART_LABEL_GUTTER - grid_width) / 2)
+    slack_y = max(0.0, (page_height - margin * 2 - CHART_HEADER_HEIGHT - grid_height) / 2)
+    grid_left = margin + CHART_LABEL_GUTTER + slack_x
+    grid_top = page_height - margin - CHART_HEADER_HEIGHT - slack_y
+    grid_right = grid_left + grid_width
+    grid_bottom = grid_top - grid_height
 
-    for row in range(row0, row_end):
-        for col in range(col0, col_end):
+    for row in range(n_rows):
+        for col in range(n_cols):
             value = cells[row][col]
             if value == BLANK_CELL:
                 continue
-            x = grid_left + (col - col0) * cell
-            y = grid_top - (row - row0 + 1) * cell
+            x = grid_left + col * cell
+            y = grid_top - (row + 1) * cell
             if value == FINISH_OUTLINE_CELL:
                 # No symbol: the outline is a single known colour worked around
                 # the edge, and a solid cell reads as the boundary it is.
@@ -789,48 +804,32 @@ def _draw_chart_page(
         y = grid_top - index * cell
         pdf.line(grid_left, y, grid_right, y)
 
-    # Every tenth rule heavier, counted from the design's own origin rather than
-    # the tile's, so the decade lines continue across a page break.
+    # Every tenth rule heavier, so a position can be found by counting tens
+    # rather than ones.
     pdf.setLineWidth(0.9)
     pdf.setStrokeColor(colors.HexColor("#4A4A4A"))
     for index in range(n_cols + 1):
-        if (col0 + index) % 10 == 0:
+        if index % 10 == 0:
             x = grid_left + index * cell
             pdf.line(x, grid_bottom, x, grid_top)
     for index in range(n_rows + 1):
-        if (row0 + index) % 10 == 0:
+        if index % 10 == 0:
             y = grid_top - index * cell
             pdf.line(grid_left, y, grid_right, y)
     pdf.rect(grid_left, grid_bottom, n_cols * cell, n_rows * cell, stroke=1, fill=0)
 
     pdf.setFont("Helvetica", 6.5)
     pdf.setFillColor(colors.HexColor("#5B635C"))
-    for col in range(col0, col_end):
-        if (col + 1) % 10 == 0 or col == col0:
-            pdf.drawCentredString(
-                grid_left + (col - col0) * cell + cell / 2, grid_top + 4, str(col + 1)
-            )
-    for row in range(row0, row_end):
-        if (row + 1) % 10 == 0 or row == row0:
+    for col in range(n_cols):
+        if (col + 1) % 10 == 0 or col == 0:
+            pdf.drawCentredString(grid_left + col * cell + cell / 2, grid_top + 4, str(col + 1))
+    for row in range(n_rows):
+        if (row + 1) % 10 == 0 or row == 0:
             pdf.drawRightString(
                 grid_left - 4,
-                grid_top - (row - row0 + 1) * cell + cell / 2 - 2.5,
+                grid_top - (row + 1) * cell + cell / 2 - 2.5,
                 str(row + 1),
             )
-
-
-def _draw_chart_pages(
-    pdf: canvas.Canvas,
-    cells: list[list[str]],
-    symbols: dict[str, Glyph],
-) -> None:
-    """Append the tiled symbol chart. Caller has already decided it fits."""
-    rows_total = len(cells)
-    cols_total = len(cells[0]) if rows_total else 0
-    tiles = _chart_tiles(rows_total, cols_total)
-    for index, (row0, col0) in enumerate(tiles, start=1):
-        pdf.showPage()
-        _draw_chart_page(pdf, cells, symbols, row0, col0, index, len(tiles))
 
 
 def _draw_cover_page(
@@ -1021,13 +1020,11 @@ def generate_preview_pdf(
     if symbol_assignment is not None:
         chart_rows = len(preview_cells)
         chart_cols = len(preview_cells[0]) if chart_rows else 0
-        chart_pages = len(_chart_tiles(chart_rows, chart_cols))
-        if chart_pages > MAX_CHART_PAGES:
+        if chart_rows * chart_cols > MAX_CHART_STITCHES:
             symbol_assignment = None
             symbol_notice = (
-                f"This design is {chart_cols} x {chart_rows} stitches, so a symbol "
-                f"chart would run to {chart_pages} pages. The palette table below "
-                f"is the full colour reference."
+                f"This design is {chart_cols} x {chart_rows} stitches, too large to "
+                f"chart. The palette table below is the full colour reference."
             )
 
     def draw_public_pages(pdf: canvas.Canvas) -> None:
@@ -1063,7 +1060,8 @@ def generate_preview_pdf(
         )
 
         if symbol_assignment is not None:
-            _draw_chart_pages(pdf, preview_cells, symbol_assignment)
+            pdf.showPage()
+            _draw_chart_page(pdf, preview_cells, symbol_assignment, mesh_count)
 
     public_pdf = canvas.Canvas(str(public_path), pagesize=page_size)
     draw_public_pages(public_pdf)
