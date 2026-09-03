@@ -167,6 +167,89 @@ def render_glyph_bitmap(glyph: Glyph, size: int = 24, stroke: float = 0.10):
     return image
 
 
+def draw_glyph(
+    pdf,
+    glyph: Glyph,
+    x: float,
+    y: float,
+    size: float,
+    ink: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    hole: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    stroke: float = 0.10,
+) -> None:
+    """Draw `glyph` into the size x size box with lower-left corner (x, y), in
+    PDF points, onto a reportlab canvas.
+
+    This is the second interpreter of the same ops as render_glyph_bitmap, and
+    it lives beside it on purpose: a new primitive added to one and forgotten in
+    the other would mean the confusability measurement scores a glyph the page
+    never draws.
+
+    Filled shapes are drawn fill-only. PIL strokes an outline inward from the
+    shape's own edge, so a filled-and-outlined raster shape is just the fill;
+    reportlab strokes centered on the path, so repeating the outline here would
+    push half the line weight outside the shape and inflate it. At chart size
+    that is not a subtlety — it rendered stripes_h at 0.66 coverage against a
+    designed 0.36, and bled neighbouring cells into each other.
+
+    Op coordinates run y-down (authored against the raster); PDF space runs
+    y-up, so the flip happens here rather than in the definitions.
+
+    `hole` is the colour a knockout is filled with — the cell's background, not
+    necessarily white, since chart cells are tinted with their thread colour.
+    """
+    def sx(value: float) -> float:
+        return x + value * size
+
+    def sy(value: float) -> float:
+        return y + (1.0 - value) * size
+
+    pdf.saveState()
+    # Floor the line weight: at chart size 0.10 of a cell is under half a point,
+    # which some printers drop entirely.
+    pdf.setLineWidth(max(0.35, stroke * size))
+    pdf.setLineCap(1)
+    pdf.setLineJoin(1)
+    pdf.setStrokeColorRGB(*ink)
+    pdf.setFillColorRGB(*ink)
+
+    for op in glyph.ops:
+        kind = op[0]
+        if kind == "circle":
+            _, cx, cy, r, filled = op
+            pdf.circle(sx(cx), sy(cy), r * size, stroke=0 if filled else 1, fill=1 if filled else 0)
+        elif kind == "rect":
+            _, rx, ry, w, h, filled = op
+            # The op's top edge is the PDF's bottom edge once y is flipped.
+            pdf.rect(
+                sx(rx), sy(ry + h), w * size, h * size,
+                stroke=0 if filled else 1, fill=1 if filled else 0,
+            )
+        elif kind == "poly":
+            _, points, filled = op
+            path = pdf.beginPath()
+            path.moveTo(sx(points[0][0]), sy(points[0][1]))
+            for px, py in points[1:]:
+                path.lineTo(sx(px), sy(py))
+            path.close()
+            pdf.drawPath(path, stroke=0 if filled else 1, fill=1 if filled else 0)
+        elif kind == "hole_circle":
+            _, cx, cy, r = op
+            pdf.setFillColorRGB(*hole)
+            pdf.circle(sx(cx), sy(cy), r * size, stroke=0, fill=1)
+            pdf.setFillColorRGB(*ink)
+        elif kind == "hole_rect":
+            _, rx, ry, w, h = op
+            pdf.setFillColorRGB(*hole)
+            pdf.rect(sx(rx), sy(ry + h), w * size, h * size, stroke=0, fill=1)
+            pdf.setFillColorRGB(*ink)
+        elif kind == "line":
+            _, x1, y1, x2, y2 = op
+            pdf.line(sx(x1), sy(y1), sx(x2), sy(y2))
+
+    pdf.restoreState()
+
+
 def ink_coverage(glyph: Glyph, size: int = 24) -> float:
     """Fraction of the cell that is ink — the value the tiers are meant to
     separate, measured rather than eyeballed."""

@@ -21,6 +21,7 @@ import qrcode
 import reportlab
 
 from .canvas_pricing import MAX_ROLL_WIDTH_IN, CANVAS_MARGIN_IN, canvas_margin_inches
+from .stitch_symbols import Glyph, PaletteTooLargeForSymbols, assign_symbols, draw_glyph
 from .storage import finalized_output_path, preview_output_path, ASSETS_DIR, FINALIZED_DIR
 from .supabase_storage import upload_file_to_supabase
 
@@ -56,6 +57,36 @@ PAGE_MARGIN = 42
 CARD_RADIUS = 12
 BLANK_CELL = "__BLANK__"
 FINISH_OUTLINE_CELL = "__FINISH_OUTLINE__"
+
+# Symbol chart geometry. 12pt cells are about the smallest that keep the open
+# glyphs legible once printed, and the block is a whole number of ten-counts on
+# both axes so the heavy rules land on tile boundaries — that alignment is what
+# lets someone carry a stitch position from one page of a tiled chart onto the
+# next without recounting.
+CHART_CELL_PTS = 12
+CHART_COLS_PER_PAGE = 40
+CHART_ROWS_PER_PAGE = 50
+
+# Cells carry their thread colour, but heavily washed out. Full strength would
+# put a dark symbol on a dark cell and lose the symbol, which is the one thing
+# the chart cannot afford: colour here is an orientation aid, the symbol is the
+# actual instruction.
+CHART_TINT = 0.30
+
+# Glyphs are drawn into a box inset from the cell rather than filling it. The
+# symbol set was tuned for telling one glyph from another in isolation, which
+# says nothing about how they behave tiled: `square` covers 58% of its cell, so
+# without this a run of one colour merges into an unbroken mass and the stitch
+# count — the thing a chart exists to give you — becomes uncountable. The inset
+# guarantees a gap between neighbours and keeps the cell rule visible through
+# the darkest regions.
+CHART_GLYPH_INSET = 0.10
+
+# A chart is one page per 40x50 block, so a big design at fine mesh grows fast:
+# 216x288 stitches is already 36 pages. Past this the PDF stops being something
+# anyone prints and starts being a content stream tens of megabytes wide, so the
+# chart is skipped with a note and the palette table stands as the reference.
+MAX_CHART_PAGES = 40
 
 # Bitstream Vera Bold ships as installed package data with reportlab (an
 # existing hard dependency), so this is available in every environment
@@ -421,6 +452,24 @@ def _build_thread_list_qr_url(
     return f"{FRONTEND_URL}/thread-list?src={quote(public_json_url, safe='')}"
 
 
+def _wrap_text(
+    pdf: canvas.Canvas, text: str, font: str, size: float, max_width: float
+) -> list[str]:
+    """Greedy word wrap measured against the actual font metrics."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and pdf.stringWidth(candidate, font, size) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
 def _draw_report_page(
     pdf: canvas.Canvas,
     page_size: tuple[float, float],
@@ -433,6 +482,8 @@ def _draw_report_page(
     cells: list[list[str]],
     has_outline: bool = False,
     qr_url: str | None = None,
+    symbols: dict[str, Glyph] | None = None,
+    symbol_notice: str | None = None,
 ) -> None:
     page_width, page_height = page_size
     margin = PAGE_MARGIN
@@ -521,16 +572,37 @@ def _draw_report_page(
         pdf.drawString(margin + 10, y - 13, "✓ Black finish outline applied")
         pdf.setFont("Helvetica", 9)
         pdf.setFillColor(colors.HexColor("#5B635C"))
-        pdf.drawString(margin + 148, y - 13, "— outline stitches are not included in the totals above")
+        pdf.drawString(
+            margin + 148,
+            y - 13,
+            "— not counted in the totals above; drawn as solid cells on the chart"
+            if symbols
+            else "— outline stitches are not included in the totals above",
+        )
+        y -= note_h + 6
+
+    if symbol_notice:
+        # Wrapped, not truncated: this note exists to explain why the chart is
+        # missing, and a clipped explanation is worse than none.
+        note_lines = _wrap_text(pdf, symbol_notice, "Helvetica", 9, content_width - 20)
+        note_h = 12 + 11 * len(note_lines)
+        pdf.setFillColor(colors.HexColor("#FBF3E8"))
+        pdf.roundRect(margin, y - note_h, content_width, note_h, 4, fill=1, stroke=0)
+        pdf.setFillColor(colors.HexColor("#8A5A28"))
+        pdf.setFont("Helvetica", 9)
+        for index, line in enumerate(note_lines):
+            pdf.drawString(margin + 10, y - 15 - index * 11, line)
         y -= note_h + 6
 
     pdf.setStrokeColor(colors.HexColor("#D9D9D9"))
     pdf.line(margin, y, margin + content_width, y)
     y -= 22
 
-    swatch_x = margin + 6
+    symbol_size = 16
+    symbol_x = margin + 6
+    swatch_x = margin + 34 if symbols else margin + 6
     code_x = swatch_x + 28
-    name_x = margin + 132
+    name_x = margin + 152 if symbols else margin + 132
     stitches_x = page_width - margin - 58
     skeins_x = page_width - margin
     table_text_color = colors.HexColor("#2D332F")
@@ -538,6 +610,10 @@ def _draw_report_page(
     def _draw_table_header(y_pos: float) -> None:
         pdf.setFont("Helvetica-Bold", 11)
         pdf.setFillColor(table_text_color)
+        if symbols:
+            pdf.setFont("Helvetica-Bold", 8)
+            pdf.drawString(symbol_x, y_pos, "Symbol")
+            pdf.setFont("Helvetica-Bold", 11)
         pdf.drawString(code_x, y_pos, "Code")
         pdf.drawString(name_x, y_pos, "Color")
         pdf.drawRightString(stitches_x, y_pos, "Stitches")
@@ -584,6 +660,19 @@ def _draw_report_page(
                 stroke=0,
             )
 
+        if symbols:
+            glyph = symbols.get(row["hex"])
+            symbol_y = row_center_y - symbol_size / 2
+            # Drawn on the same washed tint the chart uses, so the legend entry
+            # and the cells it stands for are the same picture at two sizes.
+            tint = _chart_tint(row["hex"])
+            pdf.setFillColor(tint)
+            pdf.rect(symbol_x, symbol_y, symbol_size, symbol_size, fill=1, stroke=0)
+            if glyph is not None:
+                _draw_chart_glyph(pdf, glyph, symbol_x, symbol_y, symbol_size, tint)
+            pdf.setStrokeColor(colors.HexColor("#B8B8B8"))
+            pdf.rect(symbol_x, symbol_y, symbol_size, symbol_size, fill=0, stroke=1)
+
         pdf.setFillColor(_rgb_to_reportlab(row["hex"]))
         pdf.rect(swatch_x, row_center_y - swatch_size / 2, swatch_size, swatch_size, fill=1, stroke=0)
         pdf.setStrokeColor(colors.HexColor("#B8B8B8"))
@@ -595,6 +684,153 @@ def _draw_report_page(
         pdf.drawRightString(stitches_x, text_y, str(row["count"]))
         pdf.drawRightString(skeins_x, text_y, str(row["skeins"]))
         y -= row_height
+
+
+def _chart_tint(hex_color: str) -> colors.Color:
+    """The thread colour blended toward white by CHART_TINT."""
+    red, green, blue = _hex_to_rgb(hex_color)
+    return colors.Color(
+        *[1.0 - (1.0 - channel / 255) * CHART_TINT for channel in (red, green, blue)]
+    )
+
+
+def _draw_chart_glyph(
+    pdf: canvas.Canvas, glyph: Glyph, x: float, y: float, size: float, tint: colors.Color
+) -> None:
+    """Draw a glyph inset within its cell. Used by both the chart and the legend
+    so an entry in the table is the same mark, at the same proportions, as the
+    cells it stands for."""
+    inset = size * CHART_GLYPH_INSET
+    draw_glyph(
+        pdf, glyph, x + inset, y + inset, size - inset * 2,
+        hole=(tint.red, tint.green, tint.blue),
+    )
+
+
+def _chart_tiles(rows: int, cols: int) -> list[tuple[int, int]]:
+    """Top-left (row, col) of each chart page, in reading order."""
+    return [
+        (row, col)
+        for row in range(0, rows, CHART_ROWS_PER_PAGE)
+        for col in range(0, cols, CHART_COLS_PER_PAGE)
+    ]
+
+
+def _draw_chart_page(
+    pdf: canvas.Canvas,
+    cells: list[list[str]],
+    symbols: dict[str, Glyph],
+    row0: int,
+    col0: int,
+    tile_index: int,
+    tile_count: int,
+) -> None:
+    """One tile of the symbol chart: a 40x50 block of stitches at CHART_CELL_PTS."""
+    page_width, page_height = letter
+    pdf.setPageSize(letter)
+    margin = PAGE_MARGIN
+
+    rows_total = len(cells)
+    cols_total = len(cells[0]) if rows_total else 0
+    row_end = min(rows_total, row0 + CHART_ROWS_PER_PAGE)
+    col_end = min(cols_total, col0 + CHART_COLS_PER_PAGE)
+    n_rows = row_end - row0
+    n_cols = col_end - col0
+
+    pdf.setFillColor(colors.HexColor("#173F2A"))
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(margin, page_height - margin - 4, "Stitch chart")
+    pdf.setFont("Helvetica", 9)
+    pdf.setFillColor(colors.HexColor("#5B635C"))
+    pdf.drawString(
+        margin,
+        page_height - margin - 20,
+        f"Section {tile_index} of {tile_count}  —  rows {row0 + 1}–{row_end}, "
+        f"columns {col0 + 1}–{col_end}",
+    )
+    pdf.drawRightString(
+        page_width - margin,
+        page_height - margin - 20,
+        "Symbols match the palette table",
+    )
+
+    cell = CHART_CELL_PTS
+    grid_left = margin + 26
+    grid_top = page_height - margin - 46
+    grid_right = grid_left + n_cols * cell
+    grid_bottom = grid_top - n_rows * cell
+
+    for row in range(row0, row_end):
+        for col in range(col0, col_end):
+            value = cells[row][col]
+            if value == BLANK_CELL:
+                continue
+            x = grid_left + (col - col0) * cell
+            y = grid_top - (row - row0 + 1) * cell
+            if value == FINISH_OUTLINE_CELL:
+                # No symbol: the outline is a single known colour worked around
+                # the edge, and a solid cell reads as the boundary it is.
+                pdf.setFillColor(colors.HexColor("#1A1A1A"))
+                pdf.rect(x, y, cell, cell, stroke=0, fill=1)
+                continue
+            tint = _chart_tint(value)
+            pdf.setFillColor(tint)
+            pdf.rect(x, y, cell, cell, stroke=0, fill=1)
+            glyph = symbols.get(value)
+            if glyph is not None:
+                _draw_chart_glyph(pdf, glyph, x, y, cell, tint)
+
+    pdf.setLineWidth(0.25)
+    pdf.setStrokeColor(colors.HexColor("#BFBFBF"))
+    for index in range(n_cols + 1):
+        x = grid_left + index * cell
+        pdf.line(x, grid_bottom, x, grid_top)
+    for index in range(n_rows + 1):
+        y = grid_top - index * cell
+        pdf.line(grid_left, y, grid_right, y)
+
+    # Every tenth rule heavier, counted from the design's own origin rather than
+    # the tile's, so the decade lines continue across a page break.
+    pdf.setLineWidth(0.9)
+    pdf.setStrokeColor(colors.HexColor("#4A4A4A"))
+    for index in range(n_cols + 1):
+        if (col0 + index) % 10 == 0:
+            x = grid_left + index * cell
+            pdf.line(x, grid_bottom, x, grid_top)
+    for index in range(n_rows + 1):
+        if (row0 + index) % 10 == 0:
+            y = grid_top - index * cell
+            pdf.line(grid_left, y, grid_right, y)
+    pdf.rect(grid_left, grid_bottom, n_cols * cell, n_rows * cell, stroke=1, fill=0)
+
+    pdf.setFont("Helvetica", 6.5)
+    pdf.setFillColor(colors.HexColor("#5B635C"))
+    for col in range(col0, col_end):
+        if (col + 1) % 10 == 0 or col == col0:
+            pdf.drawCentredString(
+                grid_left + (col - col0) * cell + cell / 2, grid_top + 4, str(col + 1)
+            )
+    for row in range(row0, row_end):
+        if (row + 1) % 10 == 0 or row == row0:
+            pdf.drawRightString(
+                grid_left - 4,
+                grid_top - (row - row0 + 1) * cell + cell / 2 - 2.5,
+                str(row + 1),
+            )
+
+
+def _draw_chart_pages(
+    pdf: canvas.Canvas,
+    cells: list[list[str]],
+    symbols: dict[str, Glyph],
+) -> None:
+    """Append the tiled symbol chart. Caller has already decided it fits."""
+    rows_total = len(cells)
+    cols_total = len(cells[0]) if rows_total else 0
+    tiles = _chart_tiles(rows_total, cols_total)
+    for index, (row0, col0) in enumerate(tiles, start=1):
+        pdf.showPage()
+        _draw_chart_page(pdf, cells, symbols, row0, col0, index, len(tiles))
 
 
 def _draw_cover_page(
@@ -769,6 +1005,31 @@ def generate_preview_pdf(
     has_outline = any(cell == FINISH_OUTLINE_CELL for row in cells for cell in row)
     qr_url = _build_thread_list_qr_url(report_rows, design_w, design_h, mesh_count)
 
+    # The stitch guide is best-effort: two things can put it out of reach, and
+    # in both cases the palette table is still a complete colour reference, so
+    # neither is worth failing a paid order over. Say which one happened —
+    # a guide that is silently absent reads as a bug.
+    symbol_assignment: dict[str, Glyph] | None = None
+    symbol_notice: str | None = None
+    try:
+        symbol_assignment = assign_symbols(
+            [{"hex": row["hex"], "count": row["count"]} for row in report_rows]
+        )
+    except PaletteTooLargeForSymbols as exc:
+        symbol_notice = str(exc)
+
+    if symbol_assignment is not None:
+        chart_rows = len(preview_cells)
+        chart_cols = len(preview_cells[0]) if chart_rows else 0
+        chart_pages = len(_chart_tiles(chart_rows, chart_cols))
+        if chart_pages > MAX_CHART_PAGES:
+            symbol_assignment = None
+            symbol_notice = (
+                f"This design is {chart_cols} x {chart_rows} stitches, so a symbol "
+                f"chart would run to {chart_pages} pages. The palette table below "
+                f"is the full colour reference."
+            )
+
     def draw_public_pages(pdf: canvas.Canvas) -> None:
         _draw_cover_page(
             pdf,
@@ -797,7 +1058,12 @@ def generate_preview_pdf(
             cells,
             has_outline,
             qr_url,
+            symbol_assignment,
+            symbol_notice,
         )
+
+        if symbol_assignment is not None:
+            _draw_chart_pages(pdf, preview_cells, symbol_assignment)
 
     public_pdf = canvas.Canvas(str(public_path), pagesize=page_size)
     draw_public_pages(public_pdf)
