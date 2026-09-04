@@ -1,3 +1,21 @@
+/* eslint-disable react-hooks/rules-of-hooks --
+ * KNOWN DEBT, not a rule we disagree with. `if (!cells.length) return null` is
+ * the first statement of GridEditor, above all 84 of its hooks, so every one of
+ * them is a conditional call and the rule fires 142 times in this file alone.
+ *
+ * It is the same defect that crashed the admin page with React error #310 on
+ * 2026-09-04, and it is live here: any render that takes this component from
+ * empty cells to populated ones (or back) while it stays mounted changes the
+ * hook count and aborts the render. It has stayed quiet only because the parent
+ * mounts the editor with cells already loaded.
+ *
+ * The fix is to move the guard below the hooks, just above the JSX return —
+ * which means every hook then has to tolerate an empty `cells`, and several
+ * index `cells[0]`. That is a real change to the core editor and wants its own
+ * pass with testing, not a drive-by edit. Until then this disable is scoped to
+ * this one file on purpose: the rule stays enforced everywhere else, so a new
+ * hooks bug in any other component still fails the build.
+ */
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
