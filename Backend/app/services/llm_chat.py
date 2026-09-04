@@ -10,6 +10,8 @@ from PIL import Image
 import base64
 from app.services.storage import save_remote_image, UPLOADS_DIR, PREVIEWS_DIR, ASSETS_DIR
 
+from app.services import provenance
+
 logger = logging.getLogger(__name__)
 
 def _get_anthropic():
@@ -736,7 +738,15 @@ def _generation_size(context: dict) -> str:
                 # enhancement, which would otherwise re-speckle the flat art and
                 # wreck the stitch preview. Defaulting to "photo" was why
                 # generated images quantized poorly.
-                {"type": "set_source_image", "url": local_path, "source_type": "graphic_art"},
+                {
+                    "type": "set_source_image",
+                    "url": local_path,
+                    "source_type": "graphic_art",
+                    # Descended from a prompt, not from anyone's picture. This is
+                    # the safest origin on the platform and must not be confused
+                    # with an upload just because both set a source image.
+                    "origin": provenance.GENERATED,
+                },
             )
         except Exception as exc:
             logger.exception("Image generation failed: %s", exc)
@@ -768,7 +778,16 @@ def _generation_size(context: dict) -> str:
             local_url = f"/assets/uploads/{out_path.name}"
             return (
                 f"Edited image applied.",
-                {"type": "set_source_image", "url": local_url},
+                {
+                    "type": "set_source_image",
+                    "url": local_url,
+                    # Inherited, not reset. Editing an upload — or anything whose
+                    # origin we cannot account for — keeps the taint, which is the
+                    # whole point: one pass through here used to launder a
+                    # copyrighted photo into something indistinguishable from a
+                    # generation.
+                    "origin": provenance.origin_after_edit(source_url),
+                },
             )
         except Exception as exc:
             logger.exception("Image edit failed: %s", exc)

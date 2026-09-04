@@ -79,6 +79,7 @@ from app.services.canvas_pricing import (
 from app.services.auth import get_current_user_id, get_optional_user_id
 from app.services.suspension import require_enabled, site_status
 from app.services.supabase_storage import download_from_supabase_storage, upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
+from app.services import provenance
 from app.services.supabase_db import (
     list_projects,
     create_project,
@@ -99,6 +100,7 @@ from app.services.supabase_db import (
     log_chat,
     get_creator_signature,
     upsert_creator_signature,
+    get_project,
     get_project_sku,
     upsert_project_sku,
     resolve_root_creator_id,
@@ -338,7 +340,11 @@ def chat(request: LlmChatRequest):
     # Make any generated source image URL durable (upload to Supabase)
     for action in result.get("actions", []):
         if action.get("type") == "set_source_image" and action.get("url"):
-            action["url"] = durable_image_url(action["url"], prefix="source-images")
+            # The tool reports what it produced; the storage prefix is what makes
+            # that durable and un-spoofable once the URL reaches the browser.
+            action["url"] = durable_image_url(
+                action["url"], prefix=provenance.prefix_for(action.get("origin") or provenance.UNKNOWN)
+            )
 
     if result.get("image_url"):
         result["image_url"] = durable_image_url(result["image_url"], prefix="source-images")
@@ -367,7 +373,7 @@ def upload(file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
 
-    image_url = durable_image_url(save_upload(file), prefix="source-images")
+    image_url = durable_image_url(save_upload(file), prefix=provenance.prefix_for(provenance.UPLOADED))
     return {
         "message": "Image uploaded successfully.",
         "active_image_url": image_url,
@@ -378,7 +384,9 @@ def upload(file: UploadFile = File(...)):
 @app.post("/import-url", dependencies=[Depends(require_enabled("import"))])
 def import_url(request: ImportUrlRequest):
     try:
-        image_url = durable_image_url(save_remote_image(request.image_url), prefix="source-images")
+        image_url = durable_image_url(
+            save_remote_image(request.image_url), prefix=provenance.prefix_for(provenance.UPLOADED)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -506,7 +514,10 @@ def import_stitchly(file: UploadFile = File(...)):
         from app.services.storage import UPLOADS_DIR
         filename = f"{uuid4().hex}.png"
         (UPLOADS_DIR / filename).write_bytes(parsed["source_image_bytes"])
-        source_image_url = durable_image_url(f"/assets/uploads/{filename}", prefix="source-images")
+        # A .stitchly file carries someone else's photograph just as an upload does.
+        source_image_url = durable_image_url(
+            f"/assets/uploads/{filename}", prefix=provenance.prefix_for(provenance.UPLOADED)
+        )
 
     mesh_count = parsed["mesh_count"] if parsed["mesh_count"] in (13, 18) else 13
     preview_url = render_preview_image_from_cells(
@@ -627,6 +638,30 @@ MAX_DRAFTS = 3
 def is_active_draft(project: dict) -> bool:
     return not bool(project.get("finalized") or project.get("pdf_url"))
 
+# Both off: the mechanism is complete and tested, the policy is not decided.
+# See the block in publish_gallery_item for what each one governs.
+ENFORCE_GALLERY_ORIGIN_RULE = False
+BLOCK_UNKNOWN_ORIGIN = False
+
+
+def _apply_server_origin(data: dict) -> dict:
+    """Overwrite whatever design_origin the browser sent with what the stored
+    image path actually says.
+
+    The field was client-supplied, so a design could claim any origin it liked
+    simply by sending one — or by sending none. Where there is a source image
+    the path is authoritative and the claim is discarded. Where there is none
+    the design was drawn or remixed, which no rule blocks, so the client's own
+    'blank' is harmless and kept.
+    """
+    url = data.get("source_image_url")
+    if url:
+        data["design_origin"] = provenance.origin_of(url)
+    elif not data.get("design_origin"):
+        data["design_origin"] = "blank"
+    return data
+
+
 @app.post("/projects", response_model=ProjectResponse, status_code=201)
 def save_project(request: ProjectSaveRequest, user_id: str = Depends(get_current_user_id)):
     active_drafts = [project for project in list_projects(user_id) if is_active_draft(project)]
@@ -635,7 +670,7 @@ def save_project(request: ProjectSaveRequest, user_id: str = Depends(get_current
             status_code=422,
             detail=f"Draft limit reached ({MAX_DRAFTS}). Delete a saved design before saving a new one."
         )
-    data = request.model_dump(exclude_none=True)
+    data = _apply_server_origin(request.model_dump(exclude_none=True))
     if "palette" in data and data["palette"] is not None:
         data["palette"] = [c if isinstance(c, dict) else c.model_dump() for c in (request.palette or [])]
     result = create_project(data, user_id)
@@ -646,7 +681,7 @@ def save_project(request: ProjectSaveRequest, user_id: str = Depends(get_current
 
 @app.patch("/projects/{project_id}", response_model=ProjectResponse)
 def patch_project(project_id: str, request: ProjectSaveRequest, user_id: str = Depends(get_current_user_id)):
-    data = request.model_dump(exclude_none=True)
+    data = _apply_server_origin(request.model_dump(exclude_none=True))
     if "palette" in data and data["palette"] is not None:
         data["palette"] = [c if isinstance(c, dict) else c.model_dump() for c in (request.palette or [])]
     result = update_project(project_id, data, user_id)
@@ -720,6 +755,26 @@ def publish_gallery_item(
     # are optional on the request, so only gate when both are present.
     if request.width_inches and request.height_inches:
         _require_standard_order(request.width_inches, request.height_inches)
+
+    # The import split: a photo-derived design may be printed privately but not
+    # published. OFF until John turns it on, because switching it changes what
+    # creators can do and the grandfathering question below is his to answer.
+    #
+    # BLOCK_UNKNOWN_ORIGIN governs images written before provenance existed,
+    # which is most of the current gallery. Left False so an old design is not
+    # retroactively barred on the strength of a marker that did not exist when
+    # it was made; set True only alongside a decision about those listings.
+    if ENFORCE_GALLERY_ORIGIN_RULE:
+        project = get_project(request.project_id, user_id) if request.project_id else None
+        origin = provenance.origin_of((project or {}).get("source_image_url"))
+        if provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Designs made from an uploaded photo can be printed but not published "
+                    "to the gallery. Designs you draw, or generate in chat, can be published."
+                ),
+            )
 
     tags = []
     seen_tags = set()
