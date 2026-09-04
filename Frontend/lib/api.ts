@@ -1662,12 +1662,30 @@ export async function downloadRollPrintPdf(
 
 // ── Gallery takedowns (admin) ────────────────────────────────────────────────
 
+/** One reverse-image screening result. `error` means unscreened, NOT clear. */
+export type IpCheck = {
+  gallery_item_id: string
+  checked_at?: string | null
+  status: 'flagged' | 'clear' | 'error' | 'not_configured'
+  detail?: string | null
+  best_guess?: string | null
+  dismissed_at?: string | null
+  result?: {
+    entities?: { name: string; score: number }[]
+    full_matches?: string[]
+    partial_matches?: string[]
+    pages?: { url: string; title: string }[]
+  } | null
+}
+
 export type AdminGalleryItem = GalleryItem & {
   user_id?: string | null
   suspended_at?: string | null
   suspended_reason?: string | null
   suspended_by?: string | null
   creator_suspension_count?: number
+  /** null when the listing has never been screened. */
+  ip_check?: IpCheck | null
 }
 
 export type SuspendResult = {
@@ -1698,6 +1716,50 @@ export async function adminSuspendGalleryItem(
     body: JSON.stringify({ reason: reason || null, notify }),
   })
   if (!res.ok) throw new Error('Could not hide this listing')
+  return res.json()
+}
+
+/** Screen listings that have no result yet. Returns how many remain. */
+export async function adminScreenGallery(
+  accessToken: string,
+  opts: { rescreen?: boolean; limit?: number } = {},
+): Promise<{ screened: number; flagged: number; failed: number; remaining: number }> {
+  const params = new URLSearchParams()
+  if (opts.rescreen) params.set('rescreen', 'true')
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const res = await fetch(`${API_BASE}/admin/gallery/screen?${params.toString()}`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.detail || 'Could not run screening')
+  }
+  return res.json()
+}
+
+export async function adminScreenGalleryItem(
+  itemId: string,
+  accessToken: string,
+): Promise<{ ip_check: IpCheck }> {
+  const res = await fetch(`${API_BASE}/admin/gallery/${encodeURIComponent(itemId)}/screen`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not screen this listing')
+  return res.json()
+}
+
+/** Mark a flag as looked at and not a problem. The row is kept either way. */
+export async function adminDismissIpFlag(
+  itemId: string,
+  accessToken: string,
+): Promise<{ ip_check: IpCheck }> {
+  const res = await fetch(`${API_BASE}/admin/gallery/${encodeURIComponent(itemId)}/dismiss-flag`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not dismiss this flag')
   return res.json()
 }
 

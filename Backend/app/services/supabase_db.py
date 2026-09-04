@@ -26,7 +26,13 @@ def _base_url() -> str | None:
     return url if url else None
 
 
-def _request(method: str, path: str, body: dict | None = None, params: str = "") -> list[dict] | dict | None:
+def _request(
+    method: str,
+    path: str,
+    body: dict | None = None,
+    params: str = "",
+    upsert: bool = False,
+) -> list[dict] | dict | None:
     base = _base_url()
     if not base:
         logger.warning("SUPABASE_URL not configured; skipping DB call")
@@ -39,7 +45,14 @@ def _request(method: str, path: str, body: dict | None = None, params: str = "")
 
     headers = _headers()
     if method in ("POST", "PATCH"):
-        headers["Prefer"] = "return=representation"
+        prefer = ["return=representation"]
+        # merge-duplicates turns an INSERT into an upsert on the primary key.
+        # Used where a row is a current-state record rather than an event —
+        # re-screening a listing should replace its result, not accumulate one
+        # row per run and leave the reader to work out which is live.
+        if upsert:
+            prefer.append("resolution=merge-duplicates")
+        headers["Prefer"] = ",".join(prefer)
 
     payload = json.dumps(body).encode() if body is not None else None
 
@@ -967,3 +980,55 @@ def get_user_email(user_id: str) -> str | None:
     except (HTTPError, URLError, ValueError, KeyError) as exc:
         logger.warning("Could not resolve email for user %s: %s", user_id, exc)
         return None
+
+
+# ── copyright screening ───────────────────────────────────────────────────────
+
+def save_ip_check(gallery_item_id: str, result: dict) -> dict | None:
+    """Record (or replace) the screening result for one listing.
+
+    Keyed on gallery_item_id so there is exactly one current result per
+    listing. Re-screening overwrites, and dismissal is cleared with it: if the
+    picture changed enough to re-run, an earlier "looked at it, it's fine" no
+    longer describes what is on screen.
+    """
+    body = {
+        "gallery_item_id": gallery_item_id,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": (result.get("status") or "error")[:32],
+        "detail": (result.get("detail") or "")[:500] or None,
+        "best_guess": (result.get("best_guess") or "")[:160] or None,
+        "result": result,
+        "dismissed_at": None,
+        "dismissed_by": None,
+    }
+    rows = _request("POST", "/gallery_ip_checks", body=body, upsert=True)
+    if isinstance(rows, list) and rows:
+        return rows[0]
+    return None
+
+
+def list_ip_checks() -> dict[str, dict]:
+    """Every stored screening result, keyed by gallery item id."""
+    rows = _request("GET", "/gallery_ip_checks", params="select=*&limit=2000")
+    if not isinstance(rows, list):
+        return {}
+    return {r["gallery_item_id"]: r for r in rows if r.get("gallery_item_id")}
+
+
+def dismiss_ip_check(gallery_item_id: str, admin_user_id: str) -> dict | None:
+    """Mark a flag as reviewed and not a problem.
+
+    The row is kept rather than deleted. A dismissal is itself part of the
+    record: it shows the flag was seen and considered, which is the difference
+    between a judgement call and never having looked.
+    """
+    encoded = quote(gallery_item_id, safe="")
+    body = {
+        "dismissed_at": datetime.now(timezone.utc).isoformat(),
+        "dismissed_by": admin_user_id,
+    }
+    rows = _request("PATCH", "/gallery_ip_checks", body=body, params=f"gallery_item_id=eq.{encoded}")
+    if isinstance(rows, list) and rows:
+        return rows[0]
+    return None

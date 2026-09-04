@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '../../components/AuthProvider'
-import { adminListGallery, adminSuspendGalleryItem, adminRestoreGalleryItem, type AdminGalleryItem } from '../../lib/api'
+import {
+  adminListGallery,
+  adminSuspendGalleryItem,
+  adminRestoreGalleryItem,
+  adminScreenGallery,
+  adminScreenGalleryItem,
+  adminDismissIpFlag,
+  type AdminGalleryItem,
+} from '../../lib/api'
 import {
   listProjects,
   downloadBlankRollPdf,
@@ -299,6 +307,8 @@ export default function AdminPage() {
   const [reasonFor, setReasonFor] = useState<Record<string, string>>({})
   const [notifyOnHide, setNotifyOnHide] = useState(true)
   const [showSuspendedOnly, setShowSuspendedOnly] = useState(false)
+  const [showFlaggedOnly, setShowFlaggedOnly] = useState(false)
+  const [screenBusy, setScreenBusy] = useState(false)
 
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -696,7 +706,64 @@ export default function AdminPage() {
     }
   }
 
-  const visibleGalleryItems = showSuspendedOnly
+  async function handleScreenAll() {
+    if (!session?.access_token) return
+    setScreenBusy(true)
+    setGalleryError('')
+    setGalleryNotice('')
+    try {
+      const r = await adminScreenGallery(session.access_token, { limit: 25 })
+      // Report failures separately from clears. An image the API could not read
+      // is unscreened, and rolling it into "checked" would overstate coverage.
+      const parts = [`Screened ${r.screened}.`, `${r.flagged} flagged.`]
+      if (r.failed) parts.push(`${r.failed} could not be screened.`)
+      if (r.remaining) parts.push(`${r.remaining} still unscreened — run again.`)
+      setGalleryNotice(parts.join(' '))
+      await refreshGallery()
+    } catch (e) {
+      setGalleryError(e instanceof Error ? e.message : 'Could not run screening.')
+    } finally {
+      setScreenBusy(false)
+    }
+  }
+
+  async function handleScreenOne(item: AdminGalleryItem) {
+    if (!session?.access_token) return
+    setGalleryBusy(item.id)
+    setGalleryError('')
+    try {
+      await adminScreenGalleryItem(item.id, session.access_token)
+      await refreshGallery()
+    } catch {
+      setGalleryError('Could not screen this listing.')
+    } finally {
+      setGalleryBusy(null)
+    }
+  }
+
+  async function handleDismissFlag(item: AdminGalleryItem) {
+    if (!session?.access_token) return
+    setGalleryBusy(item.id)
+    try {
+      await adminDismissIpFlag(item.id, session.access_token)
+      await refreshGallery()
+    } catch {
+      setGalleryError('Could not dismiss this flag.')
+    } finally {
+      setGalleryBusy(null)
+    }
+  }
+
+  const flaggedCount = galleryItems.filter(
+    (i) => i.ip_check?.status === 'flagged' && !i.ip_check?.dismissed_at,
+  ).length
+  const unscreenedCount = galleryItems.filter(
+    (i) => !i.ip_check || i.ip_check.status === 'error',
+  ).length
+
+  const visibleGalleryItems = showFlaggedOnly
+    ? galleryItems.filter((i) => i.ip_check?.status === 'flagged' && !i.ip_check?.dismissed_at)
+    : showSuspendedOnly
     ? galleryItems.filter((i) => i.suspended_at)
     : galleryItems
   const suspendedCount = galleryItems.filter((i) => i.suspended_at).length
@@ -725,8 +792,28 @@ export default function AdminPage() {
             <input type="checkbox" checked={showSuspendedOnly} onChange={(e) => setShowSuspendedOnly(e.target.checked)} />
             Show hidden only
           </label>
+          <label style={{ fontSize: 12, color: '#5B635C', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={showFlaggedOnly} onChange={(e) => setShowFlaggedOnly(e.target.checked)} />
+            Show flagged only
+          </label>
           <span style={{ fontSize: 12, color: '#7A817A' }}>
-            {galleryItems.length} listings · {suspendedCount} hidden
+            {galleryItems.length} listings · {suspendedCount} hidden · {flaggedCount} flagged
+            {unscreenedCount > 0 && <span style={{ color: '#8a5a28' }}> · {unscreenedCount} unscreened</span>}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={handleScreenAll}
+            disabled={screenBusy}
+            style={{ ...styles.btnSecondary, ...(screenBusy ? styles.btnDisabled : {}) }}
+          >
+            {screenBusy ? 'Screening…' : 'Run copy screening (25)'}
+          </button>
+          <span style={{ fontSize: 11, color: '#7A817A', maxWidth: 420, lineHeight: 1.45 }}>
+            Compares each preview against images on the web. Flags are a prompt to look,
+            never a verdict — generic patterns match constantly.
           </span>
         </div>
 
@@ -771,6 +858,83 @@ export default function AdminPage() {
                       Reference: {item.suspended_reason}
                     </div>
                   )}
+
+                  {(() => {
+                    const check = item.ip_check
+                    if (!check) {
+                      return (
+                        <div style={{ fontSize: 11, color: '#9A9188', marginTop: 6 }}>Not screened</div>
+                      )
+                    }
+                    if (check.status === 'error' || check.status === 'not_configured') {
+                      return (
+                        <div style={{ fontSize: 11, color: '#8a5a28', marginTop: 6 }}>
+                          Screening did not complete — treat as unchecked. {check.detail}
+                        </div>
+                      )
+                    }
+                    if (check.status === 'clear') {
+                      return (
+                        <div style={{ fontSize: 11, color: '#7A817A', marginTop: 6 }}>
+                          Screened, nothing found{check.best_guess ? ` · reads as "${check.best_guess}"` : ''}
+                        </div>
+                      )
+                    }
+                    const dismissed = Boolean(check.dismissed_at)
+                    const entities = check.result?.entities ?? []
+                    const pages = check.result?.pages ?? []
+                    return (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          background: dismissed ? '#F6F5F2' : '#FBF3E9',
+                          border: `1px solid ${dismissed ? '#E8E4DC' : '#E4C99B'}`,
+                        }}
+                      >
+                        <div style={{ fontSize: 11, fontWeight: 700, color: dismissed ? '#7A817A' : '#8a5a28' }}>
+                          {dismissed ? 'Flag reviewed and dismissed' : 'Flagged for review'}
+                          {check.best_guess ? ` · reads as "${check.best_guess}"` : ''}
+                        </div>
+                        {entities.length > 0 && (
+                          <div style={{ fontSize: 11, color: '#5B635C', marginTop: 3 }}>
+                            Named subject: {entities.map((e) => e.name).join(', ')}
+                          </div>
+                        )}
+                        {pages.length > 0 && (
+                          <div style={{ fontSize: 11, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {pages.slice(0, 3).map((pg) => (
+                              <a
+                                key={pg.url}
+                                href={pg.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: '#5c7856' }}
+                              >
+                                {pg.title || pg.url}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                        {!dismissed && (
+                          <button
+                            type="button"
+                            onClick={() => handleDismissFlag(item)}
+                            disabled={galleryBusy === item.id}
+                            style={{
+                              ...styles.btnSecondary,
+                              marginTop: 8,
+                              padding: '4px 10px',
+                              fontSize: 11,
+                            }}
+                          >
+                            Not a problem
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -785,6 +949,15 @@ export default function AdminPage() {
                       }}
                     />
                   )}
+                  <button
+                    type="button"
+                    disabled={galleryBusy === item.id}
+                    onClick={() => handleScreenOne(item)}
+                    style={{ ...styles.btnSecondary, padding: '9px 14px', fontSize: 12 }}
+                    title="Re-run the copy screening for this listing"
+                  >
+                    Screen
+                  </button>
                   <button
                     type="button"
                     disabled={galleryBusy === item.id}

@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -688,8 +688,29 @@ def get_gallery(
     return list_gallery_items(search=search, sort=sort, user_id=user_id, limit=min(limit, 60), offset=max(offset, 0))
 
 
+def _screen_listing(item_id: str, image_url: str) -> None:
+    """Screen one listing and store the result. Swallows everything.
+
+    Runs after the response is sent. A publish must never fail, slow down, or
+    surface an error because a third-party screening API was unreachable — the
+    listing being unscreened is a queue problem for the operator, not the
+    creator's problem.
+    """
+    try:
+        from app.services.image_matching import screen_image
+        from app.services.supabase_db import save_ip_check
+
+        save_ip_check(item_id, screen_image(image_url))
+    except Exception:  # noqa: BLE001 - background work, nothing to surface to
+        logger.exception("Copyright screening failed for gallery item %s", item_id)
+
+
 @app.post("/gallery", response_model=GalleryItemResponse, status_code=201, dependencies=[Depends(require_enabled("gallery"))])
-def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(get_current_user_id)):
+def publish_gallery_item(
+    request: GalleryCreateRequest,
+    background: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="Gallery title is required.")
@@ -716,6 +737,12 @@ def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(g
     result = create_gallery_item(data, user_id)
     if result is None:
         raise HTTPException(status_code=502, detail="Could not publish to gallery.")
+
+    # Screen the new listing for copies. Queued rather than awaited: this is a
+    # review aid, and it never gates publication.
+    if result.get("id") and result.get("preview_image_url"):
+        background.add_task(_screen_listing, result["id"], result["preview_image_url"])
+
     return result
 
 
@@ -1463,7 +1490,7 @@ def admin_list_gallery(user_id: str = Depends(get_current_user_id)):
     live-suspension count so a reviewer can see a pattern rather than one row at
     a time — that count is what Terms 4.5 escalates on."""
     _require_admin(user_id)
-    from app.services.supabase_db import list_gallery_items_for_admin, count_suspensions_by_user
+    from app.services.supabase_db import list_gallery_items_for_admin, count_suspensions_by_user, list_ip_checks
 
     items = list_gallery_items_for_admin()
     strikes: dict[str, int] = {}
@@ -1471,8 +1498,10 @@ def admin_list_gallery(user_id: str = Depends(get_current_user_id)):
         owner = item.get("user_id")
         if owner and owner not in strikes:
             strikes[owner] = count_suspensions_by_user(owner)
+    checks = list_ip_checks()
     for item in items:
         item["creator_suspension_count"] = strikes.get(item.get("user_id"), 0)
+        item["ip_check"] = checks.get(item.get("id"))
     return items
 
 
@@ -1522,6 +1551,86 @@ def admin_restore_gallery_item(item_id: str, user_id: str = Depends(get_current_
     if item is None:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
     return {"item": item}
+
+
+@app.post("/admin/gallery/screen")
+def admin_screen_gallery(rescreen: bool = False, limit: int = 25, user_id: str = Depends(get_current_user_id)):
+    """Screen listings that have no result yet, oldest listings first.
+
+    Batched and synchronous because the operator is watching it run and needs
+    to know what actually happened. `limit` keeps one click bounded; `rescreen`
+    re-runs listings that already have a result, for when the screening logic
+    itself changes.
+    """
+    _require_admin(user_id)
+    from app.services.image_matching import is_configured, screen_image
+    from app.services.supabase_db import list_gallery_items_for_admin, list_ip_checks, save_ip_check
+
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Image screening is not configured. Set GOOGLE_VISION_API_KEY on the server.",
+        )
+
+    existing = list_ip_checks()
+    items = list_gallery_items_for_admin()
+    pending = [
+        i for i in items
+        if i.get("preview_image_url") and (rescreen or i.get("id") not in existing)
+    ]
+    if limit > 0:
+        pending = pending[:limit]
+
+    screened, flagged, failed = 0, 0, 0
+    for item in pending:
+        result = screen_image(item["preview_image_url"])
+        save_ip_check(item["id"], result)
+        screened += 1
+        if result.get("status") == "flagged":
+            flagged += 1
+        elif result.get("status") == "error":
+            failed += 1
+
+    remaining = max(0, len([i for i in items if i.get("preview_image_url")]) - len(existing) - screened)
+    return {
+        "screened": screened,
+        "flagged": flagged,
+        "failed": failed,
+        "remaining": 0 if rescreen else remaining,
+    }
+
+
+@app.post("/admin/gallery/{item_id}/screen")
+def admin_screen_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id)):
+    """Re-screen a single listing."""
+    _require_admin(user_id)
+    from app.services.image_matching import is_configured, screen_image
+    from app.services.supabase_db import get_gallery_item, save_ip_check
+
+    if not is_configured():
+        raise HTTPException(status_code=503, detail="Image screening is not configured.")
+
+    item = get_gallery_item(item_id, include_suspended=True)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    if not item.get("preview_image_url"):
+        raise HTTPException(status_code=422, detail="This listing has no preview image to screen.")
+
+    result = screen_image(item["preview_image_url"])
+    save_ip_check(item_id, result)
+    return {"ip_check": {"gallery_item_id": item_id, "status": result.get("status"), "result": result}}
+
+
+@app.post("/admin/gallery/{item_id}/dismiss-flag")
+def admin_dismiss_ip_flag(item_id: str, user_id: str = Depends(get_current_user_id)):
+    """Mark a screening flag as looked at and not a problem."""
+    _require_admin(user_id)
+    from app.services.supabase_db import dismiss_ip_check
+
+    row = dismiss_ip_check(item_id, user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No screening result for this listing.")
+    return {"ip_check": row}
 
 
 @app.get("/admin/print-orders")

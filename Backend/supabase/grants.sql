@@ -179,6 +179,26 @@ create table if not exists public.expenses (
   notes text
 );
 
+-- Reverse-image screening results, one current row per listing (hence the
+-- gallery_item_id primary key, upserted on re-check rather than appended).
+-- Added Sep 2026 after a title-by-title review missed a plainly recognisable
+-- licensed character for two weeks: safe harbour turns on acting once you are
+-- aware, so the screening exists to make us aware before a claimant is.
+-- status is flagged | clear | error | not_configured. "error" deliberately
+-- does NOT mean clear — an unscreened listing must not read as a checked one.
+-- dismissed_at records that a human looked and judged it fine; the row is kept
+-- either way, because having considered a flag is itself part of the record.
+create table if not exists public.gallery_ip_checks (
+  gallery_item_id text primary key,
+  checked_at timestamptz default now(),
+  status text not null,
+  detail text,
+  best_guess text,
+  result jsonb,
+  dismissed_at timestamptz,
+  dismissed_by text
+);
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;
@@ -191,5 +211,6 @@ grant select, insert, update on table public.print_runs to service_role;
 grant select, insert, update on table public.notifications to service_role;
 grant select, insert, update, delete on table public.expense_templates to service_role;
 grant select, insert, update, delete on table public.expenses to service_role;
+grant select, insert, update, delete on table public.gallery_ip_checks to service_role;
 
 grant usage, select on all sequences in schema public to service_role;
