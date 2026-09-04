@@ -639,6 +639,13 @@ export default function AdminPage() {
     }
   }
 
+  useEffect(() => {
+    if (!session?.access_token) return
+    adminListGallery(session.access_token).then(setGalleryItems).catch(() => {
+      setGalleryError('Could not load gallery listings.')
+    })
+  }, [session?.access_token])
+
   if (loading || !session) return null
 
   const selectedCount = selectedIds.length + selectedOrderIds.length
@@ -647,13 +654,6 @@ export default function AdminPage() {
       + (selectedOrderIds.length ? ` (${selectedOrderIds.length} from orders)` : '')
       + ` × ${copies} cop${copies === 1 ? 'y' : 'ies'} = ${selectedCount * copies} total`
     : null
-
-  useEffect(() => {
-    if (!session?.access_token) return
-    adminListGallery(session.access_token).then(setGalleryItems).catch(() => {
-      setGalleryError('Could not load gallery listings.')
-    })
-  }, [session?.access_token])
 
   async function refreshGallery() {
     if (!session?.access_token) return
