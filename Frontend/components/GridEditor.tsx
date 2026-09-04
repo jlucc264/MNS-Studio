@@ -1,21 +1,3 @@
-/* eslint-disable react-hooks/rules-of-hooks --
- * KNOWN DEBT, not a rule we disagree with. `if (!cells.length) return null` is
- * the first statement of GridEditor, above all 84 of its hooks, so every one of
- * them is a conditional call and the rule fires 142 times in this file alone.
- *
- * It is the same defect that crashed the admin page with React error #310 on
- * 2026-09-04, and it is live here: any render that takes this component from
- * empty cells to populated ones (or back) while it stays mounted changes the
- * hook count and aborts the render. It has stayed quiet only because the parent
- * mounts the editor with cells already loaded.
- *
- * The fix is to move the guard below the hooks, just above the JSX return —
- * which means every hook then has to tolerate an empty `cells`, and several
- * index `cells[0]`. That is a real change to the core editor and wants its own
- * pass with testing, not a drive-by edit. Until then this disable is scoped to
- * this one file on purpose: the rule stays enforced everywhere else, so a new
- * hooks bug in any other component still fails the build.
- */
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -682,8 +664,6 @@ export default function GridEditor({
   onTextBoxActiveChange,
   canvasOverlay,
 }: Props) {
-  if (!cells.length) return null
-
   const highlightSelection = toolMode === 'select'
 
   const isTouch = useIsTouch()
@@ -1164,7 +1144,9 @@ export default function GridEditor({
   // agree with the screen but disagree with the finished print.
   const borderStitches = Math.floor(CANVAS_MARGIN_INCHES * meshCount)
   const rows = cells.length
-  const cols = cells[0].length
+  // Optional now: the guard that made an empty grid unreachable moved below
+  // the hooks, so this runs during the empty render too.
+  const cols = cells[0]?.length ?? 0
   const totalRows = rows + borderStitches * 2
   const totalCols = cols + borderStitches * 2
   // Stage is normally a fixed 20" square — plenty of panning room around any
@@ -2829,6 +2811,13 @@ export default function GridEditor({
     width: Math.max(44, textInputSpanCols * cellSize),
     height: Math.max(36, textInputSpanRows * cellSize),
   }
+
+  // Nothing to draw until the grid arrives. This sits below every hook on
+  // purpose: as the first statement it made all 84 of them conditional, so
+  // the render taking this component from empty to populated changed the
+  // hook count and aborted with React error #310 — the same defect that
+  // crashed the admin page. Returning here keeps the hook order fixed.
+  if (!cells.length) return null
 
   return (
     <div
