@@ -30,6 +30,11 @@ const card: CSSProperties = {
  * Says what is unavailable and that saved work is safe, and nothing more. It
  * deliberately does not mention the review's subject or characterize any
  * listing — this page is public, indexable, and quotable.
+ *
+ * The way out points at /drafts rather than /studio. Both are "the studio" in
+ * the nav's language, but /studio opens an empty canvas while /drafts is the
+ * work someone already has — which is what the line underneath promises, and
+ * the more useful place to land when the page you wanted is closed.
  */
 export default function MaintenanceScreen({
   title = 'Under maintenance',
@@ -60,7 +65,7 @@ export default function MaintenanceScreen({
         {showStudioLink && (
           <div style={{ marginTop: 26 }}>
             <Link
-              href="/studio"
+              href="/drafts"
               style={{
                 display: 'inline-block',
                 background: '#6e8d67',
@@ -72,10 +77,10 @@ export default function MaintenanceScreen({
                 fontWeight: 600,
               }}
             >
-              Create from a blank canvas
+              Go to Studio
             </Link>
             <div style={{ marginTop: 10, fontSize: 13, color: '#8a8177' }}>
-              Your saved designs and drafts are still available.
+              Your saved designs and drafts are still there, and you can start a new one.
             </div>
           </div>
         )}

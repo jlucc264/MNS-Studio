@@ -17,6 +17,9 @@ export const dynamic = 'force-dynamic'
  * exist until the gallery was suspended on its own, which is why a hardcoded
  * redirect was fine before and is not now.
  *
+ * Lands on /drafts rather than /studio: someone returning to the site wants the
+ * work they already have, not a blank canvas.
+ *
  * Falls back to the gallery when the status cannot be read. A brief maintenance
  * notice with a studio link on it is a worse landing page but not a broken one,
  * and it keeps a transient API blip from silently changing where the site opens
@@ -34,5 +37,5 @@ async function galleryIsOpen(): Promise<boolean> {
 }
 
 export default async function HomePage() {
-  redirect((await galleryIsOpen()) ? '/gallery' : '/studio')
+  redirect((await galleryIsOpen()) ? '/gallery' : '/drafts')
 }
