@@ -247,3 +247,49 @@ def send_finalized_report(report_path: Path) -> bool:
         }],
     })
     return True
+
+
+# The §512(g) notice: when material comes down, the user who posted it is told,
+# and told how to respond. Wording is deliberately constrained — it describes
+# the complaint and the action taken, and never asserts that the recipient
+# infringed anything. That is not our determination to make, and a platform
+# that makes it in writing hands a claimant a quote and the user a grievance.
+def send_takedown_notice(
+    to_email: str,
+    design_title: str | None,
+    reason: str | None = None,
+) -> bool:
+    if not _ready():
+        return False
+
+    title = design_title or "one of your designs"
+    lines = [
+        f"We've removed \"{title}\" from the MNS Studio gallery while we review a",
+        "copyright concern that was raised with us.",
+        "",
+        "This is not a determination that you did anything wrong. We remove listings",
+        "on receipt of a complaint so we can look into it properly, and listings are",
+        "restored when the concern is resolved.",
+        "",
+        "Your design has not been deleted. It remains in your account, and anything",
+        "already ordered is unaffected.",
+        "",
+    ]
+    if reason:
+        lines += [f"Reference: {reason}", ""]
+    lines += [
+        "If you hold the rights to this design, or you have permission to use the",
+        "material in it, reply to this message and tell us — we'd rather hear from",
+        "you than guess. Our full policy is at https://mns.studio/terms (section 4).",
+        "",
+        "— MNS Studio",
+    ]
+
+    params: resend.Emails.SendParams = {
+        "from": FROM_EMAIL,
+        "to": [to_email],
+        "subject": "A design has been removed from the MNS Studio gallery",
+        "text": "\n".join(lines),
+    }
+    resend.Emails.send(params)
+    return True

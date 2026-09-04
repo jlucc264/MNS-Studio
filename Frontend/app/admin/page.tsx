@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '../../components/AuthProvider'
+import { adminListGallery, adminSuspendGalleryItem, adminRestoreGalleryItem, type AdminGalleryItem } from '../../lib/api'
 import {
   listProjects,
   downloadBlankRollPdf,
@@ -288,6 +289,16 @@ function MeshBadge({ meshCount }: { meshCount: number | null | undefined }) {
 export default function AdminPage() {
   const { session, loading } = useAuth()
   const router = useRouter()
+
+  // Copyright review. Kept in this page rather than a separate route so the
+  // operator reviewing listings is the same person already authenticated here.
+  const [galleryItems, setGalleryItems] = useState<AdminGalleryItem[]>([])
+  const [galleryError, setGalleryError] = useState('')
+  const [galleryBusy, setGalleryBusy] = useState<string | null>(null)
+  const [galleryNotice, setGalleryNotice] = useState('')
+  const [reasonFor, setReasonFor] = useState<Record<string, string>>({})
+  const [notifyOnHide, setNotifyOnHide] = useState(true)
+  const [showSuspendedOnly, setShowSuspendedOnly] = useState(false)
 
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -627,11 +638,173 @@ export default function AdminPage() {
       + ` × ${copies} cop${copies === 1 ? 'y' : 'ies'} = ${selectedCount * copies} total`
     : null
 
+  useEffect(() => {
+    if (!session?.access_token) return
+    adminListGallery(session.access_token).then(setGalleryItems).catch(() => {
+      setGalleryError('Could not load gallery listings.')
+    })
+  }, [session?.access_token])
+
+  async function refreshGallery() {
+    if (!session?.access_token) return
+    try {
+      setGalleryItems(await adminListGallery(session.access_token))
+    } catch {
+      setGalleryError('Could not reload gallery listings.')
+    }
+  }
+
+  async function handleHide(item: AdminGalleryItem) {
+    if (!session?.access_token) return
+    setGalleryBusy(item.id)
+    setGalleryError('')
+    setGalleryNotice('')
+    try {
+      const result = await adminSuspendGalleryItem(
+        item.id, reasonFor[item.id] || '', notifyOnHide, session.access_token,
+      )
+      // The hide always applied; only the email is uncertain. Say which
+      // happened rather than implying the whole action failed.
+      setGalleryNotice(
+        result.notify_error
+          ? `Listing hidden. Creator NOT notified — ${result.notify_error}`
+          : result.notified
+            ? 'Listing hidden and the creator was notified.'
+            : 'Listing hidden. No notification was sent.',
+      )
+      await refreshGallery()
+    } catch {
+      setGalleryError('Could not hide this listing.')
+    } finally {
+      setGalleryBusy(null)
+    }
+  }
+
+  async function handleRestore(item: AdminGalleryItem) {
+    if (!session?.access_token) return
+    setGalleryBusy(item.id)
+    setGalleryError('')
+    setGalleryNotice('')
+    try {
+      await adminRestoreGalleryItem(item.id, session.access_token)
+      setGalleryNotice('Listing restored.')
+      await refreshGallery()
+    } catch {
+      setGalleryError('Could not restore this listing.')
+    } finally {
+      setGalleryBusy(null)
+    }
+  }
+
+  const visibleGalleryItems = showSuspendedOnly
+    ? galleryItems.filter((i) => i.suspended_at)
+    : galleryItems
+  const suspendedCount = galleryItems.filter((i) => i.suspended_at).length
+
   return (
     <div style={styles.page}>
       <h1 style={styles.h1}>Roll Print Admin</h1>
       <p style={styles.subtitle}>P900 · 18 mesh · up to {MAX_ROLL_WIDTH_INCHES}″ roll · admin only</p>
       <a href="/admin/spend" style={styles.spendLink}>Spend Management &rarr;</a>
+
+      {/* Copyright review */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Gallery — copyright review</div>
+        <div style={styles.sectionDesc}>
+          Hiding is never a delete. The row is kept as evidence under the litigation hold and is
+          what the strike count in Terms 4.5 is derived from. A hidden listing disappears from the
+          feed, its creator&rsquo;s profile, and direct links — but orders already paid for still print.
+        </div>
+
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          <label style={{ fontSize: 12, color: '#5B635C', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={notifyOnHide} onChange={(e) => setNotifyOnHide(e.target.checked)} />
+            Email the creator when hiding
+          </label>
+          <label style={{ fontSize: 12, color: '#5B635C', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={showSuspendedOnly} onChange={(e) => setShowSuspendedOnly(e.target.checked)} />
+            Show hidden only
+          </label>
+          <span style={{ fontSize: 12, color: '#7A817A' }}>
+            {galleryItems.length} listings · {suspendedCount} hidden
+          </span>
+        </div>
+
+        {galleryError && <div style={{ fontSize: 12, color: '#b0453a', marginBottom: 10 }}>{galleryError}</div>}
+        {galleryNotice && <div style={{ fontSize: 12, color: '#5c7856', marginBottom: 10 }}>{galleryNotice}</div>}
+
+        {visibleGalleryItems.length === 0 && (
+          <div style={{ fontSize: 12, color: '#7A817A' }}>No listings to show.</div>
+        )}
+
+        {visibleGalleryItems.map((item) => {
+          const hidden = Boolean(item.suspended_at)
+          return (
+            <div
+              key={item.id}
+              style={{
+                border: '1px solid #E8E4DC',
+                borderLeft: hidden ? '3px solid #b0453a' : '3px solid #E8E4DC',
+                borderRadius: 8,
+                padding: '12px 14px',
+                marginBottom: 10,
+                background: hidden ? '#fdf7f6' : '#fff',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#2D332F' }}>
+                    {item.title || '(untitled)'}
+                    {hidden && <span style={{ marginLeft: 8, fontSize: 11, color: '#b0453a' }}>HIDDEN</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#7A817A', marginTop: 3 }}>
+                    {item.submitter_name || 'unknown creator'}
+                    {typeof item.creator_suspension_count === 'number' && item.creator_suspension_count > 0 && (
+                      <span style={{ color: '#b0453a' }}>
+                        {' '}· {item.creator_suspension_count} hidden on this account
+                      </span>
+                    )}
+                    {item.tags && item.tags.length > 0 && <span> · {item.tags.join(', ')}</span>}
+                  </div>
+                  {hidden && item.suspended_reason && (
+                    <div style={{ fontSize: 11, color: '#8a5a28', marginTop: 4 }}>
+                      Reference: {item.suspended_reason}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  {!hidden && (
+                    <input
+                      value={reasonFor[item.id] || ''}
+                      onChange={(e) => setReasonFor((r) => ({ ...r, [item.id]: e.target.value }))}
+                      placeholder="Reference (e.g. Corsearch notice 2026-08-31)"
+                      style={{
+                        fontFamily: 'inherit', fontSize: 12, padding: '7px 9px',
+                        border: '1px solid #d7d0c8', borderRadius: 6, minWidth: 230,
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    disabled={galleryBusy === item.id}
+                    onClick={() => (hidden ? handleRestore(item) : handleHide(item))}
+                    style={{
+                      ...styles.btn,
+                      borderColor: hidden ? '#5c7856' : '#b0453a',
+                      color: hidden ? '#5c7856' : '#b0453a',
+                      cursor: galleryBusy === item.id ? 'default' : 'pointer',
+                      opacity: galleryBusy === item.id ? 0.5 : 1,
+                    }}
+                  >
+                    {galleryBusy === item.id ? '…' : hidden ? 'Restore' : 'Hide'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
       {/* Calibration */}
       <div style={styles.section}>

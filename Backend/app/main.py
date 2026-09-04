@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.models import (
     ContactRequest,
+    GallerySuspendRequest,
     ImportUrlRequest,
     PrintOrderIdsRequest,
     PrintRunOutcomeRequest,
@@ -58,6 +59,7 @@ from app.services.pdf_generator import generate_preview_pdf, generate_calibratio
 from app.services.storage import delete_finalized_output
 from app.services.email_delivery import (
     send_contact_email,
+    send_takedown_notice,
     send_customer_order_confirmation,
     send_order_notification,
 )
@@ -1378,7 +1380,10 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         if project_id:
             project = get_project_by_id(project_id)
         if not project and order.get("gallery_item_id"):
-            project = get_public_project_by_gallery_item(order["gallery_item_id"])
+            # include_suspended: an order paid for before the listing was taken
+            # down still has to be printed and shipped. Refusing here would
+            # strand a paying customer over a moderation action.
+            project = get_public_project_by_gallery_item(order["gallery_item_id"], include_suspended=True)
         if not project:
             raise HTTPException(status_code=404, detail=f"Could not resolve design for print order {order_id}.")
 
@@ -1450,6 +1455,73 @@ def admin_roll_print(request: RollPrintRequest, user_id: str = Depends(get_curre
         media_type="application/pdf",
         filename="mns_roll_print.pdf",
     )
+
+
+@app.get("/admin/gallery")
+def admin_list_gallery(user_id: str = Depends(get_current_user_id)):
+    """Every listing including suspended ones, each with its creator's current
+    live-suspension count so a reviewer can see a pattern rather than one row at
+    a time — that count is what Terms 4.5 escalates on."""
+    _require_admin(user_id)
+    from app.services.supabase_db import list_gallery_items_for_admin, count_suspensions_by_user
+
+    items = list_gallery_items_for_admin()
+    strikes: dict[str, int] = {}
+    for item in items:
+        owner = item.get("user_id")
+        if owner and owner not in strikes:
+            strikes[owner] = count_suspensions_by_user(owner)
+    for item in items:
+        item["creator_suspension_count"] = strikes.get(item.get("user_id"), 0)
+    return items
+
+
+@app.post("/admin/gallery/{item_id}/suspend")
+def admin_suspend_gallery_item(
+    item_id: str,
+    request: GallerySuspendRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Hide a listing. Never deletes: the row is evidence under the litigation
+    hold and the source of the strike count."""
+    _require_admin(user_id)
+    from app.services.supabase_db import suspend_gallery_item, get_user_email
+
+    item = suspend_gallery_item(item_id, request.reason, user_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+
+    # Notification is best-effort and reported honestly. The listing is already
+    # down; failing the request here would leave the operator unsure whether it
+    # worked and tempted to click again.
+    notified = False
+    notify_error = None
+    if request.notify:
+        owner = item.get("user_id")
+        email = get_user_email(owner) if owner else None
+        if not email:
+            notify_error = "Could not find an email address for this account."
+        else:
+            try:
+                notified = send_takedown_notice(email, item.get("title"), request.reason)
+                if not notified:
+                    notify_error = "Email is not configured on this server."
+            except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+                logger.exception("Takedown notice failed for %s", item_id)
+                notify_error = f"Email failed to send: {exc}"
+
+    return {"item": item, "notified": notified, "notify_error": notify_error}
+
+
+@app.post("/admin/gallery/{item_id}/restore")
+def admin_restore_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id)):
+    _require_admin(user_id)
+    from app.services.supabase_db import restore_gallery_item
+
+    item = restore_gallery_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    return {"item": item}
 
 
 @app.get("/admin/print-orders")

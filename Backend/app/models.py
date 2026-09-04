@@ -409,3 +409,11 @@ class UpdateExpenseRequest(BaseModel):
     amount_cents: Optional[int] = None
     incurred_on: Optional[str] = None
     notes: Optional[str] = None
+
+
+class GallerySuspendRequest(BaseModel):
+    """Admin takedown. `reason` is for our own records and the notice's
+    reference line — it should name the complaint, never characterize the
+    listing as infringing."""
+    reason: str | None = None
+    notify: bool = True

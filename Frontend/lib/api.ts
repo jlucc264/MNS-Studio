@@ -1659,3 +1659,56 @@ export async function downloadRollPrintPdf(
   a.click()
   URL.revokeObjectURL(url)
 }
+
+// ── Gallery takedowns (admin) ────────────────────────────────────────────────
+
+export type AdminGalleryItem = GalleryItem & {
+  user_id?: string | null
+  suspended_at?: string | null
+  suspended_reason?: string | null
+  suspended_by?: string | null
+  creator_suspension_count?: number
+}
+
+export type SuspendResult = {
+  item: AdminGalleryItem
+  /** Whether the §512(g) notice actually reached the creator. */
+  notified: boolean
+  /** Why it didn't, when it didn't. The takedown still applied either way. */
+  notify_error: string | null
+}
+
+/** Every listing including suspended ones. Admin only. */
+export async function adminListGallery(accessToken: string): Promise<AdminGalleryItem[]> {
+  const res = await fetch(`${API_BASE}/admin/gallery`, { headers: authHeaders(accessToken) })
+  if (!res.ok) throw new Error('Could not load gallery listings')
+  return res.json()
+}
+
+/** Hide a listing. Never deletes — the row is retained as evidence. */
+export async function adminSuspendGalleryItem(
+  itemId: string,
+  reason: string,
+  notify: boolean,
+  accessToken: string,
+): Promise<SuspendResult> {
+  const res = await fetch(`${API_BASE}/admin/gallery/${encodeURIComponent(itemId)}/suspend`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ reason: reason || null, notify }),
+  })
+  if (!res.ok) throw new Error('Could not hide this listing')
+  return res.json()
+}
+
+export async function adminRestoreGalleryItem(
+  itemId: string,
+  accessToken: string,
+): Promise<{ item: AdminGalleryItem }> {
+  const res = await fetch(`${API_BASE}/admin/gallery/${encodeURIComponent(itemId)}/restore`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not restore this listing')
+  return res.json()
+}

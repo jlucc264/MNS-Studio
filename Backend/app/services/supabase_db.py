@@ -223,15 +223,20 @@ def list_gallery_items(
     offset: int = 0,
 ) -> list[dict]:
     order = "like_count.desc,created_at.desc" if sort == "popular" else "created_at.desc"
+    # Suspended listings are invisible everywhere public. PostgREST's `is.null`
+    # is the filter, not a Python-side skip, so a suspended row never even
+    # reaches this process and cannot leak through a code path that forgets to
+    # check. Rows predating the column have NULL and are unaffected.
+    suspended_filter = "&suspended_at=is.null"
     if search:
         # Filtering happens in Python below, after the fetch — offset-based
         # paging doesn't compose with that, so search gets one wide fetch
         # instead of a page at a time. Result sets are small enough that this
         # stays fast, and it means search can find things a normal page-1
         # fetch wouldn't reach.
-        params = f"order={order}&limit=500&select=*"
+        params = f"order={order}&limit=500&select=*{suspended_filter}"
     else:
-        params = f"order={order}&limit={limit}&offset={offset}&select=*"
+        params = f"order={order}&limit={limit}&offset={offset}&select=*{suspended_filter}"
     result = _request("GET", "/gallery_items", params=params)
     items = result if isinstance(result, list) else []
 
@@ -259,16 +264,23 @@ def list_gallery_items_by_creator(creator_user_id: str, viewer_user_id: str | No
     encoded = quote(creator_user_id, safe="")
     result = _request(
         "GET", "/gallery_items",
-        params=f"user_id=eq.{encoded}&order=created_at.desc&select=*",
+        # Same filter as the main feed — a suspended listing must not survive on
+        # its creator's profile, which is a public page reachable by slug.
+        params=f"user_id=eq.{encoded}&suspended_at=is.null&order=created_at.desc&select=*",
     )
     items = result if isinstance(result, list) else []
     liked_ids = _liked_gallery_ids(viewer_user_id)
     return [_normalize_gallery_item(item, liked_ids) for item in items]
 
 
-def get_gallery_item(item_id: str, user_id: str | None = None) -> dict | None:
+def get_gallery_item(item_id: str, user_id: str | None = None, include_suspended: bool = False) -> dict | None:
+    """Public by default: a suspended listing reads as gone.
+
+    include_suspended is for admin review and for fulfilling orders that were
+    placed before the takedown — those still have to print."""
     encoded = quote(item_id, safe="")
-    result = _request("GET", "/gallery_items", params=f"id=eq.{encoded}&select=*")
+    suspended = "" if include_suspended else "&suspended_at=is.null"
+    result = _request("GET", "/gallery_items", params=f"id=eq.{encoded}&select=*{suspended}")
     if not isinstance(result, list) or not result:
         return None
     liked_ids = _liked_gallery_ids(user_id)
@@ -290,7 +302,10 @@ def resolve_root_creator_id(gallery_item_id: str, _seen: set | None = None) -> s
     if gallery_item_id in seen:
         return None
     seen.add(gallery_item_id)
-    item = get_gallery_item(gallery_item_id)
+    # include_suspended: this walks the remix chain to attribute earnings. A
+    # taken-down ancestor must not silently break the payout for a sale that
+    # already happened.
+    item = get_gallery_item(gallery_item_id, include_suspended=True)
     if not item:
         return None
     parent_id = item.get("parent_gallery_item_id")
@@ -322,9 +337,16 @@ def delete_gallery_item(item_id: str, user_id: str) -> bool:
     return result is not None
 
 
-def get_public_project_by_gallery_item(item_id: str) -> dict | None:
+def get_public_project_by_gallery_item(item_id: str, include_suspended: bool = False) -> dict | None:
+    """The design behind a listing. Filtered by default — otherwise hiding a
+    listing leaves its design fetchable by direct id, which is most of the point
+    of hiding it.
+
+    include_suspended=True is passed by roll-print fulfillment: an order paid for
+    before the takedown still has to be printed and shipped."""
     encoded = quote(item_id, safe="")
-    item_result = _request("GET", "/gallery_items", params=f"id=eq.{encoded}&select=project_id")
+    suspended = "" if include_suspended else "&suspended_at=is.null"
+    item_result = _request("GET", "/gallery_items", params=f"id=eq.{encoded}&select=project_id{suspended}")
     if not isinstance(item_result, list) or not item_result:
         return None
     project_id = item_result[0].get("project_id")
@@ -561,7 +583,10 @@ def create_notification(
     actor_user_id: str | None,
 ) -> None:
     if not gallery_item_title and gallery_item_id:
-        item = get_gallery_item(gallery_item_id, user_id=None)
+        # include_suspended: notifications denormalize the title precisely so
+        # history survives the item changing; a takedown should not blank out
+        # notifications about sales that already happened.
+        item = get_gallery_item(gallery_item_id, user_id=None, include_suspended=True)
         gallery_item_title = item.get("title") if item else None
     _request("POST", "/notifications", body={
         "user_id": user_id,
@@ -850,3 +875,95 @@ def update_expense(expense_id: str, fields: dict) -> None:
 def delete_expense(expense_id: str) -> None:
     encoded = quote(expense_id, safe="")
     _request("DELETE", "/expenses", params=f"id=eq.{encoded}")
+
+
+# ── Gallery takedowns ─────────────────────────────────────────────────────────
+#
+# Hiding is a column, never a DELETE. delete_gallery_item still exists for
+# genuine user-initiated removal, but a takedown must leave the row intact: it
+# may have to be produced under the litigation hold from the Aug 2026 notices,
+# and the strike count that Terms 4.5 relies on is derived from these rows. A
+# hard delete destroys both.
+
+def list_gallery_items_for_admin(include_suspended: bool = True) -> list[dict]:
+    """Every listing, suspended ones included, newest first. Admin review needs
+    to see exactly what the public cannot."""
+    params = "order=created_at.desc&select=*&limit=1000"
+    if not include_suspended:
+        params += "&suspended_at=is.null"
+    result = _request("GET", "/gallery_items", params=params)
+    items = result if isinstance(result, list) else []
+    return [_normalize_gallery_item(item, set()) for item in items]
+
+
+def suspend_gallery_item(item_id: str, reason: str | None, admin_user_id: str) -> dict | None:
+    """Hide a listing. Idempotent on the timestamp — re-suspending an already
+    suspended item refreshes the reason without moving suspended_at, so the
+    record keeps saying when it actually came down."""
+    encoded = quote(item_id, safe="")
+    existing = get_gallery_item(item_id, include_suspended=True)
+    if existing is None:
+        return None
+    body = {
+        "suspended_reason": (reason or "").strip()[:500] or None,
+        "suspended_by": admin_user_id,
+    }
+    if not existing.get("suspended_at"):
+        body["suspended_at"] = datetime.now(timezone.utc).isoformat()
+    result = _request("PATCH", "/gallery_items", body=body, params=f"id=eq.{encoded}")
+    if isinstance(result, list) and result:
+        return _normalize_gallery_item(result[0], set())
+    return None
+
+
+def restore_gallery_item(item_id: str) -> dict | None:
+    """Put a listing back. The reason is cleared with it — a restored listing
+    carrying a stale takedown note would misrepresent its status — but the
+    strike history lives in the takedown log, not here."""
+    encoded = quote(item_id, safe="")
+    body = {"suspended_at": None, "suspended_reason": None, "suspended_by": None}
+    result = _request("PATCH", "/gallery_items", body=body, params=f"id=eq.{encoded}")
+    if isinstance(result, list) and result:
+        return _normalize_gallery_item(result[0], set())
+    return None
+
+
+def count_suspensions_by_user(user_id: str) -> int:
+    """Currently-suspended listings for one account.
+
+    Deliberately a count of live suspensions, not lifetime strikes: a listing
+    restored after a counter-notice or proof of authorization should stop
+    counting against the account, which is what Terms 4.5 promises when it says
+    counter-notices are considered.
+    """
+    encoded = quote(user_id, safe="")
+    result = _request(
+        "GET", "/gallery_items",
+        params=f"user_id=eq.{encoded}&suspended_at=not.is.null&select=id",
+    )
+    return len(result) if isinstance(result, list) else 0
+
+
+def get_user_email(user_id: str) -> str | None:
+    """Look up an account's email via Supabase's auth admin API.
+
+    Auth lives outside PostgREST, so this bypasses _request and calls
+    /auth/v1/admin/users/{id} directly with the same service-role key. Returns
+    None rather than raising — a takedown must not fail because the notice
+    could not be addressed; the listing still comes down and the operator is
+    told the email did not send.
+    """
+    base = _base_url()
+    if not base:
+        return None
+    auth_base = base.replace("/rest/v1", "").rstrip("/")
+    url = f"{auth_base}/auth/v1/admin/users/{quote(user_id, safe='')}"
+    try:
+        request = Request(url, headers=_headers(), method="GET")
+        with urlopen(request, timeout=REST_TIMEOUT) as response:
+            payload = json.loads(response.read().decode())
+        email = payload.get("email")
+        return email if isinstance(email, str) and email else None
+    except (HTTPError, URLError, ValueError, KeyError) as exc:
+        logger.warning("Could not resolve email for user %s: %s", user_id, exc)
+        return None
