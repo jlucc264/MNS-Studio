@@ -646,6 +646,41 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
             {"type": "clear_background", "value": color_code, "to_code": replacement_code or ""},
         )
 
+
+# gpt-image-1 offers exactly these three shapes. Resolution is never the
+# constraint here — the largest canvas we print is 17in at 18 mesh, i.e. about
+# 306 stitches across, so even the short side of a 1024px generation is more
+# than three source pixels per stitch. Shape is the constraint: a square
+# generation for a 16x12in backgammon board or a 15x4in pillow has to be
+# cropped or stretched, and both lose the composition the user asked for.
+_GENERATION_SIZES = {
+    "1024x1024": 1.0,
+    "1536x1024": 1.5,
+    "1024x1536": 1024 / 1536,
+}
+
+
+def _generation_size(context: dict) -> str:
+    """Pick the offered shape closest to the canvas's own aspect ratio.
+
+    Compared in log space so that a canvas twice as wide as an option and one
+    half as wide are treated as equally wrong; a plain ratio difference would
+    quietly favour landscape on every portrait canvas.
+    """
+    try:
+        w = float(context.get("width_inches") or 0)
+        h = float(context.get("height_inches") or 0)
+    except (TypeError, ValueError):
+        return "1024x1024"
+    if w <= 0 or h <= 0:
+        return "1024x1024"
+
+    import math
+
+    target = math.log(w / h)
+    return min(_GENERATION_SIZES, key=lambda s: abs(math.log(_GENERATION_SIZES[s]) - target))
+
+
     if tool_name == "set_removal_mode":
         mode = tool_input["mode"]
         return f"Removal mode set to {mode}.", {"type": "set_removal_mode", "value": mode}
@@ -682,7 +717,7 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
                 prompt=(
                     f"Flat illustration style with clear, distinct colors — optimized for needlepoint conversion: {prompt}"
                 ),
-                size="1024x1024",
+                size=_generation_size(context),
                 quality="auto",
                 n=1,
             )
@@ -721,7 +756,7 @@ def _process_tool_call(tool_name: str, tool_input: dict, context: dict) -> tuple
                 model="gpt-image-1",
                 image=("source.png", io.BytesIO(png_bytes), "image/png"),
                 prompt=prompt,
-                size="1024x1024",
+                size=_generation_size(context),
             )
             img_b64 = response.data[0].b64_json
             raw_bytes = __import__("base64").b64decode(img_b64) if img_b64 else None
