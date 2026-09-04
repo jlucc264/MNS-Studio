@@ -690,6 +690,27 @@ export default function AdminPage() {
     }
   }
 
+  /** Records or corrects the reference on a listing that is already down.
+   *  Re-suspending refreshes the reason and deliberately does NOT move
+   *  suspended_at, so the record keeps saying when the listing actually came
+   *  down. Never notifies — the creator was told when it was hidden, and a
+   *  second email because an operator tidied their own notes would be noise. */
+  async function handleSaveReason(item: AdminGalleryItem) {
+    if (!session?.access_token) return
+    setGalleryBusy(item.id)
+    setGalleryError('')
+    setGalleryNotice('')
+    try {
+      await adminSuspendGalleryItem(item.id, reasonFor[item.id] ?? '', false, session.access_token)
+      setGalleryNotice('Reference saved. The takedown date is unchanged.')
+      await refreshGallery()
+    } catch {
+      setGalleryError('Could not save the reference.')
+    } finally {
+      setGalleryBusy(null)
+    }
+  }
+
   async function handleRestore(item: AdminGalleryItem) {
     if (!session?.access_token) return
     setGalleryBusy(item.id)
@@ -943,16 +964,25 @@ export default function AdminPage() {
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                  {!hidden && (
-                    <input
-                      value={reasonFor[item.id] || ''}
-                      onChange={(e) => setReasonFor((r) => ({ ...r, [item.id]: e.target.value }))}
-                      placeholder="Reference (e.g. Corsearch notice 2026-08-31)"
-                      style={{
-                        fontFamily: 'inherit', fontSize: 12, padding: '7px 9px',
-                        border: '1px solid #d7d0c8', borderRadius: 6, minWidth: 230,
-                      }}
-                    />
+                  <input
+                    value={reasonFor[item.id] ?? item.suspended_reason ?? ''}
+                    onChange={(e) => setReasonFor((r) => ({ ...r, [item.id]: e.target.value }))}
+                    placeholder="Reference (e.g. Corsearch notice 2026-08-31)"
+                    style={{
+                      fontFamily: 'inherit', fontSize: 12, padding: '7px 9px',
+                      border: '1px solid #d7d0c8', borderRadius: 6, minWidth: 230,
+                    }}
+                  />
+                  {hidden && (
+                    <button
+                      type="button"
+                      disabled={galleryBusy === item.id}
+                      onClick={() => handleSaveReason(item)}
+                      style={{ ...styles.btnSecondary, padding: '9px 14px', fontSize: 12 }}
+                      title="Record why this came down. Does not change the takedown date."
+                    >
+                      Save reason
+                    </button>
                   )}
                   <button
                     type="button"

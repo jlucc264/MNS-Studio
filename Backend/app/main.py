@@ -638,9 +638,17 @@ MAX_DRAFTS = 3
 def is_active_draft(project: dict) -> bool:
     return not bool(project.get("finalized") or project.get("pdf_url"))
 
-# Both off: the mechanism is complete and tested, the policy is not decided.
-# See the block in publish_gallery_item for what each one governs.
-ENFORCE_GALLERY_ORIGIN_RULE = False
+# The import split, live since 2026-09-04. A design made from an uploaded photo
+# can still be printed; it just cannot be published to the gallery. Both formal
+# legal actions against the shop concerned imported designs, so this closes the
+# path they came down while leaving the print business untouched.
+ENFORCE_GALLERY_ORIGIN_RULE = True
+
+# Grandfathering, John's call. Images written before provenance tracking existed
+# read as unknown, and that is most of the current gallery. Blocking them would
+# retroactively bar work that is very likely fine on the strength of a marker
+# that did not exist when it was made. New uploads are tagged from now on and
+# are caught; the back catalogue is left alone.
 BLOCK_UNKNOWN_ORIGIN = False
 
 
