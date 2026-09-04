@@ -37,3 +37,25 @@ services:
         value: MNS Studio <noreply@mns.studio>
       - key: FINALIZED_REPORT_RECIPIENT
         value: john@mns.studio
+      # Feature kill switch (app/services/suspension.py). Fail-closed: a
+      # feature is served only when its variable is explicitly one of
+      # 1/true/yes/on/enabled. Absent, empty or misspelled all mean suspended,
+      # which is why the whole site went dark by default when the switch
+      # shipped and no variables had been added yet.
+      #
+      # Read at call time, so changing one in the dashboard and restarting is
+      # enough — no deploy, no code review. Recorded here because this file is
+      # documentation of intended config and these are now part of the
+      # permanent operational surface; the DASHBOARD REMAINS AUTHORITATIVE.
+      #
+      # State as of 2026-09-04: printing and imports open, gallery closed
+      # while the copyright review settles.
+      - key: CHECKOUT_ENABLED
+        value: "true"
+      - key: IMPORT_ENABLED
+        value: "true"
+      # Deliberately absent rather than "false": the switch fails closed, so
+      # not declaring it is the same as disabling it and cannot be flipped on
+      # by a typo. Add it set to true when the gallery reopens.
+      # - key: GALLERY_ENABLED
+      #   value: "true"
