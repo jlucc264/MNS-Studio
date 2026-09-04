@@ -806,9 +806,13 @@ export default function AdminPage() {
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Gallery — copyright review</div>
         <div style={styles.sectionDesc}>
-          Hiding is never a delete. The row is kept as evidence under the litigation hold and is
-          what the strike count in Terms 4.5 is derived from. A hidden listing disappears from the
-          feed, its creator&rsquo;s profile, and direct links — but orders already paid for still print.
+          Hiding is never a delete. The row is kept as evidence under the litigation hold. A hidden
+          listing disappears from the feed, its creator&rsquo;s profile, and direct links — but orders
+          already paid for still print. <strong>The per-creator count is every listing currently
+          hidden, whatever the cause.</strong> Terms 4.5 counts only removals that followed a valid
+          infringement notice, so a creator whose work you pulled as a precaution has no strikes
+          under the policy. Record the complaint in the reference field when there was one — that is
+          what tells the two apart later.
         </div>
 
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
@@ -886,7 +890,7 @@ export default function AdminPage() {
                   <div style={{ fontSize: 11, color: '#7A817A', marginTop: 3 }}>
                     {item.submitter_name || 'unknown creator'}
                     {typeof item.creator_suspension_count === 'number' && item.creator_suspension_count > 0 && (
-                      <span style={{ color: '#b0453a' }}>
+                      <span style={{ color: '#b0453a' }} title="Counts every listing currently hidden on this account, whatever the cause. Terms 4.5 counts only removals that followed a valid infringement notice, so this is not the strike count.">
                         {' '}· {item.creator_suspension_count} hidden on this account
                       </span>
                     )}
