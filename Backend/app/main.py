@@ -688,7 +688,7 @@ def get_gallery(
     return list_gallery_items(search=search, sort=sort, user_id=user_id, limit=min(limit, 60), offset=max(offset, 0))
 
 
-def _screen_listing(item_id: str, image_url: str) -> None:
+def _screen_listing(item_id: str, image_url: str, title: str = "") -> None:
     """Screen one listing and store the result. Swallows everything.
 
     Runs after the response is sent. A publish must never fail, slow down, or
@@ -700,7 +700,7 @@ def _screen_listing(item_id: str, image_url: str) -> None:
         from app.services.image_matching import screen_image
         from app.services.supabase_db import save_ip_check
 
-        save_ip_check(item_id, screen_image(image_url))
+        save_ip_check(item_id, screen_image(image_url, title))
     except Exception:  # noqa: BLE001 - background work, nothing to surface to
         logger.exception("Copyright screening failed for gallery item %s", item_id)
 
@@ -741,7 +741,9 @@ def publish_gallery_item(
     # Screen the new listing for copies. Queued rather than awaited: this is a
     # review aid, and it never gates publication.
     if result.get("id") and result.get("preview_image_url"):
-        background.add_task(_screen_listing, result["id"], result["preview_image_url"])
+        background.add_task(
+            _screen_listing, result["id"], result["preview_image_url"], result.get("title") or "",
+        )
 
     return result
 
@@ -1569,7 +1571,7 @@ def admin_screen_gallery(rescreen: bool = False, limit: int = 25, user_id: str =
     if not is_configured():
         raise HTTPException(
             status_code=503,
-            detail="Image screening is not configured. Set GOOGLE_VISION_API_KEY on the server.",
+            detail="Image screening is not configured. Set ANTHROPIC_API_KEY on the server.",
         )
 
     existing = list_ip_checks()
@@ -1583,7 +1585,7 @@ def admin_screen_gallery(rescreen: bool = False, limit: int = 25, user_id: str =
 
     screened, flagged, failed = 0, 0, 0
     for item in pending:
-        result = screen_image(item["preview_image_url"])
+        result = screen_image(item["preview_image_url"], item.get("title") or "")
         save_ip_check(item["id"], result)
         screened += 1
         if result.get("status") == "flagged":
@@ -1616,7 +1618,7 @@ def admin_screen_gallery_item(item_id: str, user_id: str = Depends(get_current_u
     if not item.get("preview_image_url"):
         raise HTTPException(status_code=422, detail="This listing has no preview image to screen.")
 
-    result = screen_image(item["preview_image_url"])
+    result = screen_image(item["preview_image_url"], item.get("title") or "")
     save_ip_check(item_id, result)
     return {"ip_check": {"gallery_item_id": item_id, "status": result.get("status"), "result": result}}
 

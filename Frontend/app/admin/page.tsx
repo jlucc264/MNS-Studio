@@ -706,13 +706,13 @@ export default function AdminPage() {
     }
   }
 
-  async function handleScreenAll() {
+  async function handleScreenAll(rescreen = false) {
     if (!session?.access_token) return
     setScreenBusy(true)
     setGalleryError('')
     setGalleryNotice('')
     try {
-      const r = await adminScreenGallery(session.access_token, { limit: 25 })
+      const r = await adminScreenGallery(session.access_token, { limit: 25, rescreen })
       // Report failures separately from clears. An image the API could not read
       // is unscreened, and rolling it into "checked" would overstate coverage.
       const parts = [`Screened ${r.screened}.`, `${r.flagged} flagged.`]
@@ -805,15 +805,26 @@ export default function AdminPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
           <button
             type="button"
-            onClick={handleScreenAll}
+            onClick={() => handleScreenAll(false)}
             disabled={screenBusy}
             style={{ ...styles.btnSecondary, ...(screenBusy ? styles.btnDisabled : {}) }}
           >
-            {screenBusy ? 'Screening…' : 'Run copy screening (25)'}
+            {screenBusy ? 'Screening…' : 'Screen unscreened (25)'}
           </button>
-          <span style={{ fontSize: 11, color: '#7A817A', maxWidth: 420, lineHeight: 1.45 }}>
-            Compares each preview against images on the web. Flags are a prompt to look,
-            never a verdict — generic patterns match constantly.
+          {/* Needed whenever the screening itself changes: existing rows are
+              results from the previous version, and "unscreened" skips them. */}
+          <button
+            type="button"
+            onClick={() => handleScreenAll(true)}
+            disabled={screenBusy}
+            style={{ ...styles.btnSecondary, ...(screenBusy ? styles.btnDisabled : {}) }}
+          >
+            Re-screen next 25
+          </button>
+          <span style={{ fontSize: 11, color: '#7A817A', maxWidth: 440, lineHeight: 1.45 }}>
+            Reads each design and flags recognisable characters, brands, team and Greek-letter
+            marks, and lyrics. A flag is a prompt to look, never a verdict. It does not catch a
+            design traced from another maker&rsquo;s canvas — that still needs your eye.
           </span>
         </div>
 
@@ -876,13 +887,11 @@ export default function AdminPage() {
                     if (check.status === 'clear') {
                       return (
                         <div style={{ fontSize: 11, color: '#7A817A', marginTop: 6 }}>
-                          Screened, nothing found{check.best_guess ? ` · reads as "${check.best_guess}"` : ''}
+                          Screened, subject looks generic{check.best_guess ? ` · ${check.best_guess}` : ''}
                         </div>
                       )
                     }
                     const dismissed = Boolean(check.dismissed_at)
-                    const entities = check.result?.entities ?? []
-                    const pages = check.result?.pages ?? []
                     return (
                       <div
                         style={{
@@ -895,26 +904,15 @@ export default function AdminPage() {
                       >
                         <div style={{ fontSize: 11, fontWeight: 700, color: dismissed ? '#7A817A' : '#8a5a28' }}>
                           {dismissed ? 'Flag reviewed and dismissed' : 'Flagged for review'}
-                          {check.best_guess ? ` · reads as "${check.best_guess}"` : ''}
                         </div>
-                        {entities.length > 0 && (
-                          <div style={{ fontSize: 11, color: '#5B635C', marginTop: 3 }}>
-                            Named subject: {entities.map((e) => e.name).join(', ')}
+                        {check.best_guess && (
+                          <div style={{ fontSize: 12, color: '#2D332F', marginTop: 3 }}>
+                            {check.best_guess}
                           </div>
                         )}
-                        {pages.length > 0 && (
-                          <div style={{ fontSize: 11, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            {pages.slice(0, 3).map((pg) => (
-                              <a
-                                key={pg.url}
-                                href={pg.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ color: '#5c7856' }}
-                              >
-                                {pg.title || pg.url}
-                              </a>
-                            ))}
+                        {check.detail && (
+                          <div style={{ fontSize: 11, color: '#5B635C', marginTop: 3, lineHeight: 1.45 }}>
+                            {check.detail}
                           </div>
                         )}
                         {!dismissed && (

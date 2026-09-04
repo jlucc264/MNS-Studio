@@ -179,11 +179,14 @@ create table if not exists public.expenses (
   notes text
 );
 
--- Reverse-image screening results, one current row per listing (hence the
+-- Copyright screening results, one current row per listing (hence the
 -- gallery_item_id primary key, upserted on re-check rather than appended).
 -- Added Sep 2026 after a title-by-title review missed a plainly recognisable
 -- licensed character for two weeks: safe harbour turns on acting once you are
 -- aware, so the screening exists to make us aware before a claimant is.
+-- Schema is unchanged from the original reverse-image-search implementation
+-- that this replaced, so swapping the engine needed no migration; best_guess
+-- now holds the identified subject rather than a search engine's label.
 -- status is flagged | clear | error | not_configured. "error" deliberately
 -- does NOT mean clear — an unscreened listing must not read as a checked one.
 -- dismissed_at records that a human looked and judged it fine; the row is kept

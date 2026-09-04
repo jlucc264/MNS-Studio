@@ -997,7 +997,7 @@ def save_ip_check(gallery_item_id: str, result: dict) -> dict | None:
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "status": (result.get("status") or "error")[:32],
         "detail": (result.get("detail") or "")[:500] or None,
-        "best_guess": (result.get("best_guess") or "")[:160] or None,
+        "best_guess": (result.get("subject") or "")[:300] or None,
         "result": result,
         "dismissed_at": None,
         "dismissed_by": None,

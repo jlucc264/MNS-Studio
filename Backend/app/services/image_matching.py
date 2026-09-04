@@ -1,187 +1,144 @@
-"""Reverse-image screening for gallery listings, via Google Vision web detection.
+"""Copyright screening for gallery listings, using Claude's vision.
 
-Why this exists: the Aug/Sep 2026 complaints were all discovered by someone
-else first — a designer recognising her own canvas, a rights holder's agent,
-a community member. Safe harbour turns on acting when you become aware of a
-problem, so the cheapest thing we can do is become aware earlier than the
-claimant. Reading titles by hand missed a plainly recognisable Lightning
-McQueen for two weeks, which is the argument for automating it.
+Why this exists: every complaint so far was found by someone else first — a
+designer recognising her own canvas, a rights holder's agent, a community
+member. Safe harbour turns on acting once you are aware, so the cheapest move
+available is to become aware before the claimant does. Reading titles by hand
+is not that; it missed a plainly recognisable Lightning McQueen for two weeks
+while five vaguer listings sat flagged.
 
-Two signals come back from one call, and they catch different things:
+**Why not reverse image search.** This was first built on Google Vision web
+detection and measured against ten listings we already knew were problems. It
+caught two. It read the Cars canvas as "luxury vehicle", the Frida portrait and
+the Adirondack chair as "cross-stitch", and the lightsabers as "pattern" — it
+was describing the *medium*, because a stitch rendering on a visible grid is
+what dominates the picture. Meanwhile it flagged dog breeds and "digital
+illustration". Reverse image search answers "does this picture exist
+elsewhere", but the question that matters here is "does this design depict
+something that belongs to someone", which is recognition, not matching. Asking
+a vision model that question directly caught eight of nine.
 
-  * **Matching images** catch a *traced commercial canvas* — the Adirondack
-    chair case, where the design is someone's for-sale artwork redrawn. Note
-    these will hit less often than you'd expect: what we submit is our own
-    stitch-grid rendering, not the source photo, so an exact match only lands
-    when the original itself is findable at similar framing.
+**Why no web search.** Adding the web search tool was measured too: on the one
+listing it was meant to catch (a chair traced from a canvas still for sale) it
+ran eight searches, cost roughly twenty times a plain call, and still returned
+clear. Search returns text snippets, and confirming that kind of copy requires
+*looking* at the candidate product photos. That case stays a known gap, handled
+by a person spot-checking anything whose composition reads like a product
+rather than a drawing.
 
-  * **Web entities and the best-guess label** catch a *character or brand* —
-    the Miffy and Cars cases. Vision names the subject ("Lightning McQueen"),
-    which is precisely the signal a title never gives you when the listing is
-    called "LMQ Cars Canvas". In practice this is the higher-yield half for
-    this gallery, and it is why we do not simply threshold on match counts.
-
-Nothing here blocks a publish. Generic patterns produce false hits constantly
-(every listing is legitimately "needlepoint"), so the output is a flag for a
-person to judge, recorded against the listing for the reviewer to see.
+Nothing here blocks a publish and nothing is auto-hidden. The output is a
+prompt for a person to look, and the judgement stays with the operator.
 """
 
-import json
 import logging
 import os
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-VISION_ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
-VISION_TIMEOUT = 20
+MODEL = "claude-opus-5"
 
-# How many of each list we keep. The API returns far more than a reviewer will
-# ever click, and the row is stored per listing, so keep it small.
-MAX_ENTITIES = 8
-MAX_MATCHES = 6
-MAX_PAGES = 6
+# Enough headroom for adaptive thinking plus a three-field answer. Measured
+# completions land near 300 tokens.
+MAX_TOKENS = 1024
 
-# An entity has to clear this to be worth showing. Vision scores are not
-# probabilities and drift by subject; this is tuned to admit named characters
-# and brands while dropping the long tail of vague nouns.
-ENTITY_SCORE_FLOOR = 0.55
+# Screening is a judgement call on a small image, not a research task. Medium
+# is what the accuracy above was measured at; raising it costs more per listing
+# for no observed gain.
+EFFORT = "medium"
 
-# Terms every listing here legitimately matches. Without this filter each of
-# the 89 listings flags on itself and the queue becomes noise the operator
-# learns to ignore, which is worse than no screening at all.
-GENERIC_TERMS = {
-    "needlepoint", "cross-stitch", "cross stitch", "embroidery", "stitch",
-    "needlework", "pattern", "pixel art", "canvas", "textile", "craft",
-    "art", "design", "drawing", "illustration", "image", "picture",
-    "graphics", "font", "line", "square", "rectangle", "circle", "pattern",
-    "thread", "yarn", "sewing", "quilt", "mosaic", "beadwork", "handicraft",
-    "symmetry", "material", "product", "brand", "logo", "text", "paper",
-}
+SYSTEM = """You screen needlepoint designs for a small shop before they are published.
+
+The images are low-resolution stitch renderings on a visible grid. Look past the
+medium and judge the underlying subject: the grid and the blocky pixels are how
+every design here looks and say nothing about whether it is a copy.
+
+Flag a design when it depicts intellectual property belonging to someone else:
+a fictional character, a logo or brand, a sports team or university mark, a
+Greek-letter organisation, song lyrics or a distinctive quoted phrase, a
+recognisable artwork or portrait of a real person, or a design that is clearly
+a specific commercial product rather than a generic rendering of its subject.
+
+Clear a design when its subject is generic and belongs to nobody: a lobster, a
+lemon, a plain monogram, an ordinary chair, a sailboat, a house, an initial, a
+stripe or border pattern. Being well drawn does not make something someone
+else's. A listing title that names a franchise does not by itself make the
+artwork a copy — judge the picture, and say so in the reason if the title is
+the only connection.
+
+Name the rights holder in `subject` whenever you can identify one, because the
+person reading this has to decide what to do and "some cartoon character" does
+not help them. Keep `reason` to one sentence."""
+
+
+class _Screening(BaseModel):
+    verdict: str = Field(description='Exactly "flag" or "clear".')
+    subject: str = Field(description="What the design actually depicts, naming the rights holder if identifiable.")
+    reason: str = Field(description="One sentence explaining the verdict.")
 
 
 def is_configured() -> bool:
-    return bool(os.getenv("GOOGLE_VISION_API_KEY", "").strip())
+    return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
 
 
-def _generic(description: str) -> bool:
-    d = description.strip().lower()
-    return d in GENERIC_TERMS or len(d) < 3
-
-
-def _call_vision(image_url: str) -> dict | None:
-    """One web-detection annotation. Returns None on any failure.
-
-    The image URI is handed to Google rather than the bytes: gallery previews
-    live in a public Supabase bucket, so this saves downloading and re-encoding
-    every image we screen.
-    """
-    key = os.getenv("GOOGLE_VISION_API_KEY", "").strip()
-    if not key:
-        return None
-
-    payload = {
-        "requests": [
-            {
-                "image": {"source": {"imageUri": image_url}},
-                "features": [{"type": "WEB_DETECTION", "maxResults": 20}],
-            }
-        ]
-    }
-
-    try:
-        req = Request(
-            f"{VISION_ENDPOINT}?key={key}",
-            data=json.dumps(payload).encode(),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urlopen(req, timeout=VISION_TIMEOUT) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:300]
-        logger.warning("Vision request failed: %s %s", exc.code, detail)
-        return None
-    except (OSError, URLError, ValueError) as exc:
-        logger.warning("Vision request failed: %s", exc)
-        return None
-
-    responses = body.get("responses") or []
-    if not responses:
-        return None
-    first = responses[0]
-    # Vision reports per-image problems in the body with a 200 status, so an
-    # unreachable or unreadable image surfaces here rather than as an HTTPError.
-    if first.get("error"):
-        logger.warning("Vision returned an error for %s: %s", image_url, first["error"])
-        return None
-    return first.get("webDetection") or {}
-
-
-def screen_image(image_url: str) -> dict:
-    """Screen one image. Always returns a record, never raises.
+def screen_image(image_url: str, title: str = "") -> dict:
+    """Screen one listing image. Always returns a record, never raises.
 
     status is one of:
       "flagged"        something a person should look at
-      "clear"          screened, nothing notable
-      "error"          the call failed; the listing is unscreened, not cleared
+      "clear"          screened, subject belongs to nobody
+      "error"          the call failed; the listing is UNSCREENED, not clear
       "not_configured" no API key on this server
+
+    The error/clear distinction is the important one. A screening that silently
+    reads as clear when it never ran is worse than no screening, because it
+    manufactures the belief that somebody looked.
     """
     if not image_url:
         return {"status": "error", "detail": "No preview image to screen."}
     if not is_configured():
-        return {"status": "not_configured", "detail": "GOOGLE_VISION_API_KEY is not set."}
+        return {"status": "not_configured", "detail": "ANTHROPIC_API_KEY is not set."}
 
-    web = _call_vision(image_url)
-    if web is None:
-        return {"status": "error", "detail": "Vision request failed; listing is unscreened."}
+    try:
+        import anthropic
 
-    entities = []
-    for e in web.get("webEntities") or []:
-        desc = (e.get("description") or "").strip()
-        score = e.get("score") or 0
-        if not desc or _generic(desc) or score < ENTITY_SCORE_FLOOR:
-            continue
-        entities.append({"name": desc, "score": round(float(score), 3)})
-        if len(entities) >= MAX_ENTITIES:
-            break
+        client = anthropic.Anthropic()
+        response = client.messages.parse(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            output_config={"effort": EFFORT},
+            system=SYSTEM,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "url", "url": image_url}},
+                        {"type": "text", "text": f'Listing title: "{title}"' if title else "Screen this design."},
+                    ],
+                }
+            ],
+            output_format=_Screening,
+        )
 
-    def urls(key: str, limit: int) -> list[str]:
-        return [i.get("url") for i in (web.get(key) or [])[:limit] if i.get("url")]
+        # A safety decline leaves the listing unscreened. Reported as an error
+        # rather than routed to a fallback model: a refusal on a needlepoint
+        # image is rare enough that a human looking at it is the better answer,
+        # and it keeps a beta parameter out of the publish path.
+        if response.stop_reason == "refusal":
+            return {"status": "error", "detail": "The model declined to screen this image."}
 
-    full_matches = urls("fullMatchingImages", MAX_MATCHES)
-    partial_matches = urls("partialMatchingImages", MAX_MATCHES)
+        parsed = response.parsed_output
+        if parsed is None:
+            return {"status": "error", "detail": "Screening returned nothing usable."}
 
-    pages = []
-    for p in (web.get("pagesWithMatchingImages") or [])[:MAX_PAGES]:
-        if p.get("url"):
-            pages.append({"url": p["url"], "title": (p.get("pageTitle") or "").strip()[:160]})
+        flagged = parsed.verdict.strip().lower().startswith("flag")
+        return {
+            "status": "flagged" if flagged else "clear",
+            "subject": parsed.subject.strip()[:300],
+            "detail": parsed.reason.strip()[:500],
+        }
 
-    best_guess = ""
-    guesses = web.get("bestGuessLabels") or []
-    if guesses:
-        best_guess = (guesses[0].get("label") or "").strip()
-
-    # Why either signal flags on its own: a matched image means the artwork
-    # exists elsewhere, and a named entity means the subject belongs to
-    # somebody. Requiring both would miss the Cars case (a hand-drawn character
-    # matches no image) and the Adirondack case (a traced canvas whose subject
-    # is just "chair").
-    reasons = []
-    if full_matches:
-        reasons.append(f"{len(full_matches)} matching image(s) found online")
-    if partial_matches:
-        reasons.append(f"{len(partial_matches)} partial match(es)")
-    if entities:
-        reasons.append("named subject: " + ", ".join(e["name"] for e in entities[:3]))
-
-    return {
-        "status": "flagged" if reasons else "clear",
-        "detail": "; ".join(reasons) if reasons else "Nothing notable found.",
-        "best_guess": best_guess,
-        "entities": entities,
-        "full_matches": full_matches,
-        "partial_matches": partial_matches,
-        "pages": pages,
-    }
+    except Exception as exc:  # noqa: BLE001 - every failure means "unscreened"
+        logger.exception("Screening failed for %s", image_url)
+        return {"status": "error", "detail": f"Screening failed: {type(exc).__name__}"}

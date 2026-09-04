@@ -1662,20 +1662,17 @@ export async function downloadRollPrintPdf(
 
 // ── Gallery takedowns (admin) ────────────────────────────────────────────────
 
-/** One reverse-image screening result. `error` means unscreened, NOT clear. */
+/** One copyright screening result. `error` means unscreened, NOT clear. */
 export type IpCheck = {
   gallery_item_id: string
   checked_at?: string | null
   status: 'flagged' | 'clear' | 'error' | 'not_configured'
+  /** One sentence explaining the verdict. */
   detail?: string | null
+  /** What the design depicts, naming the rights holder where one is identifiable. */
   best_guess?: string | null
   dismissed_at?: string | null
-  result?: {
-    entities?: { name: string; score: number }[]
-    full_matches?: string[]
-    partial_matches?: string[]
-    pages?: { url: string; title: string }[]
-  } | null
+  result?: { subject?: string; detail?: string } | null
 }
 
 export type AdminGalleryItem = GalleryItem & {
