@@ -1720,7 +1720,15 @@ export async function adminSuspendGalleryItem(
 export async function adminScreenGallery(
   accessToken: string,
   opts: { rescreen?: boolean; limit?: number } = {},
-): Promise<{ screened: number; flagged: number; failed: number; remaining: number }> {
+): Promise<{
+  screened: number
+  flagged: number
+  failed: number
+  /** Listings with no result at all. Always 0 once every listing has been screened once. */
+  remaining: number
+  /** Age of the least-recently-screened listing. The signal for whether a re-screen pass is finished. */
+  oldest_checked_at: string | null
+}> {
   const params = new URLSearchParams()
   if (opts.rescreen) params.set('rescreen', 'true')
   if (opts.limit != null) params.set('limit', String(opts.limit))

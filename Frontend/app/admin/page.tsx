@@ -718,6 +718,13 @@ export default function AdminPage() {
       const parts = [`Screened ${r.screened}.`, `${r.flagged} flagged.`]
       if (r.failed) parts.push(`${r.failed} could not be screened.`)
       if (r.remaining) parts.push(`${r.remaining} still unscreened — run again.`)
+      // On a re-screen every listing already has a row, so "remaining" is 0 and
+      // says nothing. What tells you whether the pass is done is how old the
+      // stalest result still is.
+      if (rescreen && r.oldest_checked_at) {
+        const d = new Date(r.oldest_checked_at)
+        parts.push(`Oldest result on file: ${d.toLocaleString()}. Keep going until that is current.`)
+      }
       setGalleryNotice(parts.join(' '))
       await refreshGallery()
     } catch (e) {

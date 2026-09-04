@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 import mimetypes
 import os
 import threading
@@ -1574,12 +1575,21 @@ def admin_screen_gallery(rescreen: bool = False, limit: int = 25, user_id: str =
             detail="Image screening is not configured. Set ANTHROPIC_API_KEY on the server.",
         )
 
+    run_started = datetime.now(timezone.utc).isoformat()
     existing = list_ip_checks()
-    items = list_gallery_items_for_admin()
-    pending = [
-        i for i in items
-        if i.get("preview_image_url") and (rescreen or i.get("id") not in existing)
-    ]
+    candidates = [i for i in list_gallery_items_for_admin() if i.get("preview_image_url")]
+
+    if rescreen:
+        # Least-recently-screened first. Without an ordering every rescreen run
+        # takes the same head of the list and repeats work already done — four
+        # clicks re-screened one batch four times and left the rest untouched
+        # while reporting success each time. Sorting by checked_at makes repeated
+        # runs walk the gallery, and it puts rows from a superseded screening
+        # engine (whose timestamps are by definition older) at the front, which
+        # is exactly the migration order you want.
+        pending = sorted(candidates, key=lambda i: (existing.get(i["id"]) or {}).get("checked_at") or "")
+    else:
+        pending = [i for i in candidates if i["id"] not in existing]
     if limit > 0:
         pending = pending[:limit]
 
@@ -1593,12 +1603,23 @@ def admin_screen_gallery(rescreen: bool = False, limit: int = 25, user_id: str =
         elif result.get("status") == "error":
             failed += 1
 
-    remaining = max(0, len([i for i in items if i.get("preview_image_url")]) - len(existing) - screened)
+    # Read back from the table rather than doing arithmetic on the batch size,
+    # so these stay true even if a save failed mid-run.
+    after = list_ip_checks()
+    remaining = sum(1 for i in candidates if i["id"] not in after)
+
+    # A re-screen has no natural "remaining": every listing already has a row,
+    # and counting rows older than this run just re-counts the previous batch on
+    # the next click. The honest signal is the age of the least-recently
+    # screened listing — when that is current, the pass is finished.
+    stamps = [(after.get(i["id"]) or {}).get("checked_at") for i in candidates]
+    oldest = min((t for t in stamps if t), default=None)
     return {
         "screened": screened,
         "flagged": flagged,
         "failed": failed,
-        "remaining": 0 if rescreen else remaining,
+        "remaining": remaining,
+        "oldest_checked_at": oldest,
     }
 
 
