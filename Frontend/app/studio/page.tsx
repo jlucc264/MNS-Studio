@@ -3753,6 +3753,15 @@ function StudioPage() {
       setGalleryError('Add a piece name and try again.')
       return
     }
+    // The gallery can be dark while the studio and printing stay open. Say so
+    // before the work rather than after: the server would refuse this anyway,
+    // but only once the creator had written a title, chosen tags and ticked the
+    // acknowledgement.
+    if (siteStatus && !siteStatus.gallery_enabled) {
+      setGalleryError(siteStatus.message)
+      setGalleryStatus('error')
+      return
+    }
     if (!galleryAcknowledged) {
       setGalleryStatus('error')
       setGalleryError('Acknowledge the disclaimer before sharing.')
@@ -5997,6 +6006,9 @@ function StudioPage() {
                     </span>
                   )}
                 </div>
+                {siteStatus && !siteStatus.gallery_enabled && (
+                  <MaintenanceNote message={siteStatus.message} />
+                )}
                 <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#3f382f', lineHeight: 1.35 }}>
                   <input
                     type="checkbox"
@@ -6015,14 +6027,22 @@ function StudioPage() {
                   <button
                     type="button"
                     onClick={() => void handlePublishGalleryItem()}
-                    disabled={galleryStatus === 'posting' || !galleryAcknowledged}
+                    disabled={
+                      galleryStatus === 'posting'
+                      || !galleryAcknowledged
+                      || Boolean(siteStatus && !siteStatus.gallery_enabled)
+                    }
                     style={{
                       ...btnPrimary,
-                      opacity: galleryStatus === 'posting' || !galleryAcknowledged ? 0.55 : 1,
-                      cursor: galleryStatus === 'posting' || !galleryAcknowledged ? 'not-allowed' : 'pointer',
+                      opacity: galleryStatus === 'posting' || !galleryAcknowledged || (siteStatus && !siteStatus.gallery_enabled) ? 0.55 : 1,
+                      cursor: galleryStatus === 'posting' || !galleryAcknowledged || (siteStatus && !siteStatus.gallery_enabled) ? 'not-allowed' : 'pointer',
                     }}
                   >
-                    {galleryStatus === 'posting' ? 'Posting...' : 'Confirm & share'}
+                    {galleryStatus === 'posting'
+                      ? 'Posting...'
+                      : siteStatus && !siteStatus.gallery_enabled
+                        ? 'Gallery unavailable'
+                        : 'Confirm & share'}
                   </button>
                 </div>
               </>
