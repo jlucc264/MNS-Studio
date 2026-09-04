@@ -9,6 +9,8 @@ import { NavAccountControls } from '../../../components/NavAccountControls'
 import { NotificationBell } from '../../../components/NotificationBell'
 import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
+import MaintenanceScreen from '../../../components/MaintenanceScreen'
+import { useSiteStatus } from '../../../lib/siteStatus'
 import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
@@ -97,6 +99,7 @@ const inputStyle = {
 }
 
 export default function CreatorProfilePage() {
+  const { status: siteStatus, loading: siteStatusLoading } = useSiteStatus()
   const params = useParams()
   const slug = typeof params.slug === 'string' ? params.slug : ''
   const router = useRouter()
@@ -299,6 +302,12 @@ export default function CreatorProfilePage() {
   const bio = isOwnProfile
     ? (user?.user_metadata?.bio as string | undefined) ?? ''
     : ''
+
+  // Creator profiles are a public gallery surface; gate them with it.
+  if (siteStatusLoading) return <div style={{ minHeight: '100dvh', background: '#f5f1ea' }} />
+  if (siteStatus && !siteStatus.gallery_enabled) {
+    return <MaintenanceScreen title="The gallery is under maintenance" message={siteStatus.message} />
+  }
 
   return (
     <div style={{ minHeight: '100dvh', background: '#f5f1ea', color: '#3f382f' }}>

@@ -74,6 +74,7 @@ from app.services.canvas_pricing import (
     STANDARD_MAX_SHORT_IN,
 )
 from app.services.auth import get_current_user_id, get_optional_user_id
+from app.services.suspension import require_enabled, site_status
 from app.services.supabase_storage import download_from_supabase_storage, upload_file_to_supabase, upload_pdf_to_supabase, upload_png_to_supabase
 from app.services.supabase_db import (
     list_projects,
@@ -371,7 +372,7 @@ def upload(file: UploadFile = File(...)):
     }
 
 
-@app.post("/import-url")
+@app.post("/import-url", dependencies=[Depends(require_enabled("import"))])
 def import_url(request: ImportUrlRequest):
     try:
         image_url = durable_image_url(save_remote_image(request.image_url), prefix="source-images")
@@ -386,7 +387,7 @@ def import_url(request: ImportUrlRequest):
         "source": "remote_url",
     }
 
-@app.post("/visualize")
+@app.post("/visualize", dependencies=[Depends(require_enabled("import"))])
 def visualize(request: VisualizeRequest):
     _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
 
@@ -460,7 +461,7 @@ def finalize(request: FinalizeRequest, user_id: str | None = Depends(get_optiona
         internal_pdf_supabase_path=internal_supabase_path,
     )
 
-@app.post("/recolor", response_model=RecolorResponse)
+@app.post("/recolor", response_model=RecolorResponse, dependencies=[Depends(require_enabled("import"))])
 def recolor(request: RecolorRequest):
     _validate_stitch_dimensions(request.stitch_width, request.stitch_height)
 
@@ -486,7 +487,7 @@ def recolor(request: RecolorRequest):
     )
 
 
-@app.post("/import-stitchly", response_model=ImportStitchlyResponse)
+@app.post("/import-stitchly", response_model=ImportStitchlyResponse, dependencies=[Depends(require_enabled("import"))])
 def import_stitchly(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".stitchly"):
         raise HTTPException(status_code=400, detail="Expected a .stitchly file.")
@@ -526,7 +527,7 @@ def import_stitchly(file: UploadFile = File(...)):
     )
 
 
-@app.post("/import-pattern-image", response_model=ImportPatternResponse)
+@app.post("/import-pattern-image", response_model=ImportPatternResponse, dependencies=[Depends(require_enabled("import"))])
 def import_pattern(request: ImportPatternRequest):
     try:
         cells, palette, stitch_width, stitch_height, snapped_color_count = import_pattern_image(
@@ -663,7 +664,16 @@ def remove_project(project_id: str, user_id: str = Depends(get_current_user_id))
 
 # ── Gallery ───────────────────────────────────────────────────────────────────
 
-@app.get("/gallery", response_model=list[GalleryItemResponse])
+@app.get("/site-status")
+def read_site_status():
+    """Which public features are live. Deliberately ungated and unauthenticated:
+    the frontend calls this to show a maintenance notice instead of letting a
+    503 surface as a broken page, so it has to answer even while everything else
+    is suspended."""
+    return site_status()
+
+
+@app.get("/gallery", response_model=list[GalleryItemResponse], dependencies=[Depends(require_enabled("gallery"))])
 def get_gallery(
     search: str = "",
     sort: str = "recent",
@@ -676,7 +686,7 @@ def get_gallery(
     return list_gallery_items(search=search, sort=sort, user_id=user_id, limit=min(limit, 60), offset=max(offset, 0))
 
 
-@app.post("/gallery", response_model=GalleryItemResponse, status_code=201)
+@app.post("/gallery", response_model=GalleryItemResponse, status_code=201, dependencies=[Depends(require_enabled("gallery"))])
 def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(get_current_user_id)):
     title = request.title.strip()
     if not title:
@@ -707,7 +717,7 @@ def publish_gallery_item(request: GalleryCreateRequest, user_id: str = Depends(g
     return result
 
 
-@app.post("/gallery/{item_id}/like", response_model=GalleryItemResponse)
+@app.post("/gallery/{item_id}/like", response_model=GalleryItemResponse, dependencies=[Depends(require_enabled("gallery"))])
 def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id)):
     result = toggle_gallery_like(item_id, user_id)
     if result is None:
@@ -718,7 +728,7 @@ def like_gallery_item(item_id: str, user_id: str = Depends(get_current_user_id))
     return result
 
 
-@app.post("/gallery/{item_id}/share", response_model=GalleryItemResponse)
+@app.post("/gallery/{item_id}/share", response_model=GalleryItemResponse, dependencies=[Depends(require_enabled("gallery"))])
 def share_gallery_item(item_id: str):
     result = increment_gallery_share(item_id)
     if result is None:
@@ -845,7 +855,7 @@ def save_project_sku(
     return {"image_url": image_url}
 
 
-@app.get("/gallery/creator/{slug}")
+@app.get("/gallery/creator/{slug}", dependencies=[Depends(require_enabled("gallery"))])
 def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_user_id)):
     result = get_creator_profile(slug, user_id=user_id)
     if result is None:
@@ -853,7 +863,7 @@ def get_gallery_creator(slug: str, user_id: str | None = Depends(get_optional_us
     return result
 
 
-@app.get("/gallery/creators")
+@app.get("/gallery/creators", dependencies=[Depends(require_enabled("gallery"))])
 def list_gallery_creators():
     """Public, unauthenticated — feeds the frontend sitemap so creator
     profile pages are submitted to Google directly instead of relying on
@@ -862,7 +872,7 @@ def list_gallery_creators():
     return list_creator_slugs()
 
 
-@app.get("/gallery/by-project/{project_id}")
+@app.get("/gallery/by-project/{project_id}", dependencies=[Depends(require_enabled("gallery"))])
 def get_gallery_by_project(project_id: str):
     result = get_gallery_item_by_project_id(project_id)
     if result is None:
@@ -885,7 +895,7 @@ def patch_gallery_item(item_id: str, request: GalleryCreateRequest, user_id: str
     return result
 
 
-@app.get("/gallery/{item_id}/project")
+@app.get("/gallery/{item_id}/project", dependencies=[Depends(require_enabled("gallery"))])
 def get_gallery_item_project(item_id: str):
     result = get_public_project_by_gallery_item(item_id)
     if result is None:
@@ -895,7 +905,7 @@ def get_gallery_item_project(item_id: str):
 
 # ── Checkout ──────────────────────────────────────────────────────────────────
 
-@app.post("/checkout/print-own", response_model=CheckoutResponse)
+@app.post("/checkout/print-own", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(get_current_user_id)):
     if not is_design_printable(request.width_inches, request.height_inches):
         raise HTTPException(status_code=422, detail="Design exceeds maximum printable size.")
@@ -923,7 +933,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
     return CheckoutResponse(client_secret=url)
 
 
-@app.post("/checkout/template/{item_id}", response_model=CheckoutResponse)
+@app.post("/checkout/template/{item_id}", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
     from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
     item = get_gallery_item(item_id)
@@ -942,7 +952,7 @@ def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_u
     return CheckoutResponse(client_secret=url)
 
 
-@app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse)
+@app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_print_gallery(
     item_id: str,
     tier_downgrade: bool = False,
@@ -975,7 +985,7 @@ def checkout_print_gallery(
     return CheckoutResponse(client_secret=url)
 
 
-@app.post("/checkout/cart", response_model=CheckoutResponse)
+@app.post("/checkout/cart", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_current_user_id)):
     from app.services.supabase_db import resolve_root_creator_id
     if not request.items:

@@ -128,6 +128,20 @@ add column if not exists canvas_margin_inches numeric;
 alter table public.print_orders
 add column if not exists tier_downgrade boolean not null default false;
 
+-- Soft takedown for the Sep 2026 copyright review. delete_gallery_item is a
+-- hard DELETE and there is no other takedown state, so removing a listing today
+-- destroys the row we may need to produce — under the litigation-hold
+-- obligation from the Corsearch/S&S notice, and to evidence the §512(i)
+-- repeat-infringer policy published in Terms §4.5. Hiding must therefore be a
+-- column, not a delete. suspended_reason is for our own records; it is never
+-- shown publicly, and per standing guidance should describe the complaint
+-- ("Corsearch notice 2026-08-31"), never characterize the listing as
+-- infringing.
+alter table public.gallery_items
+add column if not exists suspended_at timestamptz,
+add column if not exists suspended_reason text,
+add column if not exists suspended_by text;
+
 -- How the design was actually created ('blank' or 'import'), so the gallery
 -- publish flow can tag it correctly even if the studio session that created
 -- it ended and the draft was resumed later. Distinct from source_type, which

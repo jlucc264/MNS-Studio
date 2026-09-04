@@ -9,7 +9,7 @@ function resolveApiBase() {
   return 'http://localhost:8000'
 }
 
-const API_BASE = resolveApiBase()
+export const API_BASE = resolveApiBase()
 
 function jsonHeaders(accessToken?: string | null): Record<string, string> {
   return {

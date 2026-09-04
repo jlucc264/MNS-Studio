@@ -11,6 +11,7 @@ import {
   tierDowngradeMarginInches,
 } from '../lib/api'
 import CanvasMarginChoice from './CanvasMarginChoice'
+import { useSiteStatus } from '../lib/siteStatus'
 import { cartRead, cartRemove, cartSetQty, cartSetTierDowngrade, cartSubtotal, cartTotal, CART_SHIPPING_CENTS, type CartItem } from '../lib/cart'
 
 interface Props {
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady, pendingCents }: Props) {
+  const { status: siteStatus } = useSiteStatus()
   const [items, setItems] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -39,6 +41,13 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
   if (!open) return null
 
   async function handleCheckout() {
+    // Purchasing is suspended during the gallery review; the API refuses this
+    // regardless, so this only avoids surfacing a raw 503.
+    if (siteStatus && !siteStatus.checkout_enabled) {
+      setError(siteStatus.message)
+      return
+    }
+
     if (!accessToken) return
     setLoading(true)
     setError('')

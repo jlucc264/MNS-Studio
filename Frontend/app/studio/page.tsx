@@ -35,6 +35,8 @@ import { NotificationBell } from '../../components/NotificationBell'
 import { StudioTutorial, TUTORIAL_STORAGE_KEY, useTutorial } from '../../components/StudioTutorial'
 import { useAuth } from '../../components/AuthProvider'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
+import { useSiteStatus } from '../../lib/siteStatus'
+import { MaintenanceNote } from '../../components/MaintenanceScreen'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile, useIsTouch, useIsPhoneDevice, useIsLandscape } from '../../lib/useViewport'
 import {
@@ -607,6 +609,9 @@ function applySourceTypeDefaults(
 }
 
 function StudioPage() {
+  // Blank-canvas work stays available throughout; only importing an image and
+  // buying are gated. See lib/siteStatus.ts.
+  const { status: siteStatus } = useSiteStatus()
   const { session, user, signOut } = useAuth()
   const router = useRouter()
   const tutorial = useTutorial()
@@ -3491,6 +3496,14 @@ function StudioPage() {
 
 
   async function handleChatUpload(file: File, belt: boolean = false) {
+    // Import is suspended during the gallery review. Gated on the handler
+    // rather than the file input so drag-drop and paste are covered too; the
+    // API refuses these regardless, this only avoids a raw 503.
+    if (siteStatus && !siteStatus.import_enabled) {
+      // Returned rather than thrown: the caller renders this straight into the
+      // chat panel, which is where the user is looking.
+      return siteStatus.message
+    }
     setUploadError(null)
     setLoading(true)
     try {
@@ -3562,6 +3575,13 @@ function StudioPage() {
 
   async function handlePatternImportFile(file: File) {
     setUploadError(null)
+    // Import is suspended during the gallery review. Gated on the handler
+    // rather than the file input so drag-drop and paste are covered too; the
+    // API refuses these regardless, this only avoids a raw 503.
+    if (siteStatus && !siteStatus.import_enabled) {
+      setUploadError(siteStatus.message)
+      return
+    }
     setLoading(true)
     try {
       if (file.name.toLowerCase().endsWith('.stitchly')) {
@@ -3785,6 +3805,10 @@ function StudioPage() {
   }
 
   async function handlePrintOwnCheckout() {
+    if (siteStatus && !siteStatus.checkout_enabled) {
+      setUploadError(siteStatus.message)
+      return
+    }
     if (!session?.access_token) {
       setAuthPrompt('finalize')
       return
@@ -4256,8 +4280,19 @@ function StudioPage() {
               {beltEntryMode ? 'Design a belt' : 'Upload'}
             </h2>
             <p style={{ margin: '8px 0 0', color: '#8a8177', fontSize: 15 }}>
-              {beltEntryMode ? 'Start with a photo, or begin from a blank belt.' : 'Start with a photo, screenshot, or artwork file.'}
+              {siteStatus && !siteStatus.import_enabled
+                ? 'Start from a blank canvas — importing is paused right now.'
+                : beltEntryMode
+                  ? 'Start with a photo, or begin from a blank belt.'
+                  : 'Start with a photo, screenshot, or artwork file.'}
             </p>
+            {siteStatus && !siteStatus.import_enabled && (
+              // The handlers refuse imports regardless; this stops the panel
+              // inviting an action that is going to be turned down.
+              <div style={{ marginTop: 12 }}>
+                <MaintenanceNote message={siteStatus.message} />
+              </div>
+            )}
           </div>
 
           <div

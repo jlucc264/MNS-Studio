@@ -17,6 +17,8 @@ import { BREAKPOINTS, useIsMobile } from '../../lib/useViewport'
 import CheckoutModal from '../../components/CheckoutModal'
 import CartDrawer from '../../components/CartDrawer'
 import OrderConfirmationModal from '../../components/OrderConfirmationModal'
+import MaintenanceScreen from '../../components/MaintenanceScreen'
+import { useSiteStatus } from '../../lib/siteStatus'
 
 
 // Only 'remix' is auto-applied — see handlePublishGalleryItem in studio.
@@ -190,6 +192,7 @@ function lowestGalleryPrintCents(widthInches: number, heightInches: number): num
 }
 
 function GalleryPage() {
+  const { status: siteStatus, loading: siteStatusLoading } = useSiteStatus()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { session, user, signOut } = useAuth()
@@ -454,6 +457,14 @@ function GalleryPage() {
         if (selectedPreview?.id === item.id) setSelectedPreview(updated)
       } catch { /* ignore */ }
     }
+  }
+
+  // Every hook above must have run before this point — the gate is an early
+  // return, not a conditional hook. Render nothing while the first status fetch
+  // is in flight rather than flashing the gallery and then replacing it.
+  if (siteStatusLoading) return <div style={{ minHeight: '100dvh', background: '#f5f1ea' }} />
+  if (siteStatus && !siteStatus.gallery_enabled) {
+    return <MaintenanceScreen title="The gallery is under maintenance" message={siteStatus.message} />
   }
 
   return (
