@@ -2990,6 +2990,11 @@ function StudioPage() {
         } else if (selectedRegions.length > 0) {
           event.preventDefault()
           setSelectedRegions([])
+          // The marquee lives inside the editor, so dropping the regions here
+          // is only half the job — without the signal the highlight stays on
+          // canvas, and it can no longer be dismissed by clicking inside it
+          // now that an inside drag moves the selection.
+          setClearSelectionSignal((k) => k + 1)
         }
         return
       }

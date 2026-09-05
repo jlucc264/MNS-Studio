@@ -598,7 +598,7 @@ export default function PalettePanel({
                   lineHeight: 1.5,
                 }}
               >
-                <strong>Drag</strong> on canvas to define the box, then type. <strong>Drag the box</strong> to reposition, or click outside and back in to keep editing. Press <strong>Enter</strong> or <strong>Place</strong> to stamp, <strong>Esc</strong> or <strong>Cancel</strong> to discard.
+                <strong>Drag</strong> on canvas to define the box, then type. <strong>Drag the box</strong> to reposition and its <strong>corners</strong> to resize, or click outside and back in to keep editing. Press <strong>Enter</strong> or <strong>Place</strong> to stamp, <strong>Esc</strong> or <strong>Cancel</strong> to discard.
               </div>
             </div>
           )}
@@ -1165,7 +1165,7 @@ export default function PalettePanel({
                   lineHeight: 1.4,
                 }}
               >
-                <span>{hasActiveShapeBox ? 'Drag to move, corners to resize' : 'Drag on canvas to draw'}</span>
+                <span>{hasActiveShapeBox ? 'Drag to move, corners to resize. Place keeps it for repeats' : 'Drag on canvas to draw'}</span>
                 <button
                   type="button"
                   onClick={onResetPalette}
@@ -1200,7 +1200,7 @@ export default function PalettePanel({
                       fontSize: 13, cursor: 'pointer',
                     }}
                   >
-                    ✕ Cancel
+                    ✕ Clear
                   </button>
                 </div>
               )}
@@ -1265,10 +1265,10 @@ export default function PalettePanel({
             }}
           >
             {selectSubMode === 'color'
-              ? <span>Choose a color to highlight all active cells, or select a region first. Can select multiple regions by holding down CTRL.</span>
+              ? <span>Choose a color to highlight all active cells, or select a region first. Drag a region to move it, or its corners to resize. Hold CTRL to select more than one.</span>
               : hasFloatingStamp
                 ? <span>Drag the floating stamp on the canvas (or use the arrows), rotate or flip it, then Place to commit.</span>
-                : <span>Select a region, then Cut or Copy it. Paste drops the last cut/copied stitches back onto the canvas.</span>
+                : <span>Select a region, then Cut or Copy it. Drag the region to move it, or its corners to resize. Paste drops the last cut/copied stitches back onto the canvas.</span>
             }
             {(hasSelectedRegion || activeColor) && (
               <button

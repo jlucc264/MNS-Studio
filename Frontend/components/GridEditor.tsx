@@ -189,6 +189,105 @@ function formatSpan(spanCols: number, spanRows: number, meshCount: number) {
   }
 }
 
+// ── Live box handles ─────────────────────────────────────────────────────────
+
+/** Which corner of a live box a handle owns. 'start' and 'end' are the two drag
+ *  points themselves, which is also what a line's two endpoints are. */
+type BoxHandleKind = 'start' | 'end' | 'startRow-endCol' | 'endRow-startCol'
+type BoxHandleRect = { kind: BoxHandleKind; x: number; y: number; size: number }
+type BoxBounds = { top: number; left: number; bottom: number; right: number }
+
+/** One grab handle, drawn hollow. Hollow on purpose: a filled square sits on
+ *  top of the exact stitches you are aiming at, and on a line the two handles
+ *  land on the cells that decide where the line ends — the one thing you most
+ *  need to see while placing it. The pale outer stroke keeps the outline
+ *  readable over a dark design. Returns the rect it painted so the pointer
+ *  handler can hit-test what is actually on screen. */
+function drawBoxHandle(
+  context: CanvasRenderingContext2D,
+  opts: { cx: number; cy: number; size: number; accent: string; round?: boolean }
+): { x: number; y: number; size: number } {
+  const { cx, cy, size, accent, round } = opts
+  const x = cx - size / 2
+  const y = cy - size / 2
+  const trace = () => {
+    context.beginPath()
+    if (round) context.arc(cx, cy, size / 2, 0, Math.PI * 2)
+    else context.roundRect(x, y, size, size, 3)
+  }
+  context.save()
+  trace()
+  context.strokeStyle = 'rgba(255, 253, 248, 0.95)'
+  context.lineWidth = 3.5
+  context.stroke()
+  trace()
+  context.strokeStyle = accent
+  context.lineWidth = 1.5
+  context.stroke()
+  context.restore()
+  return { x, y, size }
+}
+
+/** Hit-test the handle rects the overlay actually painted, padded so a corner
+ *  stays catchable with a fingertip at small cell sizes. */
+function hitBoxHandle(
+  rects: BoxHandleRect[],
+  point: { x: number; y: number },
+  pad = 8
+): BoxHandleKind | null {
+  for (const handle of rects) {
+    if (
+      point.x >= handle.x - pad && point.x <= handle.x + handle.size + pad &&
+      point.y >= handle.y - pad && point.y <= handle.y + handle.size + pad
+    ) return handle.kind
+  }
+  return null
+}
+
+/** Where a corner drag leaves a box, as normalised bounds. Shared by the text
+ *  box and the selection marquee so both resize exactly like a shape does. */
+function resizeBounds(bounds: BoxBounds, kind: BoxHandleKind, hit: { row: number; col: number }): BoxBounds {
+  let { top: r1, left: c1, bottom: r2, right: c2 } = bounds
+  if (kind === 'start') { r1 = hit.row; c1 = hit.col }
+  else if (kind === 'end') { r2 = hit.row; c2 = hit.col }
+  else if (kind === 'startRow-endCol') { r1 = hit.row; c2 = hit.col }
+  else { r2 = hit.row; c1 = hit.col }
+  return {
+    top: Math.min(r1, r2), bottom: Math.max(r1, r2),
+    left: Math.min(c1, c2), right: Math.max(c1, c2),
+  }
+}
+
+/** Slide a span back inside 0..max, keeping its length where the new bounds
+ *  can hold it and giving up only the overflow where they cannot. The a/b order
+ *  is preserved rather than normalised: for an arc that order is which way the
+ *  curve opens, not just which corner came first. */
+function fitSpan(a: number, b: number, max: number): [number, number] {
+  const lo = Math.min(a, b)
+  const hi = Math.max(a, b)
+  let shift = 0
+  if (hi > max) shift = max - hi
+  if (lo + shift < 0) shift = -lo
+  const nextLo = Math.max(0, Math.min(max, lo + shift))
+  const nextHi = Math.max(0, Math.min(max, hi + shift))
+  return a <= b ? [nextLo, nextHi] : [nextHi, nextLo]
+}
+
+/** The four corners of a box, in the order the handle kinds name them. */
+function boxCornerHandles(bounds: BoxBounds, toX: (col: number) => number, toY: (row: number) => number) {
+  const { top, left, bottom, right } = bounds
+  const x1 = toX(left)
+  const x2 = toX(right + 1)
+  const y1 = toY(top)
+  const y2 = toY(bottom + 1)
+  return [
+    { kind: 'start' as const, cx: x1, cy: y1 },
+    { kind: 'end' as const, cx: x2, cy: y2 },
+    { kind: 'startRow-endCol' as const, cx: x2, cy: y1 },
+    { kind: 'endRow-startCol' as const, cx: x1, cy: y2 },
+  ]
+}
+
 // ── Shape helpers ────────────────────────────────────────────────────────────
 
 function getBoxCells(
@@ -698,19 +797,31 @@ export default function GridEditor({
   const [selectionRects, setSelectionRects] = useState<DesignSelectionRect[]>([])
   const [dragSelectionRect, setDragSelectionRect] = useState<DesignSelectionRect | null>(null)
   const [isAddingSelection, setIsAddingSelection] = useState(false)
+  // A single settled selection is a live box like the shape and text ones: its
+  // corners resize it and its inside moves it, so a marquee that came out a few
+  // stitches wrong is adjusted rather than drawn again. Several selections at
+  // once are left alone — editing one of them would have to decide what happens
+  // to the rest, and Ctrl-drag is how you add another.
+  const selectionEditRef = useRef<{
+    mode: 'move' | BoxHandleKind
+    bounds: BoxBounds
+    pointerRow: number
+    pointerCol: number
+  } | null>(null)
+  const selectionHandleRectsRef = useRef<BoxHandleRect[]>([])
   const [shapeStartCell, setShapeStartCell] = useState<{ row: number; col: number } | null>(null)
   const [shapeEndCell, setShapeEndCell] = useState<{ row: number; col: number } | null>(null)
   const shapeStartCellRef = useRef<{ row: number; col: number } | null>(null)
   // Which corner (or line endpoint) is being dragged, and the grab offset for a
   // move. Null means the pointer is drawing a brand new shape.
-  const shapeResizeRef = useRef<'start' | 'end' | 'startRow-endCol' | 'endRow-startCol' | null>(null)
+  const shapeResizeRef = useRef<BoxHandleKind | null>(null)
   const shapeMoveRef = useRef<{
     startRow: number; startCol: number; endRow: number; endCol: number
     pointerRow: number; pointerCol: number
   } | null>(null)
   // Screen rects of the drag handles, published by the overlay draw so the
   // pointer handler hit-tests exactly what was painted.
-  const shapeHandleRectsRef = useRef<Array<{ kind: 'start' | 'end' | 'startRow-endCol' | 'endRow-startCol'; x: number; y: number; size: number }>>([])
+  const shapeHandleRectsRef = useRef<BoxHandleRect[]>([])
   // Measure tool. Measurements accumulate and survive both pointer-up and a
   // tool change — the point is to take a reading and then work against it, so
   // they stay on the canvas while you paint. The dashed red styling is what
@@ -754,6 +865,11 @@ export default function GridEditor({
     initBoxEndRow: number; initBoxEndCol: number
     pointerRow: number; pointerCol: number
   } | null>(null)
+  // A corner drag on the text box, with the bounds it started from — the other
+  // three corners stay put, so the resize is always applied to the box as it
+  // was when grabbed.
+  const textResizeRef = useRef<{ kind: BoxHandleKind; bounds: BoxBounds } | null>(null)
+  const textHandleRectsRef = useRef<BoxHandleRect[]>([])
   const stampMoveStartRef = useRef<{
     initAnchorRow: number; initAnchorCol: number
     pointerRow: number; pointerCol: number
@@ -894,12 +1010,17 @@ export default function GridEditor({
     paintingPointerIdRef.current = null
     selectionPointerIdRef.current = null
     liveSelectionRectRef.current = null
+    selectionEditRef.current = null
+    // Only the in-flight drag is cancelled here. A live shape box outlives a
+    // second finger landing, the way the text box already did: pinching to zoom
+    // in on a shape before placing it is looking at it, not discarding it.
     shapeStartCellRef.current = null
-    setShapeStartCell(null)
-    setShapeEndCell(null)
+    shapeResizeRef.current = null
+    shapeMoveRef.current = null
     textBoxStartRef.current = null
     textIsMovingRef.current = false
     textMoveStartRef.current = null
+    textResizeRef.current = null
     stampMoveStartRef.current = null
   }, [])
 
@@ -924,6 +1045,7 @@ export default function GridEditor({
   }, [textAnchorCell, textInput, activeColor, textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, onApplyShapeCells])
 
   const discardTextBox = useCallback(() => {
+    textResizeRef.current = null
     setTextAnchorCell(null)
     setTextBoxEnd(null)
     setTextInput('')
@@ -1019,7 +1141,13 @@ export default function GridEditor({
       arcFullCircle,
     )
     if (shapeCells.length) onApplyShapeCells(shapeCells)
-    discardShapeBox()
+    // The preview survives its own placement, so repeating a shape or a line is
+    // a drag and a second Place rather than a redraw at the same size. Clear
+    // only the in-flight drag state; Clear, or leaving the tool, is what ends
+    // the shape.
+    shapeStartCellRef.current = null
+    shapeResizeRef.current = null
+    shapeMoveRef.current = null
   }, [shapeStartCell, shapeEndCell, shapeType, onApplyShapeCells, shapeFillColor,
       shapeBorderColor, cells, shapeBorderSize, arcFlipped, arcFullCircle, discardShapeBox])
 
@@ -1058,7 +1186,10 @@ export default function GridEditor({
         }
         touchActivePointersRef.current.delete(event.pointerId)
       }
-      if (toolMode === 'text' && textIsMovingRef.current) {
+      if (toolMode === 'text' && textResizeRef.current) {
+        textResizeRef.current = null
+        focusTextInputForKeyboard()
+      } else if (toolMode === 'text' && textIsMovingRef.current) {
         textIsMovingRef.current = false
         textMoveStartRef.current = null
         focusTextInputForKeyboard()
@@ -1121,6 +1252,7 @@ export default function GridEditor({
       setDragSelectionRect(null)
       paintingPointerIdRef.current = null
       selectionPointerIdRef.current = null
+      selectionEditRef.current = null
       lastPaintedCellRef.current = null
       stampMoveStartRef.current = null
     }
@@ -1156,6 +1288,36 @@ export default function GridEditor({
   // unreachable.
   const stageRows = Math.max(Math.round(STAGE_SIZE_INCHES * meshCount), totalRows)
   const stageCols = Math.max(Math.round(STAGE_SIZE_INCHES * meshCount), totalCols)
+  // A canvas resize rebuilds the grid underneath whatever is live on it. An
+  // unplaced shape or text box is not in the cells yet, so nothing else carries
+  // it across: on a shrink it was left stranded outside the new design, drawn
+  // off the canvas where it could be neither grabbed nor placed, which reads as
+  // the box simply vanishing. Refit it instead, keeping its size wherever the
+  // new grid is still big enough to hold it.
+  const gridSizeKey = `${rows}x${cols}`
+  const lastGridSizeRef = useRef(gridSizeKey)
+  useEffect(() => {
+    if (lastGridSizeRef.current === gridSizeKey) return
+    lastGridSizeRef.current = gridSizeKey
+    if (rows < 1 || cols < 1) return
+
+    const refit = (
+      start: { row: number; col: number } | null,
+      end: { row: number; col: number } | null,
+      setStart: (cell: { row: number; col: number }) => void,
+      setEnd: (cell: { row: number; col: number }) => void,
+    ) => {
+      if (!start || !end) return
+      const [startRow, endRow] = fitSpan(start.row, end.row, rows - 1)
+      const [startCol, endCol] = fitSpan(start.col, end.col, cols - 1)
+      if (startRow !== start.row || startCol !== start.col) setStart({ row: startRow, col: startCol })
+      if (endRow !== end.row || endCol !== end.col) setEnd({ row: endRow, col: endCol })
+    }
+
+    refit(shapeStartCell, shapeEndCell, setShapeStartCell, setShapeEndCell)
+    refit(textAnchorCell, textBoxEnd, setTextAnchorCell, setTextBoxEnd)
+  }, [gridSizeKey, rows, cols, shapeStartCell, shapeEndCell, textAnchorCell, textBoxEnd])
+
   const availableStageWidth = Math.max(containerSize.width - RULER_THICKNESS, 160)
   const availableStageHeight = Math.max(
     containerSize.height - toolbarHeight - 8 - RULER_THICKNESS,
@@ -1757,9 +1919,43 @@ export default function GridEditor({
       }
 
       if (highlightSelection) {
+        const additive = input.ctrlKey || input.metaKey
+        const only = selectionRects.length === 1 ? selectionRects[0] : null
+        if (only && !additive) {
+          const bounds = {
+            top: Math.min(only.startRow, only.endRow),
+            bottom: Math.max(only.startRow, only.endRow),
+            left: Math.min(only.startCol, only.endCol),
+            right: Math.max(only.startCol, only.endCol),
+          }
+          const point = getOverlayPointFromClient(input.clientX, input.clientY)
+          const grabbed = point ? hitBoxHandle(selectionHandleRectsRef.current, point) : null
+          const hit = getCellFromClientPoint(input.clientX, input.clientY, 'stage')
+          const inside = hit !== null &&
+            hit.row >= bounds.top && hit.row <= bounds.bottom &&
+            hit.col >= bounds.left && hit.col <= bounds.right
+          if (hit && (grabbed || inside)) {
+            input.preventDefault()
+            selectionPointerIdRef.current = input.pointerId
+            selectionEditRef.current = {
+              mode: grabbed ?? 'move',
+              bounds,
+              pointerRow: hit.row,
+              pointerCol: hit.col,
+            }
+            // Ride the ordinary drag path from here: the marquee renders from
+            // dragSelectionRect and pointer-up commits it as the selection.
+            setIsAddingSelection(false)
+            setIsSelecting(true)
+            liveSelectionRectRef.current = only
+            setDragSelectionRect(only)
+            return
+          }
+        }
+
         input.preventDefault()
         selectionPointerIdRef.current = input.pointerId
-        setIsAddingSelection(input.ctrlKey || input.metaKey)
+        setIsAddingSelection(additive)
         setIsSelecting(true)
         const startHit = getCellFromClientPoint(input.clientX, input.clientY, 'stage')
         if (!startHit) return
@@ -1837,16 +2033,11 @@ export default function GridEditor({
         // Grab a drag handle. Hit-tested first and padded, so a corner stays
         // catchable with a fingertip at small cell sizes.
         if (point && shapeStartCell && shapeEndCell) {
-          for (const handle of shapeHandleRectsRef.current) {
-            const pad = 8
-            if (
-              point.x >= handle.x - pad && point.x <= handle.x + handle.size + pad &&
-              point.y >= handle.y - pad && point.y <= handle.y + handle.size + pad
-            ) {
-              input.preventDefault()
-              shapeResizeRef.current = handle.kind
-              return
-            }
+          const grabbed = hitBoxHandle(shapeHandleRectsRef.current, point)
+          if (grabbed) {
+            input.preventDefault()
+            shapeResizeRef.current = grabbed
+            return
           }
         }
 
@@ -1878,6 +2069,28 @@ export default function GridEditor({
       }
 
       if (toolMode === 'text') {
+        // A corner grab is tested first, and padded, so it stays catchable at
+        // small cell sizes — the same grab order the shape box uses. Without
+        // this a corner only moved the box, and a text box that came out a few
+        // stitches too narrow had to be drawn again.
+        if (textAnchorCell && textBoxEnd) {
+          const point = getOverlayPointFromClient(input.clientX, input.clientY)
+          const grabbed = point ? hitBoxHandle(textHandleRectsRef.current, point) : null
+          if (grabbed) {
+            input.preventDefault()
+            textResizeRef.current = {
+              kind: grabbed,
+              bounds: {
+                top: Math.min(textAnchorCell.row, textBoxEnd.row),
+                bottom: Math.max(textAnchorCell.row, textBoxEnd.row),
+                left: Math.min(textAnchorCell.col, textBoxEnd.col),
+                right: Math.max(textAnchorCell.col, textBoxEnd.col),
+              },
+            }
+            return
+          }
+        }
+
         const hit = getCellFromClientPoint(input.clientX, input.clientY)
         if (!hit) return
         input.preventDefault()
@@ -1943,7 +2156,7 @@ export default function GridEditor({
      textAnchorCell, textBoxEnd, textInput, activeColor, onApplyShapeCells,
      traceImageRef, cells, onEyedropperSample, onFillCell,
      measurements, activeMeasurementId, cellSize,
-     shapeStartCell, shapeEndCell,
+     shapeStartCell, shapeEndCell, selectionRects,
      getOverlayPointFromClient, getOverlayPointFromCell,
      textFontSize, textFontFamily, textOrientation, textBold, textItalic, textOutline, floatingStamp]
   )
@@ -2035,6 +2248,33 @@ export default function GridEditor({
         })
         return
       }
+      if (highlightSelection && selectionEditRef.current && selectionPointerIdRef.current === event.pointerId) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        if (!hit) return
+        const edit = selectionEditRef.current
+        const next = edit.mode === 'move'
+          ? {
+              top: edit.bounds.top + (hit.row - edit.pointerRow),
+              bottom: edit.bounds.bottom + (hit.row - edit.pointerRow),
+              left: edit.bounds.left + (hit.col - edit.pointerCol),
+              right: edit.bounds.right + (hit.col - edit.pointerCol),
+            }
+          : resizeBounds(edit.bounds, edit.mode, hit)
+        const nextRect = {
+          startRow: next.top, startCol: next.left,
+          endRow: next.bottom, endCol: next.right,
+        }
+        const current = liveSelectionRectRef.current
+        if (
+          current &&
+          current.startRow === nextRect.startRow && current.startCol === nextRect.startCol &&
+          current.endRow === nextRect.endRow && current.endCol === nextRect.endCol
+        ) return
+        liveSelectionRectRef.current = nextRect
+        setDragSelectionRect(nextRect)
+        return
+      }
+
       if (highlightSelection && isSelecting && selectionPointerIdRef.current === event.pointerId) {
         const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
         if (!hit) return
@@ -2098,6 +2338,16 @@ export default function GridEditor({
         const hit = getCellFromClientPoint(event.clientX, event.clientY)
         if (!hit) return
         setShapeEndCell({ row: hit.row, col: hit.col })
+        return
+      }
+
+      if (toolMode === 'text' && textResizeRef.current) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY)
+        if (!hit) return
+        const { kind, bounds } = textResizeRef.current
+        const next = resizeBounds(bounds, kind, hit)
+        setTextAnchorCell({ row: next.top, col: next.left })
+        setTextBoxEnd({ row: next.bottom, col: next.right })
         return
       }
 
@@ -2465,6 +2715,7 @@ export default function GridEditor({
     }
 
     // Text tool: dashed box border + text preview
+    textHandleRectsRef.current = []
     if (toolMode === 'text' && textBoxEnd) {
       const boxStart = textBoxStartRef.current ?? textAnchorCell
       if (boxStart) {
@@ -2481,12 +2732,21 @@ export default function GridEditor({
         context.setLineDash([Math.max(3, cellSize * 0.3), Math.max(2, cellSize * 0.2)])
         context.strokeRect(bx, by, bw, bh)
         context.setLineDash([])
-        // Corner handles
-        const h = Math.max(3, Math.min(cellSize * 0.4, 8))
-        context.fillStyle = '#000'
-        for (const [cx, cy] of [[bx, by], [bx + bw, by], [bx, by + bh], [bx + bw, by + bh]]) {
-          context.fillRect(cx - h / 2, cy - h / 2, h, h)
-        }
+        // Corner handles. Grabbable rather than decorative: the box resizes the
+        // way a shape does, so a box that came out the wrong size is adjusted
+        // instead of redrawn. Hollow, so they do not hide the stitches under a
+        // corner.
+        const textHandleSize = Math.max(10, Math.min(16, cellSize * 1.2))
+        textHandleRectsRef.current = boxCornerHandles(
+          { top: r1, left: c1, bottom: r2, right: c2 },
+          (col) => gridOriginX + (col + contentOriginCol + borderStitches) * cellSize,
+          (row) => gridOriginY + (row + contentOriginRow + borderStitches) * cellSize,
+        ).map((corner) => ({
+          kind: corner.kind,
+          ...drawBoxHandle(context, {
+            cx: corner.cx, cy: corner.cy, size: textHandleSize, accent: 'rgba(0, 0, 0, 0.85)',
+          }),
+        }))
       }
       // Text preview + cursor from anchor
       if (textAnchorCell && activeColor) {
@@ -2577,33 +2837,42 @@ export default function GridEditor({
 
       // A line's ends are real points, so it gets two endpoint handles rather
       // than four corners — dragging a corner of its bounding box would be
-      // ambiguous about which end moved.
-      const handleSize = Math.max(10, Math.min(16, cellSize * 1.2))
-      const handles: Array<{ kind: 'start' | 'end' | 'startRow-endCol' | 'endRow-startCol'; cx: number; cy: number }> =
-        shapeType === 'line'
+      // ambiguous about which end moved. Those two sit right on the stitches
+      // that decide where the line lands, so they are rings around the end
+      // cell rather than squares over it.
+      const isLine = shapeType === 'line'
+      const handleSize = isLine
+        ? Math.max(13, Math.min(22, cellSize * 1.8))
+        : Math.max(10, Math.min(16, cellSize * 1.2))
+      // Each corner handle is drawn at the corner its drag point is actually
+      // at, not at a fixed reading of the bounding box. A shape dragged out
+      // right-to-left keeps its start at the bottom-right, and a handle drawn
+      // at the top-left that moves the bottom-right corner collapsed the shape
+      // on the first nudge.
+      const startX = shapeStartCell.col <= shapeEndCell.col ? bx : bx + bw
+      const endX = shapeStartCell.col <= shapeEndCell.col ? bx + bw : bx
+      const startY = shapeStartCell.row <= shapeEndCell.row ? by : by + bh
+      const endY = shapeStartCell.row <= shapeEndCell.row ? by + bh : by
+      const handles: Array<{ kind: BoxHandleKind; cx: number; cy: number }> =
+        isLine
           ? [
               { kind: 'start', cx: sx(shapeStartCell.col) + cellSize / 2, cy: sy(shapeStartCell.row) + cellSize / 2 },
               { kind: 'end', cx: sx(shapeEndCell.col) + cellSize / 2, cy: sy(shapeEndCell.row) + cellSize / 2 },
             ]
           : [
-              { kind: 'start', cx: bx, cy: by },
-              { kind: 'end', cx: bx + bw, cy: by + bh },
-              { kind: 'startRow-endCol', cx: bx + bw, cy: by },
-              { kind: 'endRow-startCol', cx: bx, cy: by + bh },
+              { kind: 'start', cx: startX, cy: startY },
+              { kind: 'end', cx: endX, cy: endY },
+              { kind: 'startRow-endCol', cx: endX, cy: startY },
+              { kind: 'endRow-startCol', cx: startX, cy: endY },
             ]
 
-      shapeHandleRectsRef.current = handles.map((handle) => {
-        const x = handle.cx - handleSize / 2
-        const y = handle.cy - handleSize / 2
-        context.fillStyle = '#fffdf8'
-        context.strokeStyle = 'rgba(74, 124, 89, 0.95)'
-        context.lineWidth = 1.5
-        context.beginPath()
-        context.roundRect(x, y, handleSize, handleSize, 3)
-        context.fill()
-        context.stroke()
-        return { kind: handle.kind, x, y, size: handleSize }
-      })
+      shapeHandleRectsRef.current = handles.map((handle) => ({
+        kind: handle.kind,
+        ...drawBoxHandle(context, {
+          cx: handle.cx, cy: handle.cy, size: handleSize,
+          accent: 'rgba(74, 124, 89, 0.95)', round: isLine,
+        }),
+      }))
 
       const spanCols = right - left + 1
       const spanRows = bottom - top + 1
@@ -2735,6 +3004,7 @@ export default function GridEditor({
       context.setLineDash([])
     }
 
+    selectionHandleRectsRef.current = []
     if (!renderSelections.length) return
 
     renderSelections.forEach((overlaySelection) => {
@@ -2754,6 +3024,24 @@ export default function GridEditor({
       context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
       context.strokeRect(x, y, width, height)
       context.setLineDash([])
+
+      // Grab handles for a lone selection, matching the shape and text boxes.
+      // With several selections there is no unambiguous one to edit, so those
+      // stay plain marquees.
+      if (highlightSelection && !floatingStamp && renderSelections.length === 1) {
+        const selectionHandleSize = Math.max(10, Math.min(16, cellSize * 1.2))
+        selectionHandleRectsRef.current = boxCornerHandles(
+          { top, left, bottom, right },
+          (col) => gridOriginX + (col + borderStitches + contentOriginCol) * cellSize,
+          (row) => gridOriginY + (row + borderStitches + contentOriginRow) * cellSize,
+        ).map((corner) => ({
+          kind: corner.kind,
+          ...drawBoxHandle(context, {
+            cx: corner.cx, cy: corner.cy, size: selectionHandleSize,
+            accent: 'rgba(206, 152, 0, 0.98)',
+          }),
+        }))
+      }
     })
   }, [
     borderStitches,
