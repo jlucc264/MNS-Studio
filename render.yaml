@@ -48,14 +48,17 @@ services:
       # documentation of intended config and these are now part of the
       # permanent operational surface; the DASHBOARD REMAINS AUTHORITATIVE.
       #
-      # State as of 2026-09-04: printing and imports open, gallery closed
-      # while the copyright review settles.
+      # State as of 2026-09-04: all three open. The gallery reopened once the
+      # blackout had a narrower replacement — the listings under review are
+      # suspended one by one (gallery_items.suspended_at), which keeps them off
+      # every public surface without the other 76 going dark with them. The
+      # site-wide switch stays for the case per-listing hiding cannot cover.
       - key: CHECKOUT_ENABLED
         value: "true"
       - key: IMPORT_ENABLED
         value: "true"
-      # Deliberately absent rather than "false": the switch fails closed, so
-      # not declaring it is the same as disabling it and cannot be flipped on
-      # by a typo. Add it set to true when the gallery reopens.
-      # - key: GALLERY_ENABLED
-      #   value: "true"
+      # Still fail-closed: to close the gallery again, DELETE this variable in
+      # the dashboard rather than setting it to "false". Absent is the only
+      # value that cannot be undone by a typo.
+      - key: GALLERY_ENABLED
+        value: "true"
