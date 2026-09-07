@@ -1,4 +1,5 @@
 import math
+import os
 
 # Canvas price is derived from a target gross margin on material, not from
 # hand-set anchors. The previous three-anchor curve interpolated between
@@ -52,11 +53,6 @@ def round_up_to_50_cents(cents: int) -> int:
 MIN_CANVAS_PRICE_CENTS = 700
 
 PRINT_OWN_BASE_CENTS = 950        # $9.50 ($7 originally, scaled + rounded up)
-# Kept at the original $5 — owner's call, not scaled with the rest of the
-# increase. This is a flat PDF-only product (no printing/material cost), not
-# something the rest of this file's margin reasoning applies to.
-TEMPLATE_PRICE_CENTS = 500        # $5
-
 # A gallery print costs this much more than printing your own design. The
 # markup is not profit — it is passed through to the creator 1:1 (see
 # creator_earnings_cents), so the business nets the same either way and the
@@ -70,6 +66,32 @@ TEMPLATE_PRICE_CENTS = 500        # $5
 # creator payout as canvases got bigger — at 13x20 it was a ~$15 subsidy.)
 GALLERY_MARKUP = 0.20
 CREATOR_SHARE_OF_PRINT_OWN = 0.20
+
+# The shop's own gallery account. Its listings are the templates the shop
+# publishes for everyone to use, and they carry no markup: the markup and the
+# creator's share are the same number, so a sale of the shop's own design would
+# add 20% to the buyer's price and hand it straight back to the shop. Nobody is
+# paid and the buyer is charged for it.
+#
+# Deliberately NOT ADMIN_USER_ID, which is a different fact about a different
+# thing. Being able to open the admin page does not make an account the shop,
+# and reusing that set would silently stop paying any staff account added to it
+# later. Defaulted rather than left empty on purpose: an unset variable would
+# make this a no-op that looks deployed, which is exactly how the import split
+# spent an evening switched on in main and off in production.
+SHOP_CREATOR_USER_IDS = {
+    uid.strip()
+    for uid in os.getenv(
+        "SHOP_CREATOR_USER_ID", "bc1695da-05a3-42d9-927c-06af26bf5fb4"
+    ).split(",")
+    if uid.strip()
+}
+
+
+def is_shop_creator(user_id: str | None) -> bool:
+    """Whether this creator is the shop itself."""
+    return bool(user_id) and user_id in SHOP_CREATOR_USER_IDS
+
 
 # Belts are priced off the legacy anchor curve rather than the per-sq-in rate.
 # The canvas math adds 2" of margin per side, so a 1.25"-tall strap becomes a

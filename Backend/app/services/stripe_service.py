@@ -7,7 +7,6 @@ from .canvas_pricing import (
     print_own_total_cents,
     print_gallery_total_cents,
     tier_downgrade_margin_inches,
-    TEMPLATE_PRICE_CENTS,
     PRINT_OWN_BASE_CENTS,
 )
 
@@ -93,14 +92,20 @@ def create_print_own_checkout(
     margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
     canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
 
-    is_remixed = bool(gallery_item_id and creator_user_id)
-    total = print_gallery_total_cents(canvas) if is_remixed else print_own_total_cents(canvas)
+    # Being a remix and owing a royalty are two different facts, and the shop's
+    # own templates separate them: a remix of one is still a remix, and still
+    # links back to the listing it came from, but there is no creator to pay so
+    # it is priced and recorded as a print-own. The caller decides who is owed
+    # (royalty_creator_id) and passes None when that is nobody.
+    is_remixed = bool(gallery_item_id)
+    pays_royalty = bool(gallery_item_id and creator_user_id)
+    total = print_gallery_total_cents(canvas) if pays_royalty else print_own_total_cents(canvas)
     name = f"Custom needlepoint canvas print — {canvas['label']}\""
     if is_remixed:
         name += " (remixed template)"
 
     metadata: dict = {
-        "type": "print_gallery" if is_remixed else "print_own",
+        "type": "print_gallery" if pays_royalty else "print_own",
         "pdf_url": pdf_url,
         "canvas_size": canvas["label"],
         "width_inches": str(width_inches),
@@ -114,6 +119,7 @@ def create_print_own_checkout(
         metadata["canvas_margin_inches"] = str(margin)
     if is_remixed:
         metadata["gallery_item_id"] = gallery_item_id
+    if pays_royalty:
         metadata["creator_user_id"] = creator_user_id
         # A remix is stamped type=print_gallery, so the webhook pays the
         # original creator a share of this. Without it that fell back to
@@ -159,51 +165,6 @@ def create_print_own_checkout(
     return session.client_secret
 
 
-def create_template_checkout(
-    gallery_item_id: str,
-    gallery_item_title: str,
-    creator_user_id: str,
-    pdf_url: str,
-    buyer_user_id: str | None = None,
-) -> str:
-    metadata = {
-        "type": "template",
-        "gallery_item_id": gallery_item_id,
-        "creator_user_id": creator_user_id,
-        "pdf_url": pdf_url,
-        "title": gallery_item_title,
-        # Creator earnings are a share of THIS item, so record it explicitly.
-        # Stripe's amount_total includes shipping and any other line items.
-        "item_total_cents": str(TEMPLATE_PRICE_CENTS),
-    }
-    coupon_id, applied_cents = _apply_canvas_credit(buyer_user_id, TEMPLATE_PRICE_CENTS)
-    if applied_cents:
-        metadata["applied_credit_user_id"] = buyer_user_id
-        metadata["applied_credit_cents"] = str(applied_cents)
-
-    session_params: dict = {
-        "line_items": [{
-            "price_data": {
-                "currency": "usd",
-                "unit_amount": TEMPLATE_PRICE_CENTS,
-                "product_data": {
-                    "name": f"Needlepoint template: {gallery_item_title}",
-                    "description": "Finalized PDF pattern with color palette and stitch counts",
-                },
-            },
-            "quantity": 1,
-        }],
-        "mode": "payment",
-        "ui_mode": "embedded_page",
-        "return_url": f"{FRONTEND_URL}/gallery?order=success",
-        "metadata": metadata,
-    }
-    _apply_discount(session_params, coupon_id)
-
-    session = stripe.checkout.Session.create(**session_params)
-    return session.client_secret
-
-
 def create_gallery_print_checkout(
     gallery_item_id: str,
     gallery_item_title: str,
@@ -216,7 +177,10 @@ def create_gallery_print_checkout(
 ) -> str:
     margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
     canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
-    total = print_gallery_total_cents(canvas)
+    # No creator means nobody to pay, which means no markup to collect: the
+    # shop's own templates sell at the same price as printing your own design.
+    # The caller resolves that (royalty_creator_id) and passes "" for it.
+    total = print_gallery_total_cents(canvas) if creator_user_id else print_own_total_cents(canvas)
 
     metadata = {
         "type": "print_gallery",
@@ -321,8 +285,14 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
             item_meta["ip"] = ip
         if item.get("pdf_url"):
             item_meta["pdf"] = item["pdf_url"]
+        # Linked and owed are separate facts, the same way they are in
+        # create_print_own_checkout. The gallery link is what fulfillment
+        # resolves the design and the stitched signature from, so it is written
+        # whenever the line came from a listing — dropping it on the shop's own
+        # templates would leave a paid cart line with no project to print.
+        if item.get("creator_gallery_item_id"):
+            item_meta["gi"] = item["creator_gallery_item_id"]
         if has_creator:
-            item_meta["gi"] = item.get("creator_gallery_item_id", "")
             item_meta["cu"] = item["creator_user_id"]
         if item.get("project_id"):
             item_meta["pid"] = item["project_id"]

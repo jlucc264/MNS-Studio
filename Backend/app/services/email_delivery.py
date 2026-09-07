@@ -62,7 +62,6 @@ def send_order_notification(
 
     type_labels = {
         "print_own": "Print: Own Design",
-        "template": "Template Purchase",
         "print_gallery": "Print: Gallery Design",
         "cart": "Cart Order",
     }
@@ -133,8 +132,6 @@ def _order_items_summary(order_type: str, metadata: dict) -> list[str]:
         return lines
 
     title = metadata.get("title", "your design")
-    if order_type == "template":
-        return [f"Needlepoint pattern: “{title}”"]
     canvas = f' on a {metadata["canvas_size"]}" canvas' if metadata.get("canvas_size") else ""
     if order_type == "print_gallery":
         return [f"Canvas print: “{title}”{canvas}"]
@@ -152,19 +149,15 @@ def send_customer_order_confirmation(
     if not _ready():
         return False
 
-    is_template = order_type == "template"
     items = _order_items_summary(order_type, metadata)
     total = f"${amount_total_cents / 100:,.2f}" if amount_total_cents is not None else None
 
-    if is_template:
-        next_steps = "Your pattern PDF is attached to this email — happy stitching!"
-    else:
-        next_steps = (
-            "We're preparing your canvas now — expect it to ship within 5–7 business days, "
-            "and we'll follow up with tracking once it's on its way."
-        )
-        if pdf_attachments:
-            next_steps += " We've attached a production report of what you ordered for your records."
+    next_steps = (
+        "We're preparing your canvas now — expect it to ship within 5–7 business days, "
+        "and we'll follow up with tracking once it's on its way."
+    )
+    if pdf_attachments:
+        next_steps += " We've attached a production report of what you ordered for your records."
 
     text_lines = ["Thank you for your order from MNS Studio!", ""]
     text_lines += [f"  • {item}" for item in items]

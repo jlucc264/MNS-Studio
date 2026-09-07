@@ -7,6 +7,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from app.services.canvas_pricing import is_shop_creator
+
 logger = logging.getLogger(__name__)
 
 REST_TIMEOUT = 10
@@ -204,13 +206,71 @@ def delete_project(project_id: str, user_id: str) -> bool:
 
 # ── gallery ──────────────────────────────────────────────────────────────────
 
-def _normalize_gallery_item(item: dict, liked_ids: set[str] | None = None) -> dict:
+def _normalize_gallery_item(
+    item: dict,
+    liked_ids: set[str] | None = None,
+    known_rows: dict[str, dict] | None = None,
+) -> dict:
     liked_ids = liked_ids or set()
     item["tags"] = item.get("tags") or []
     item["like_count"] = item.get("like_count") or 0
     item["share_count"] = item.get("share_count") or 0
     item["liked_by_me"] = item.get("id") in liked_ids
+    # Whether a print of this design owes anyone a royalty, and so whether it
+    # carries the gallery markup. Published for the frontend because the price
+    # it shows has to be the price checkout charges, and checkout decides this
+    # from the same rule (see royalty_creator_id).
+    item["pays_creator_royalty"] = _pays_creator_royalty(item, known_rows)
     return item
+
+
+def _normalize_gallery_items(items: list[dict], liked_ids: set[str] | None = None) -> list[dict]:
+    """Normalize a page of listings, letting them answer each other's lineage.
+
+    A remix has to look up the design it descends from, and in a listing page
+    that ancestor is usually a few rows away. Passing the page in means the
+    common case costs no extra round trips at all.
+    """
+    known_rows = {item["id"]: item for item in items if item.get("id")}
+    return [_normalize_gallery_item(item, liked_ids, known_rows) for item in items]
+
+
+def _pays_creator_royalty(item: dict, known_rows: dict[str, dict] | None = None) -> bool:
+    """Whether a sale of this listing pays a creator.
+
+    A remix inherits the answer from the root it descends from, the same way
+    the royalty itself does, so a user's remix of a shop template is priced
+    like the template rather than like the user's own work.
+    """
+    creator = item.get("user_id")
+    parent_id = item.get("parent_gallery_item_id")
+    if parent_id:
+        # Walk from the parent, not from this row: this row is the one being
+        # normalized, and asking for it again would come straight back here.
+        creator = resolve_root_creator_id(parent_id, known_rows) or creator
+    return not is_shop_creator(creator)
+
+
+def _gallery_lineage_row(gallery_item_id: str, known_rows: dict[str, dict] | None = None) -> dict | None:
+    """The two columns the remix walk needs, without normalizing the row.
+
+    Deliberately not get_gallery_item: normalizing a row now asks whether it
+    pays a royalty, and answering that for a remix walks the chain, so routing
+    the walk back through it would recurse forever on the first remixed
+    listing. Suspended rows are included for the same reason the walk exists —
+    a taken-down ancestor must not break attribution for a sale already made.
+    """
+    if known_rows and gallery_item_id in known_rows:
+        return known_rows[gallery_item_id]
+    encoded = quote(gallery_item_id, safe="")
+    result = _request(
+        "GET",
+        "/gallery_items",
+        params=f"id=eq.{encoded}&select=user_id,parent_gallery_item_id",
+    )
+    if not isinstance(result, list) or not result:
+        return None
+    return result[0]
 
 
 def _liked_gallery_ids(user_id: str | None) -> set[str]:
@@ -264,7 +324,7 @@ def list_gallery_items(
             ]
 
     liked_ids = _liked_gallery_ids(user_id)
-    return [_normalize_gallery_item(item, liked_ids) for item in items]
+    return _normalize_gallery_items(items, liked_ids)
 
 
 def list_gallery_items_by_creator(creator_user_id: str, viewer_user_id: str | None = None) -> list[dict]:
@@ -283,7 +343,7 @@ def list_gallery_items_by_creator(creator_user_id: str, viewer_user_id: str | No
     )
     items = result if isinstance(result, list) else []
     liked_ids = _liked_gallery_ids(viewer_user_id)
-    return [_normalize_gallery_item(item, liked_ids) for item in items]
+    return _normalize_gallery_items(items, liked_ids)
 
 
 def get_gallery_item(item_id: str, user_id: str | None = None, include_suspended: bool = False) -> dict | None:
@@ -300,7 +360,7 @@ def get_gallery_item(item_id: str, user_id: str | None = None, include_suspended
     return _normalize_gallery_item(result[0], liked_ids)
 
 
-def resolve_root_creator_id(gallery_item_id: str, _seen: set | None = None) -> str | None:
+def resolve_root_creator_id(gallery_item_id: str, known_rows: dict[str, dict] | None = None) -> str | None:
     """Walk parent_gallery_item_id up to the original, non-remixed item and
     return its owner's user_id.
 
@@ -310,21 +370,39 @@ def resolve_root_creator_id(gallery_item_id: str, _seen: set | None = None) -> s
     last relabeled the design instead of whoever actually made it. Royalties
     always flow to the root, no matter how many times it has been remixed
     and republished in between.
+
+    Where the chain runs out early — a deleted ancestor, or a cycle left by
+    bad data — this answers with the last owner it did reach rather than
+    nobody, so a broken link upstream costs credit at that point instead of
+    dropping the royalty entirely.
     """
-    seen = _seen or set()
-    if gallery_item_id in seen:
-        return None
-    seen.add(gallery_item_id)
-    # include_suspended: this walks the remix chain to attribute earnings. A
-    # taken-down ancestor must not silently break the payout for a sale that
-    # already happened.
-    item = get_gallery_item(gallery_item_id, include_suspended=True)
-    if not item:
-        return None
-    parent_id = item.get("parent_gallery_item_id")
-    if parent_id:
-        return resolve_root_creator_id(parent_id, seen) or item.get("user_id")
-    return item.get("user_id")
+    seen: set[str] = set()
+    current = gallery_item_id
+    last_user_id: str | None = None
+    while current and current not in seen:
+        seen.add(current)
+        row = _gallery_lineage_row(current, known_rows)
+        if not row:
+            break
+        last_user_id = row.get("user_id") or last_user_id
+        parent_id = row.get("parent_gallery_item_id")
+        if not parent_id:
+            return row.get("user_id") or last_user_id
+        current = parent_id
+    return last_user_id
+
+
+def royalty_creator_id(gallery_item_id: str) -> str | None:
+    """The creator a sale of this item owes a royalty to, or None if nobody is.
+
+    Distinct from resolve_root_creator_id, which answers who made the design
+    and is also what stamps the stitched signature onto the printed canvas. The
+    shop's own templates still print the shop's signature; they just do not pay
+    the shop a royalty out of the buyer's pocket. Use this one anywhere money
+    moves, and that one anywhere credit is given.
+    """
+    creator = resolve_root_creator_id(gallery_item_id)
+    return None if is_shop_creator(creator) else creator
 
 
 def get_gallery_item_by_project_id(project_id: str) -> dict | None:
@@ -443,14 +521,79 @@ def _build_creator_slug_map(items: list[dict]) -> dict[str, str]:
     return slug_to_uid
 
 
-def mark_creator_earnings_paid(user_id: str) -> None:
-    encoded = quote(user_id, safe="")
+def record_credit_redemption(stripe_session_id: str, user_id: str, amount_cents: int) -> None:
+    """Spend `amount_cents` of a creator's canvas credit, exactly once.
+
+    Keyed on the Stripe session id, which is unique in the table, so a webhook
+    retry inserts nothing the second time rather than spending the balance
+    again.
+
+    This replaces marking every earning row paid_out, which consumed a
+    creator's whole balance however little of it the order actually used. The
+    earnings ledger is now left alone and what has been spent is recorded
+    beside it, so the remainder stays available.
+    """
+    if amount_cents <= 0:
+        return
+    inserted = _request("POST", "/creator_credit_redemptions", body={
+        "stripe_session_id": stripe_session_id,
+        "creator_user_id": user_id,
+        "amount_cents": amount_cents,
+    })
+    if inserted is not None:
+        return
+
+    # The insert failed for one of two very different reasons: the row is
+    # already there because this webhook is a retry, which is exactly what the
+    # unique constraint is for and needs no action; or the table does not exist
+    # because this code was deployed before the migration was run. A read tells
+    # them apart.
+    encoded_session = quote(stripe_session_id, safe="")
+    probe = _request(
+        "GET",
+        "/creator_credit_redemptions",
+        params=f"stripe_session_id=eq.{encoded_session}&select=amount_cents",
+    )
+    if isinstance(probe, list):
+        return
+
+    # No redemptions table. Fall back to the pre-ledger behaviour of consuming
+    # the creator's whole balance. That takes more than the order used, which is
+    # the bug this ledger exists to fix, but the alternative is credit that is
+    # never marked spent at all and can be applied again to every future order.
+    # Losing some credit beats handing out an unlimited discount.
+    logger.warning(
+        "creator_credit_redemptions unavailable (migration not run?); consuming full "
+        "canvas credit balance for %s instead of the %d cents this order used.",
+        user_id, amount_cents,
+    )
+    encoded_user = quote(user_id, safe="")
     _request(
         "PATCH",
         "/creator_earnings",
-        params=f"creator_user_id=eq.{encoded}&paid_out=eq.false",
+        params=f"creator_user_id=eq.{encoded_user}&paid_out=eq.false",
         body={"paid_out": True},
     )
+
+
+def _redeemed_credit_cents(user_id: str, earning_rows: list[dict]) -> int:
+    """How much canvas credit this creator has already spent.
+
+    Falls back to the old all-or-nothing paid_out flag when the redemptions
+    table is not there yet, so code deployed ahead of the migration keeps
+    treating a spent balance as spent. That errs toward under-reporting credit,
+    which is the safe direction: the alternative hands back balances that were
+    already used.
+    """
+    encoded = quote(user_id, safe="")
+    result = _request(
+        "GET",
+        "/creator_credit_redemptions",
+        params=f"creator_user_id=eq.{encoded}&select=amount_cents",
+    )
+    if isinstance(result, list):
+        return sum(int(r.get("amount_cents") or 0) for r in result)
+    return sum(int(r.get("amount_cents") or 0) for r in earning_rows if r.get("paid_out"))
 
 
 def get_creator_earnings(user_id: str) -> dict:
@@ -461,13 +604,14 @@ def get_creator_earnings(user_id: str) -> dict:
         params=f"creator_user_id=eq.{encoded_user_id}&select=order_type,amount_cents,paid_out",
     )
     rows = result if isinstance(result, list) else []
-    template_sales = sum(1 for r in rows if r.get("order_type") == "template")
     print_sales = sum(1 for r in rows if r.get("order_type") in ("print_gallery", "cart"))
     total_cents = sum(int(r.get("amount_cents") or 0) for r in rows)
-    paid_cents = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("paid_out"))
-    pending_cents = total_cents - paid_cents
+    paid_cents = _redeemed_credit_cents(user_id, rows)
+    # Never negative, even if a redemption were somehow recorded against credit
+    # that was later reversed. A negative balance would read as debt the
+    # creator owes, which is not a thing canvas credit can be.
+    pending_cents = max(0, total_cents - paid_cents)
     return {
-        "template_sales": template_sales,
         "print_sales": print_sales,
         "total_cents": total_cents,
         "paid_cents": paid_cents,
@@ -906,7 +1050,7 @@ def list_gallery_items_for_admin(include_suspended: bool = True) -> list[dict]:
         params += "&suspended_at=is.null"
     result = _request("GET", "/gallery_items", params=params)
     items = result if isinstance(result, list) else []
-    return [_normalize_gallery_item(item, set()) for item in items]
+    return _normalize_gallery_items(items, set())
 
 
 def suspend_gallery_item(item_id: str, reason: str | None, admin_user_id: str) -> dict | None:

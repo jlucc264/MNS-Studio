@@ -9,7 +9,7 @@ import { useAuth } from '../../components/AuthProvider'
 import { userDisplayName } from '../../components/UserAvatar'
 import { NavAccountControls } from '../../components/NavAccountControls'
 import { NotificationBell } from '../../components/NotificationBell'
-import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, tierDowngradeMarginInches, toggleGalleryLike, type GalleryItem } from '../../lib/api'
+import { assetUrl, buildCreatorSlugMap, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, galleryPrintTotalCents, incrementGalleryShare, isStandardOrder, listGalleryItems, tierDowngradeMarginInches, toggleGalleryLike, type GalleryItem } from '../../lib/api'
 import CanvasMarginChoice from '../../components/CanvasMarginChoice'
 import { cartAdd, cartClear, useCart } from '../../lib/cart'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
@@ -184,11 +184,11 @@ function GalleryImage({
 /** Lowest price this design can be printed at — the tier-downgraded price
  *  where one exists, the standard price otherwise. What "Print from" means on
  *  a card, so the cheaper option is visible without opening the item. */
-function lowestGalleryPrintCents(widthInches: number, heightInches: number): number {
-  const standard = printGalleryTotalCents(getCanvasForDesign(widthInches, heightInches))
+function lowestGalleryPrintCents(widthInches: number, heightInches: number, paysCreatorRoyalty?: boolean): number {
+  const standard = galleryPrintTotalCents(getCanvasForDesign(widthInches, heightInches), paysCreatorRoyalty)
   const margin = tierDowngradeMarginInches(widthInches, heightInches)
   if (margin === null) return standard
-  return Math.min(standard, printGalleryTotalCents(getCanvasForDesign(widthInches, heightInches, margin)))
+  return Math.min(standard, galleryPrintTotalCents(getCanvasForDesign(widthInches, heightInches, margin), paysCreatorRoyalty))
 }
 
 function GalleryPage() {
@@ -385,6 +385,7 @@ function GalleryPage() {
       viewMode: 'stitch',
       activeWorkflowStep: 2,
       parentGalleryItemId: item.id,
+      parentPaysCreatorRoyalty: item.pays_creator_royalty,
     }))
     router.push('/studio')
   }
@@ -404,7 +405,8 @@ function GalleryPage() {
       title: item.title || `${canvas.label} canvas`,
       canvas_label: canvas.label,
       canvas_price_cents: canvas.priceCents,
-      base_price_cents: printGalleryTotalCents(canvas) - canvas.priceCents,
+      base_price_cents: galleryPrintTotalCents(canvas, item.pays_creator_royalty) - canvas.priceCents,
+      pays_creator_royalty: item.pays_creator_royalty,
       tier_downgrade: margin !== undefined,
       gallery_item_id: item.id,
       parent_gallery_item_id: null,
@@ -687,7 +689,7 @@ function GalleryPage() {
                       ) : null}
                       {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                         <div style={{ fontSize: 10, color: '#5a7a52', fontWeight: 600, marginTop: 1 }}>
-                          Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches))}
+                          Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches, item.pays_creator_royalty))}
                         </div>
                       )}
                     </div>
@@ -839,7 +841,7 @@ function GalleryPage() {
                     ) : null}
                     {item.width_inches && item.height_inches && isStandardOrder(item.width_inches, item.height_inches) && (
                       <span style={{ fontSize: 11, color: '#5a7a52', fontWeight: 600 }}>
-                        Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches))}
+                        Print from {formatCents(lowestGalleryPrintCents(item.width_inches, item.height_inches, item.pays_creator_royalty))}
                       </span>
                     )}
                   </div>
@@ -1260,7 +1262,7 @@ function GalleryPage() {
                             tierDowngrade && downgradeMargin !== null ? downgradeMargin : undefined,
                           )
                         : null
-                      const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                      const galleryTotalCents = canvas ? galleryPrintTotalCents(canvas, selectedPreview.pays_creator_royalty) : null
                       const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
                       // Creator credit mirrors the actual payout formula, so it's kept
                       // as-is; the canvas line absorbs the rounding remainder instead
@@ -1268,7 +1270,11 @@ function GalleryPage() {
                       // lines always sum to exactly what the button charges (they
                       // previously didn't — canvas + fulfillment + creator credit could
                       // land a few cents under or over the real total).
-                      const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                      // Zero on the shop's own templates: no royalty is owed, so no
+                      // markup was charged and there is nothing to credit.
+                      const creatorCreditCents = galleryTotalCents !== null
+                        ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                        : null
                       const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                         ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
                         : null
@@ -1285,7 +1291,7 @@ function GalleryPage() {
                             <CanvasMarginChoice
                               widthInches={selectedPreview.width_inches}
                               heightInches={selectedPreview.height_inches}
-                              pricing="gallery"
+                              pricing={selectedPreview.pays_creator_royalty === false ? 'own' : 'gallery'}
                               value={tierDowngrade}
                               onChange={setTierDowngrade}
                               compact
@@ -1307,7 +1313,9 @@ function GalleryPage() {
                               <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                               <div>{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} — {formatCents(canvasDisplayCents)}</div>
                               <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
-                              <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
+                              {creatorCreditCents > 0 && (
+                                <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
+                              )}
                             </div>
                           )}
                           {canvas && printPrice && (
@@ -1426,7 +1434,7 @@ function GalleryPage() {
                     const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                       ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                       : null
-                    const printPrice = canvas ? formatCents(printGalleryTotalCents(canvas)) : null
+                    const printPrice = canvas ? formatCents(galleryPrintTotalCents(canvas, selectedPreview.pays_creator_royalty)) : null
                     return (
                       <button
                         type="button"
@@ -1453,12 +1461,14 @@ function GalleryPage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                  const galleryTotalCents = canvas ? galleryPrintTotalCents(canvas, selectedPreview.pays_creator_royalty) : null
                   const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
                   // See the desktop breakdown above: canvas line absorbs the rounding
                   // remainder so canvas + fulfillment + creator credit always sums to
                   // the total shown, rather than each being independently rounded.
-                  const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                  const creatorCreditCents = galleryTotalCents !== null
+                    ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                    : null
                   const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                     ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
                     : null
@@ -1466,7 +1476,7 @@ function GalleryPage() {
                     <>
                       <div style={{ margin: '0 16px 6px', fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
                         <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Mono Deluxe Zweigart Canvas</span>
-                        {' · '}{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} ({formatCents(canvasDisplayCents)}) + printing &amp; fulfillment ({formatCents(PRINT_OWN_BASE_CENTS)}) + creator credit ({formatCents(creatorCreditCents)})
+                        {' · '}{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} ({formatCents(canvasDisplayCents)}) + printing &amp; fulfillment ({formatCents(PRINT_OWN_BASE_CENTS)}){creatorCreditCents > 0 ? ` + creator credit (${formatCents(creatorCreditCents)})` : ''}
                       </div>
                       <div style={{ margin: '0 16px 10px', fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Ships within 5–7 business days</div>
                     </>

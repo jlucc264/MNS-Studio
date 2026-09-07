@@ -94,7 +94,11 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
       ? tierDowngradeMarginInches(item.width_inches, item.height_inches) ?? undefined
       : undefined
     const canvas = getCanvasForDesign(item.width_inches, item.height_inches, margin)
+    // A line owes a royalty only if it came from the gallery AND that listing
+    // pays one. The shop's own templates do not, so they re-price like an own
+    // design when the border changes.
     const hasCreator = Boolean(item.gallery_item_id ?? item.parent_gallery_item_id)
+      && item.pays_creator_royalty !== false
     const unit = hasCreator ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas)
     cartSetTierDowngrade(
       item.id,
@@ -163,7 +167,7 @@ export default function CartDrawer({ open, onClose, accessToken, onCheckoutReady
                     )
                   })()}
                   <div style={{ fontSize: 12, color: '#8a8177', marginTop: 2 }}>{item.canvas_label} canvas</div>
-                  {(item.gallery_item_id ?? item.parent_gallery_item_id) && (
+                  {(item.gallery_item_id ?? item.parent_gallery_item_id) && item.pays_creator_royalty !== false && (
                     <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>Includes 20% creator credit</div>
                   )}
                 </div>

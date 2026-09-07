@@ -47,6 +47,7 @@ import {
   createPreview,
   createPrintOwnCheckout,
   fetchDmcColors,
+  fetchGalleryItem,
   fetchGalleryItemByProject,
   finalizePreview,
   formatCents,
@@ -506,6 +507,11 @@ type ActiveDesignSnapshot = {
   finalPdfPath?: string | null
   finalPreviewImagePath?: string | null
   parentGalleryItemId?: string | null
+  // Whether the parent listing pays its creator a royalty, and so whether this
+  // remix carries the gallery markup. Absent on drafts written before the
+  // shop's own templates stopped charging one — see the lookup effect below,
+  // which fills it in rather than guessing.
+  parentPaysCreatorRoyalty?: boolean | null
   paletteReductionTarget?: number
   manuallyDisabledHexes?: string[]
   removalMode?: 'fill' | 'blank'
@@ -794,6 +800,14 @@ function StudioPage() {
   const [pendingResize, setPendingResize] = useState<PreviewSettings | null>(null)
   const [galleryItemId, setGalleryItemId] = useState<string | null>(null)
   const [parentGalleryItemId, setParentGalleryItemId] = useState<string | null>(null)
+  // null means "not known yet", which is different from false. Until the answer
+  // arrives the markup is charged, so a price shown here is never lower than
+  // the one checkout will ask for.
+  const [parentPaysCreatorRoyalty, setParentPaysCreatorRoyalty] = useState<boolean | null>(null)
+  // Whether a print of this design owes the original creator a royalty. The
+  // shop's own templates are remixable like any other listing but pay nobody,
+  // so being a remix and being marked up are no longer the same question.
+  const remixPaysRoyalty = Boolean(parentGalleryItemId) && parentPaysCreatorRoyalty !== false
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
@@ -1151,6 +1165,26 @@ function StudioPage() {
     && (cleanDesignFingerprint === null || designFingerprint !== cleanDesignFingerprint)
   hasUnsavedChangesRef.current = hasUnsavedChanges
 
+  // Whether the parent listing pays a royalty does not travel with the design.
+  // A saved project stores only the parent's id, and a draft written before the
+  // shop's own templates stopped charging one stores nothing at all, so ask the
+  // gallery for the one listing rather than guessing from the id. Runs once per
+  // parent: the answer is cached in state and persisted into the snapshot.
+  useEffect(() => {
+    if (!parentGalleryItemId || parentPaysCreatorRoyalty !== null) return
+    let cancelled = false
+    void fetchGalleryItem(parentGalleryItemId)
+      .then((item) => {
+        // A listing that has since been taken down answers null. Leaving the
+        // flag unknown keeps the markup on, which is the safe direction: the
+        // quote never lands under what checkout charges.
+        if (cancelled || !item) return
+        setParentPaysCreatorRoyalty(item.pays_creator_royalty !== false)
+      })
+      .catch(() => { /* keep the markup on */ })
+    return () => { cancelled = true }
+  }, [parentGalleryItemId, parentPaysCreatorRoyalty])
+
   const recoverySnapshot = useMemo<ActiveDesignSnapshot>(() => ({
     version: ACTIVE_DESIGN_VERSION,
     savedAt: new Date().toISOString(),
@@ -1177,6 +1211,7 @@ function StudioPage() {
     finalPdfPath,
     finalPreviewImagePath,
     parentGalleryItemId,
+    parentPaysCreatorRoyalty,
     paletteReductionTarget,
     manuallyDisabledHexes,
     removalMode,
@@ -1211,6 +1246,7 @@ function StudioPage() {
     originalPreviewImagePath,
     paletteReductionTarget,
     parentGalleryItemId,
+    parentPaysCreatorRoyalty,
     previewImagePath,
     previewPalette,
     removalMode,
@@ -1347,6 +1383,7 @@ function StudioPage() {
     setFinalPdfPath(snapshot.finalPdfPath ?? null)
     setFinalPreviewImagePath(snapshot.finalPreviewImagePath ?? null)
     setParentGalleryItemId(snapshot.parentGalleryItemId ?? null)
+    setParentPaysCreatorRoyalty(snapshot.parentPaysCreatorRoyalty ?? null)
     setPaletteReductionTarget(snapshot.paletteReductionTarget ?? 128)
     setManuallyDisabledHexes(snapshot.manuallyDisabledHexes ?? [])
     setRemovalMode(snapshot.removalMode ?? 'fill')
@@ -1435,7 +1472,13 @@ function StudioPage() {
       setCells(loadedCells)
       setOriginalCells(loadedCells)
 
-      if (project.parent_gallery_item_id) setParentGalleryItemId(project.parent_gallery_item_id)
+      if (project.parent_gallery_item_id) {
+        setParentGalleryItemId(project.parent_gallery_item_id)
+        // The project row records the parent's id and nothing about its
+        // pricing. Clearing to unknown makes the effect above ask, instead of
+        // carrying over the last design opened in this session.
+        setParentPaysCreatorRoyalty(null)
+      }
       // Projects saved before design_origin existed have no explicit value —
       // fall back to source_image_url as the best available signal (a photo
       // import always sets it; a from-scratch canvas never does), rather than
@@ -4655,7 +4698,7 @@ function StudioPage() {
           </a>
           {parentGalleryItemId && (
             <div style={{ background: '#f0ece5', border: '1px solid #ddd5c8', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#5f574f' }}>
-              Working from a gallery template · print includes 20% creator credit
+              Working from a gallery template{remixPaysRoyalty ? ' · print includes 20% creator credit' : ''}
             </div>
           )}
           {!orderableSize && (
@@ -5831,7 +5874,7 @@ function StudioPage() {
         const standard = printable && isStandardOrder(designW, designH)
         const canvas = lastSettings ? getCanvasForDesign(designW, designH) : null
         const printTotal = canvas
-          ? (parentGalleryItemId ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas))
+          ? (remixPaysRoyalty ? printGalleryTotalCents(canvas) : printOwnTotalCents(canvas))
           : null
         // "from $X" when a narrower border would drop a roll tier, so the range
         // is visible here without the design itself having to change. The lower
@@ -5840,7 +5883,7 @@ function StudioPage() {
         const downgradeTotal = downgradeMargin !== null && lastSettings
           ? (() => {
               const c = getCanvasForDesign(designW, designH, downgradeMargin)
-              return parentGalleryItemId ? printGalleryTotalCents(c) : printOwnTotalCents(c)
+              return remixPaysRoyalty ? printGalleryTotalCents(c) : printOwnTotalCents(c)
             })()
           : null
         const fromTotal = downgradeTotal !== null && printTotal !== null
@@ -5884,7 +5927,7 @@ function StudioPage() {
                         </div>
                       )}
                       <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
-                      {parentGalleryItemId && (
+                      {remixPaysRoyalty && (
                         <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 20% creator credit</div>
                       )}
                     </div>
@@ -5994,6 +6037,12 @@ function StudioPage() {
                   <h2 style={{ margin: 0 }}>Content Responsibility</h2>
                   <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.45 }}>
                     This studio is intended to be used as a way to create what you want. Users are entirely responsible for their own content; unauthorized use of copyrighted material will result in your design being taken down and further action being taken against your account. See terms and conditions for more information.
+                  </p>
+                  {/* The moment of consent is where what you get in return belongs.
+                      Says "canvas credit", not "earn", so nobody reads it as cash. */}
+                  <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.45 }}>
+                    When someone buys a print of your design you earn 20% of the sale as canvas credit toward your own MNS
+                    orders. Canvas credit is not a cash payout.
                   </p>
                 </div>
                 <div style={{ border: '1px solid #e7e1d8', borderRadius: 10, padding: 14, display: 'grid', gap: 6, background: '#f8f4ec' }}>
@@ -6379,9 +6428,9 @@ function StudioPage() {
         const bCanvas = lastSettings && bStandard ? getCanvasForDesign(bW, bH, bMargin) : null
         const bShipping = 700
         // Everything above the canvas material charge: the print-own base fee,
-        // plus the creator markup when this is a gallery remix.
+        // plus the creator markup when this remix actually owes one.
         const bBase = bCanvas
-          ? (parentGalleryItemId ? printGalleryTotalCents(bCanvas) : printOwnTotalCents(bCanvas)) - bCanvas.priceCents
+          ? (remixPaysRoyalty ? printGalleryTotalCents(bCanvas) : printOwnTotalCents(bCanvas)) - bCanvas.priceCents
           : 0
         const bTotal = bCanvas ? bBase + bCanvas.priceCents + bShipping : null
         return (
@@ -6410,7 +6459,7 @@ function StudioPage() {
                       <span style={{ color: '#5f574f' }}>Shipping (Standard, 5–7 days)</span>
                       <span>{formatCents(bShipping)}</span>
                     </div>
-                    {parentGalleryItemId && (
+                    {remixPaysRoyalty && (
                       <div style={{ fontSize: 12, color: '#8a8177', borderTop: '1px solid #e7e1d8', paddingTop: 8 }}>
                         Includes 20% creator credit for the original designer
                       </div>
@@ -6425,7 +6474,7 @@ function StudioPage() {
                   <CanvasMarginChoice
                     widthInches={bW}
                     heightInches={bH}
-                    pricing={parentGalleryItemId ? 'gallery' : 'own'}
+                    pricing={remixPaysRoyalty ? 'gallery' : 'own'}
                     value={tierDowngrade}
                     onChange={setTierDowngrade}
                   />
@@ -6458,6 +6507,7 @@ function StudioPage() {
                       tier_downgrade: tierDowngrade && bDowngradeMargin !== null,
                       gallery_item_id: null,
                       parent_gallery_item_id: parentGalleryItemId,
+                      pays_creator_royalty: remixPaysRoyalty,
                       project_id: savedProjectId,
                     })
                     setShowPriceBreakdownModal(false)

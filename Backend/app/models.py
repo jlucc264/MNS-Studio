@@ -333,6 +333,10 @@ class GalleryItemResponse(BaseModel):
     share_count: int = 0
     project_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
+    # False for the shop's own templates: nobody is owed a royalty on them, so
+    # they carry no gallery markup. The frontend prices from this so what it
+    # shows matches what checkout charges.
+    pays_creator_royalty: bool = True
 
 
 class RollPrintRequest(BaseModel):

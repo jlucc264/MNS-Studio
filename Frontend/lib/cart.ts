@@ -20,6 +20,10 @@ export type CartItem = {
   tier_downgrade?: boolean
   gallery_item_id: string | null        // gallery print — links to /gallery?item=<id>
   parent_gallery_item_id: string | null // own design remix (creator attribution)
+  // Whether this line owes a creator a royalty, and so carries the gallery
+  // markup. Absent on lines added before the shop's own templates stopped
+  // charging one; those are all royalty-bearing, so absent reads as true.
+  pays_creator_royalty?: boolean
   project_id: string | null             // own design — links to /studio?project=<id>
 }
 

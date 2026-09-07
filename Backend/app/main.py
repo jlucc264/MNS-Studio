@@ -66,7 +66,6 @@ from app.services.email_delivery import (
 )
 from app.services.stripe_service import (
     create_print_own_checkout,
-    create_template_checkout,
     create_gallery_print_checkout,
     create_cart_checkout,
 )
@@ -89,6 +88,7 @@ from app.services.supabase_db import (
     create_gallery_item,
     toggle_gallery_like,
     get_public_project_by_gallery_item,
+    get_gallery_item,
     get_gallery_item_by_project_id,
     update_gallery_item,
     delete_gallery_item,
@@ -998,6 +998,19 @@ def get_gallery_item_project(item_id: str):
     return result
 
 
+# Declared after every other /gallery/... route so the literal paths above
+# (creator, creators, by-project) still match before this catch-all does.
+@app.get("/gallery/{item_id}", response_model=GalleryItemResponse, dependencies=[Depends(require_enabled("gallery"))])
+def get_one_gallery_item(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
+    """One listing by id. The studio needs it to price a remix: whether a
+    design descends from a shop template decides whether the print carries the
+    gallery markup, and a draft resumed days later has only the parent's id."""
+    result = get_gallery_item(item_id, user_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    return result
+
+
 # ── Checkout ──────────────────────────────────────────────────────────────────
 
 @app.post("/checkout/print-own", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
@@ -1008,8 +1021,8 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
 
     creator_user_id = None
     if request.parent_gallery_item_id:
-        from app.services.supabase_db import resolve_root_creator_id
-        creator_user_id = resolve_root_creator_id(request.parent_gallery_item_id)
+        from app.services.supabase_db import royalty_creator_id
+        creator_user_id = royalty_creator_id(request.parent_gallery_item_id)
 
     try:
         url = create_print_own_checkout(
@@ -1028,32 +1041,13 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
     return CheckoutResponse(client_secret=url)
 
 
-@app.post("/checkout/template/{item_id}", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
-def checkout_template(item_id: str, user_id: str | None = Depends(get_optional_user_id)):
-    from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
-    item = get_gallery_item(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Gallery item not found.")
-    try:
-        url = create_template_checkout(
-            gallery_item_id=item_id,
-            gallery_item_title=item.get("title", "Untitled"),
-            creator_user_id=resolve_root_creator_id(item_id) or "",
-            pdf_url=item.get("pdf_url", ""),
-            buyer_user_id=user_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    return CheckoutResponse(client_secret=url)
-
-
 @app.post("/checkout/print-gallery/{item_id}", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_print_gallery(
     item_id: str,
     tier_downgrade: bool = False,
     user_id: str | None = Depends(get_optional_user_id),
 ):
-    from app.services.supabase_db import get_gallery_item, resolve_root_creator_id
+    from app.services.supabase_db import get_gallery_item, royalty_creator_id
     item = get_gallery_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
@@ -1068,7 +1062,7 @@ def checkout_print_gallery(
         url = create_gallery_print_checkout(
             gallery_item_id=item_id,
             gallery_item_title=item.get("title", "Untitled"),
-            creator_user_id=resolve_root_creator_id(item_id) or "",
+            creator_user_id=royalty_creator_id(item_id) or "",
             pdf_url=item.get("pdf_url", ""),
             width_inches=width,
             height_inches=height,
@@ -1082,7 +1076,7 @@ def checkout_print_gallery(
 
 @app.post("/checkout/cart", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_current_user_id)):
-    from app.services.supabase_db import resolve_root_creator_id
+    from app.services.supabase_db import royalty_creator_id
     if not request.items:
         raise HTTPException(status_code=422, detail="Cart is empty.")
 
@@ -1094,7 +1088,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
         creator_user_id = None
         creator_gallery_item_id = item.gallery_item_id or item.parent_gallery_item_id
         if creator_gallery_item_id:
-            creator_user_id = resolve_root_creator_id(creator_gallery_item_id)
+            creator_user_id = royalty_creator_id(creator_gallery_item_id)
         items_data.append({
             "pdf_url": item.pdf_url,
             "internal_pdf_supabase_path": item.internal_pdf_supabase_path,
@@ -1126,7 +1120,13 @@ def _record_creator_earnings(
     gallery_item_title: str | None = None,
 ) -> None:
     from app.services.supabase_db import _request
-    from app.services.canvas_pricing import creator_earnings_cents
+    from app.services.canvas_pricing import creator_earnings_cents, is_shop_creator
+    # The shop is never owed a royalty on its own templates, and the buyer was
+    # not charged one. Guarded here as well as at checkout because this also
+    # runs for sessions created before that rule existed, and paying the shop
+    # out of a sale that never collected the markup would invent credit.
+    if is_shop_creator(creator_user_id):
+        return
     _request("POST", "/creator_earnings", body={
         "stripe_session_id": session_id,
         "creator_user_id": creator_user_id,
@@ -1320,7 +1320,7 @@ def _handle_completed_session(session) -> None:
         except Exception:
             logger.exception("Customer confirmation email failed for session %s", session.get("id"))
 
-    if order_type in {"template", "print_gallery"}:
+    if order_type == "print_gallery":
         creator_user_id = metadata.get("creator_user_id", "")
         gallery_item_id = metadata.get("gallery_item_id", "")
         if creator_user_id and gallery_item_id:
@@ -1347,10 +1347,17 @@ def _handle_completed_session(session) -> None:
     applied_credit_user_id = metadata.get("applied_credit_user_id")
     if applied_credit_user_id:
         try:
-            from app.services.supabase_db import mark_creator_earnings_paid
-            mark_creator_earnings_paid(applied_credit_user_id)
+            from app.services.supabase_db import record_credit_redemption
+            # Spend only what this order actually used. The amount was already
+            # stamped into the session at checkout; reading it back is what
+            # keeps the rest of the balance available for the next order.
+            record_credit_redemption(
+                session["id"],
+                applied_credit_user_id,
+                int(metadata.get("applied_credit_cents") or 0),
+            )
         except Exception:
-            logger.exception("Failed to mark creator earnings paid for user %s", applied_credit_user_id)
+            logger.exception("Failed to record credit redemption for user %s", applied_credit_user_id)
 
 
 @app.get("/admin/blank-roll-pdf")

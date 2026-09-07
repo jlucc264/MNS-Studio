@@ -11,7 +11,7 @@ import { SignaturePad } from '../../../components/SignaturePad'
 import { SignatureGridEditor } from '../../../components/SignatureGridEditor'
 import MaintenanceScreen from '../../../components/MaintenanceScreen'
 import { useSiteStatus } from '../../../lib/siteStatus'
-import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, printGalleryTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
+import { assetUrl, createGalleryPrintCheckout, creatorEarningsCents, fetchGalleryItemProject, formatCents, formatCustomerCanvasLabel, getCanvasForDesign, PRINT_OWN_BASE_CENTS, galleryPrintTotalCents, getCreatorEarnings, getCreatorProfile, getMyCreatorProfile, getMySignature, isStandardOrder, saveMySignature, toggleGalleryLike, updateMyCreatorName, type CreatorEarnings, type CreatorProfile, type GalleryItem } from '../../../lib/api'
 
 function resolveMaybeAssetUrl(path: string | null) {
   if (!path) return null
@@ -214,6 +214,7 @@ export default function CreatorProfilePage() {
       viewMode: 'stitch',
       activeWorkflowStep: 2,
       parentGalleryItemId: item.id,
+      parentPaysCreatorRoyalty: item.pays_creator_royalty,
     }))
     router.push('/studio')
   }
@@ -489,7 +490,6 @@ export default function CreatorProfilePage() {
                 <h2 style={{ margin: 0, fontSize: 16, fontFamily: 'Georgia, "Times New Roman", serif' }}>Sales & Canvas Credit</h2>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
                   {[
-                    { label: 'Template sales', value: earnings.template_sales },
                     { label: 'Print sales', value: earnings.print_sales },
                     { label: 'Total credit earned', value: `$${(earnings.total_cents / 100).toFixed(2)}` },
                     { label: 'Credit available', value: `$${(earnings.pending_cents / 100).toFixed(2)}` },
@@ -502,7 +502,10 @@ export default function CreatorProfilePage() {
                   ))}
                 </div>
                 <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
-                  Each sale earns 20% of the sale price as canvas credit you can use toward future MNS canvas orders. Reach out to redeem.
+                  Each sale earns 20% of the sale price as canvas credit, not a cash payout. It applies automatically at
+                  checkout on your next canvas order and covers the design and printing rather than shipping. Whatever an
+                  order doesn&rsquo;t use stays here for the next one. Credit can&rsquo;t be combined with a promo code on the
+                  same order.
                 </p>
               </div>
             )}
@@ -667,14 +670,18 @@ export default function CreatorProfilePage() {
                   const canvas = printable && selectedPreview.width_inches && selectedPreview.height_inches
                     ? getCanvasForDesign(selectedPreview.width_inches, selectedPreview.height_inches)
                     : null
-                  const galleryTotalCents = canvas ? printGalleryTotalCents(canvas) : null
+                  const galleryTotalCents = canvas ? galleryPrintTotalCents(canvas, selectedPreview.pays_creator_royalty) : null
                   const printPrice = galleryTotalCents !== null ? formatCents(galleryTotalCents) : null
                   // Creator credit mirrors the actual payout formula, so it's kept
                   // as-is; the canvas line absorbs the rounding remainder instead of
                   // showing its own independently-rounded value, so the three lines
                   // always sum to exactly what the button charges. Mirrors the same
                   // fix in gallery/page.tsx.
-                  const creatorCreditCents = galleryTotalCents !== null ? creatorEarningsCents(galleryTotalCents) : null
+                  // Zero on the shop's own templates: no royalty is owed, so no
+                  // markup was charged and there is nothing to credit.
+                  const creatorCreditCents = galleryTotalCents !== null
+                    ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                    : null
                   const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                     ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
                     : null
@@ -700,7 +707,9 @@ export default function CreatorProfilePage() {
                           <div style={{ fontWeight: 600, color: '#5f574f', marginBottom: 2 }}>Mono Deluxe Zweigart Canvas</div>
                           <div>{formatCustomerCanvasLabel(canvas, selectedPreview.width_inches!, selectedPreview.height_inches!)} — {formatCents(canvasDisplayCents)}</div>
                           <div>Printing &amp; fulfillment — {formatCents(PRINT_OWN_BASE_CENTS)}</div>
-                          <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
+                          {creatorCreditCents > 0 && (
+                            <div>Creator credit (20%) — {formatCents(creatorCreditCents)}</div>
+                          )}
                         </div>
                       )}
                       {canvas && printPrice && (

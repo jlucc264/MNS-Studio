@@ -814,6 +814,10 @@ export type GalleryItem = {
   share_count: number
   project_id: string | null
   parent_gallery_item_id: string | null
+  // False for the shop's own templates, which owe no royalty and so carry no
+  // gallery markup. Optional because a cached response from before the field
+  // existed has to keep pricing the way it did.
+  pays_creator_royalty?: boolean
 }
 
 export type GalleryCreatePayload = {
@@ -940,6 +944,12 @@ export async function fetchGalleryItemProject(itemId: string): Promise<Record<st
     const data = await res.json().catch(() => ({}))
     throw new Error((data as { detail?: string }).detail ?? 'Could not load template project')
   }
+  return res.json()
+}
+
+export async function fetchGalleryItem(itemId: string): Promise<GalleryItem | null> {
+  const res = await fetch(`${API_BASE}/gallery/${itemId}`)
+  if (!res.ok) return null
   return res.json()
 }
 
@@ -1161,6 +1171,17 @@ export function printGalleryTotalCents(canvas: CanvasSize): number {
   return roundUpTo50Cents(raw)
 }
 
+/** What a buyer pays to print a gallery listing.
+ *
+ *  Mirrors the backend's rule (royalty_creator_id + create_gallery_print_checkout):
+ *  a listing that owes no creator a royalty carries no markup, which is what
+ *  the shop's own templates are. Undefined means an older response that
+ *  predates the field, and those all did owe a royalty.
+ */
+export function galleryPrintTotalCents(canvas: CanvasSize, paysCreatorRoyalty?: boolean): number {
+  return paysCreatorRoyalty === false ? printOwnTotalCents(canvas) : printGalleryTotalCents(canvas)
+}
+
 /** What the original designer earns on a gallery print. Mirrors
  *  creator_earnings_cents in canvas_pricing.py — taken off the print-own base,
  *  not the marked-up total, which is what makes the markup self-funding. */
@@ -1294,17 +1315,6 @@ export async function createPrintOwnCheckout(
   return res.json()
 }
 
-export async function createTemplateCheckout(galleryItemId: string): Promise<CheckoutResponse> {
-  const res = await fetch(`${API_BASE}/checkout/template/${galleryItemId}`, {
-    method: 'POST',
-  })
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.detail ?? 'Could not create checkout session')
-  }
-  return res.json()
-}
-
 // ── Creator profiles ──────────────────────────────────────────────────────────
 
 export function slugify(name: string): string {
@@ -1353,7 +1363,6 @@ export type CreatorProfile = {
 }
 
 export type CreatorEarnings = {
-  template_sales: number
   print_sales: number
   total_cents: number
   paid_cents: number

@@ -27,7 +27,9 @@ function timeAgo(iso: string): string {
 
 function messageFor(n: Notification): string {
   const title = n.gallery_item_title ? `“${n.gallery_item_title}”` : 'your design'
-  return n.type === 'sale' ? `Someone bought a print of ${title}` : `Someone liked ${title}`
+  return n.type === 'sale'
+    ? `Someone bought a print of ${title} — you earned canvas credit`
+    : `Someone liked ${title}`
 }
 
 /** Self-contained like NavAccountControls: own trigger, own dropdown, own

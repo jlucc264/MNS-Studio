@@ -27,6 +27,34 @@ create table if not exists public.creator_earnings (
   paid_out_at timestamptz
 );
 
+-- Canvas credit a creator has actually spent, one row per checkout session.
+-- Before this existed, spending any credit flipped every unpaid row in
+-- creator_earnings to paid_out, so a $10 order against a $50 balance burned
+-- the other $40. Earnings and spending are separate ledgers now: the balance
+-- is what has been earned minus what has been redeemed.
+create table if not exists public.creator_credit_redemptions (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  -- Unique so a Stripe webhook retry cannot spend the same credit twice.
+  stripe_session_id text unique not null,
+  creator_user_id text not null,
+  amount_cents integer not null
+);
+
+create index if not exists creator_credit_redemptions_user_idx
+  on public.creator_credit_redemptions (creator_user_id);
+
+-- One-time backfill, safe to re-run. The only record of credit spent before
+-- this table existed is the all-or-nothing paid_out flag, so carry it over as
+-- one redemption per creator. Without this, every previously spent balance
+-- would reappear as available credit the moment the new code reads from here.
+insert into public.creator_credit_redemptions (stripe_session_id, creator_user_id, amount_cents)
+select 'backfill:' || creator_user_id, creator_user_id, sum(amount_cents)
+from public.creator_earnings
+where paid_out
+group by creator_user_id
+on conflict (stripe_session_id) do nothing;
+
 create table if not exists public.creator_signatures (
   user_id text primary key,
   image_url text not null,
@@ -208,6 +236,7 @@ grant select, insert, update, delete on table public.projects to service_role;
 grant select, insert, update, delete on table public.gallery_items to service_role;
 grant select, insert, update, delete on table public.gallery_likes to service_role;
 grant select, insert, update on table public.creator_earnings to service_role;
+grant select, insert on table public.creator_credit_redemptions to service_role;
 grant select, insert, update, delete on table public.creator_signatures to service_role;
 grant select, insert, update, delete on table public.print_orders to service_role;
 grant select, insert, update on table public.print_runs to service_role;

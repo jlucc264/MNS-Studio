@@ -84,7 +84,7 @@ export default function PrivacyPage() {
             <Sub title="2.1 Information You Provide">
               <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
                 <li style={li}><strong>Account information:</strong> your name, email address, and password when you register</li>
-                <li style={li}><strong>Payment information:</strong> payout details you provide to receive creator royalties. We do not store full payment account numbers directly — this is handled by Stripe</li>
+                <li style={li}><strong>Payment information:</strong> billing details you provide when you place an order. We do not store full payment card numbers directly — this is handled by Stripe. Creator earnings are issued as canvas credit toward MNS Studio orders, so we do not collect payout or bank account details from creators</li>
                 <li style={li}><strong>Designs and uploads:</strong> images, photos, and other content you upload or create within the Service</li>
                 <li style={li}><strong>Communications:</strong> messages you send to us at <a href="mailto:john@mns.studio" style={{ color: '#6e8d67' }}>john@mns.studio</a></li>
               </ul>
@@ -109,7 +109,7 @@ export default function PrivacyPage() {
             <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
               <li style={li}>Create and manage your account</li>
               <li style={li}>Provide, maintain, and improve the Service</li>
-              <li style={li}>Process and fulfill marketplace orders and pay creator royalties</li>
+              <li style={li}>Process and fulfill marketplace orders and apply creator canvas credit</li>
               <li style={li}>Communicate with you about your account, orders, policy updates, and support requests</li>
               <li style={li}>Detect and prevent fraud, abuse, and violations of our Terms</li>
               <li style={li}>Comply with legal obligations</li>
@@ -126,7 +126,7 @@ export default function PrivacyPage() {
               <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
                 <li style={li}><strong>Cloud storage and database:</strong> to store your account data and designs</li>
                 <li style={li}><strong>AI providers:</strong> your design inputs are processed by AI services (including Anthropic and OpenAI) to generate design outputs. These providers process data under their own privacy policies and are not permitted to use your data to train their models based on our agreements with them</li>
-                <li style={li}><strong>Payment processors:</strong> creator royalty payouts are processed by Stripe, Inc. Stripe may collect and process payment account information directly. See <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer" style={{ color: '#6e8d67' }}>Stripe&rsquo;s Privacy Policy</a> for details</li>
+                <li style={li}><strong>Payment processors:</strong> order payments are processed by Stripe, Inc. Stripe may collect and process payment information directly. See <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer" style={{ color: '#6e8d67' }}>Stripe&rsquo;s Privacy Policy</a> for details</li>
                 <li style={li}><strong>Hosting and infrastructure:</strong> to deliver the Service reliably</li>
               </ul>
               <p style={p}>
@@ -159,7 +159,7 @@ export default function PrivacyPage() {
             </p>
             <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
               <li style={li}>Where we are required to retain it by law</li>
-              <li style={li}>Where it is associated with completed orders or outstanding royalty payments</li>
+              <li style={li}>Where it is associated with completed orders or an unused canvas credit balance</li>
               <li style={li}>Where it has been shared with third parties as part of a completed transaction</li>
             </ul>
           </Section>

@@ -110,7 +110,7 @@ export default function TermsPage() {
               </p>
               <p style={p}>
                 By submitting a design for sale through the MNS Studio marketplace, you grant MNS Studio a non-exclusive,
-                worldwide, royalty-bearing license to reproduce, print, sell, and distribute your design on physical needlepoint
+                worldwide license, for the consideration described in Section 5, to reproduce, print, sell, and distribute your design on physical needlepoint
                 canvas and related products (&ldquo;Products&rdquo;). This license remains in effect for as long as your design is
                 listed for sale and terminates when you remove your design from the marketplace. Because this license is
                 non-exclusive, you remain free to sell or license your design in other formats and through other platforms.
@@ -211,31 +211,46 @@ export default function TermsPage() {
             </Sub>
           </Section>
 
-          <Section title="5. Marketplace & Creator Royalties">
+          <Section title="5. Marketplace & Canvas Credit">
             <Sub title="5.1 How It Works">
               <p style={p}>
                 Creators may submit designs to the MNS Studio marketplace. When a customer purchases a Product featuring your
-                design, MNS Studio will print and fulfill the order and pay you a royalty on the sale.
+                design, MNS Studio prints and fulfills the order and credits your account. That credit is store credit toward
+                MNS Studio canvas orders. It is not a cash payment.
               </p>
             </Sub>
-            <Sub title="5.2 Royalty Rate">
+            <Sub title="5.2 Credit Rate">
               <p style={p}>
-                Creators earn 20% of the sale price for each Product sold featuring their design. MNS Studio reserves the right
-                to adjust royalty rates with reasonable advance notice. Rate changes will not apply to orders already placed
+                Creators earn canvas credit equal to 20% of the sale price for each Product sold featuring their design. The
+                credit is funded by the buyer rather than deducted from your work: a gallery print costs that much more than
+                printing a design the buyer made themselves, and the difference becomes your credit. MNS Studio reserves the
+                right to adjust the rate with reasonable advance notice. Rate changes will not apply to orders already placed
                 before the change takes effect.
               </p>
             </Sub>
-            <Sub title="5.3 Payouts">
+            <Sub title="5.3 How Credit Is Used">
               <p style={p}>
-                Royalties are processed through Stripe. You are responsible for providing accurate payout information and for any
-                taxes applicable to your royalty income. MNS Studio will issue any required tax documentation in accordance with
-                applicable law.
+                Canvas credit is applied automatically to your next eligible order at checkout. It applies to the design and
+                printing portion of an order, not to shipping, and it cannot reduce an order below a minimum charge of $0.50.
+                Any credit an order does not use stays on your account for the next one. Because a checkout accepts only one
+                discount, canvas credit and promotional codes cannot be combined on the same order.
+              </p>
+              <p style={p}>
+                Canvas credit is not cash. It cannot be withdrawn, transferred, redeemed for money, or used anywhere other than
+                MNS Studio. MNS Studio does not collect payout or bank details from creators and does not issue payments or tax
+                documentation for canvas credit. You remain responsible for determining and meeting any tax obligations that
+                apply to you.
               </p>
             </Sub>
             <Sub title="5.4 Chargebacks & Refunds">
               <p style={p}>
-                In the event of a customer chargeback or refund, the corresponding royalty may be reversed or deducted from
-                future payouts.
+                In the event of a customer chargeback or refund, the corresponding canvas credit may be reversed or deducted
+                from your credit balance.
+              </p>
+            </Sub>
+            <Sub title="5.5 Account Closure">
+              <p style={p}>
+                Canvas credit has no cash value and is forfeited if your account is closed or terminated.
               </p>
             </Sub>
           </Section>
@@ -309,8 +324,8 @@ export default function TermsPage() {
               To the fullest extent permitted by law, MNS Studio and its officers, employees, and affiliates will not be liable
               for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service,
               including loss of profits, loss of data, or loss of goodwill. Our total liability to you for any claim arising from
-              these Terms or the Service will not exceed the greater of (a) the total royalties paid to you in the three months
-              preceding the claim or (b) $100.
+              these Terms or the Service will not exceed the greater of (a) the total canvas credit earned by you in the three
+              months preceding the claim or (b) $100.
             </p>
             <p style={p}>
               This cap does not apply to refunds owed under the Canvas Print Guarantee in Section 6. Those are refunded at the
