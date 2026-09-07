@@ -762,7 +762,21 @@ export default function PalettePanel({
 
           {/* Paint sub-tab: color grid */}
           {(toolMode === 'paint' || toolMode === 'eyedropper' || toolMode === 'fill') && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div
+            style={
+              scrollWholePanel
+                // Landscape: the sheet scrolls as one unit, so nothing in here
+                // may claim flexible height. flex:1 against an auto-height
+                // parent resolves to zero, which is why the palette swatches
+                // were missing entirely here while "On canvas" still showed.
+                ? { display: 'flex', flexDirection: 'column', gap: 6 }
+                // Portrait: this whole block scrolls together, so the eraser,
+                // the on-canvas row and the palette all move. Only the active
+                // colour card above stays pinned, which is the one thing you
+                // need in view while painting.
+                : { flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }
+            }
+          >
             {/* Eraser row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, flexShrink: 0 }}>
               {/* Eraser */}
@@ -891,16 +905,15 @@ export default function PalettePanel({
               </div>
             </div>
 
-            {/* Color swatches — palette colors below */}
+            {/* Color swatches — palette colors below. Grows to its natural
+                height and lets the block above do the scrolling; a nested
+                scroller here is what trapped the swatches in a sliver. */}
             <div
               style={{
-                flex: 1,
-                minHeight: 0,
                 display: 'grid',
                 gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                 gap: 5,
                 alignContent: 'start',
-                overflow: 'auto',
                 paddingRight: 2,
               }}
             >
@@ -1211,7 +1224,13 @@ export default function PalettePanel({
 
       {/* Select tab */}
       {isSelectTab && (
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div
+          style={
+            scrollWholePanel
+              ? { display: 'flex', flexDirection: 'column', gap: 6 }
+              : { flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }
+          }
+        >
           {/* Sub-tab toggle */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5', flexShrink: 0 }}>
             {(['color', 'stamp'] as const).map((mode) => {
@@ -1261,11 +1280,13 @@ export default function PalettePanel({
               fontSize: 12,
               color: '#6f665b',
               lineHeight: 1.4,
-              flexShrink: 0,
+              // Deliberately not flexShrink: 0. Pinned, this paragraph held a
+              // fixed slice of a short phone screen and the controls under it
+              // could not be scrolled to.
             }}
           >
             {selectSubMode === 'color'
-              ? <span>Choose a color to highlight all active cells, or select a region first. Drag a region to move it, or its corners to resize. Hold CTRL to select more than one.</span>
+              ? <span>Choose a color to highlight matching cells, or select a region first. Drag a region to move it, or its corners to resize. Hold CTRL for more than one.</span>
               : hasFloatingStamp
                 ? <span>Drag the floating stamp on the canvas (or use the arrows), rotate or flip it, then Place to commit.</span>
                 : <span>Select a region, then Cut or Copy it. Drag the region to move it, or its corners to resize. Paste drops the last cut/copied stitches back onto the canvas.</span>

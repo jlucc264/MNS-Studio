@@ -27,6 +27,10 @@ export default function MobileSheet({
   const [snap, setSnap] = useState<'half' | 'full'>(initialSnap)
   const [dragOffset, setDragOffset] = useState<number | null>(null)
   const dragStartRef = useRef<{ pointerId: number; clientY: number; baseOffset: number } | null>(null)
+  // A tap on the handle is a tap, not a drag to the nearest snap point. Without
+  // a threshold, a few pixels of finger drift while reaching for the tabs just
+  // under the handle resolved to the "closed" snap and dismissed the sheet.
+  const DRAG_THRESHOLD_PX = 12
 
   useEffect(() => {
     const update = () => setViewportHeight(window.innerHeight)
@@ -74,6 +78,7 @@ export default function MobileSheet({
       dragStartRef.current = null
       const offset = dragOffset ?? snapOffsets[snap]
       setDragOffset(null)
+      if (Math.abs(event.clientY - start.clientY) < DRAG_THRESHOLD_PX) return
 
       const candidates: Array<{ target: 'full' | 'half' | 'closed'; at: number }> = [
         { target: 'full', at: 0 },

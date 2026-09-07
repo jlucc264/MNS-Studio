@@ -3139,10 +3139,26 @@ export default function GridEditor({
           justifyContent: 'space-between',
           gap: isMobile ? 6 : 12,
           flexWrap: 'wrap',
+          minWidth: 0,
         }}
       >
         {!isPhoneLandscape && <strong style={{ fontSize: isMobile ? 11 : 14 }}>Stitch Preview</strong>}
-        <div style={{ display: 'flex', alignItems: 'center', gap: isPhoneLandscape ? 2 : isMobile ? 4 : 8, flexShrink: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: isPhoneLandscape ? 2 : isMobile ? 4 : 8,
+            // Phone landscape keeps the single compact row it was tuned for.
+            // Everywhere else this group may wrap and shrink: held at
+            // flexShrink 0 it could not fit a portrait phone, so the zoom
+            // controls and the Trace slider ran off the right edge of the
+            // canvas card with no way to reach them.
+            flexShrink: isPhoneLandscape ? 0 : 1,
+            flexWrap: isPhoneLandscape ? 'nowrap' : 'wrap',
+            justifyContent: 'flex-end',
+            minWidth: 0,
+          }}
+        >
           <div
             style={{
               display: 'inline-grid',

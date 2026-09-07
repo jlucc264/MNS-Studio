@@ -1085,18 +1085,10 @@ function StudioPage() {
     }
   }, [toolMode, hasGeneratedPreview])
 
-  const [showPortraitWarning, setShowPortraitWarning] = useState(false)
-  useEffect(() => {
-    const check = () => {
-      const portrait = window.matchMedia('(orientation: portrait)').matches
-      const narrow = window.innerWidth < 600
-      const touch = navigator.maxTouchPoints > 0
-      setShowPortraitWarning(portrait && narrow && touch)
-    }
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
+  // Portrait used to get a fixed "Landscape works better" bar across the
+  // bottom of the viewport. It sat on top of the tools sheet's grab handle, so
+  // the one control that opens the drawer was hidden behind a nag telling you
+  // to rotate. Portrait is a supported orientation, not an error state.
 
   useEffect(() => {
     const scrollY = window.scrollY
@@ -1539,8 +1531,17 @@ function StudioPage() {
   }, [searchParams, router])
 
 
+  // Steps 1 and 3 live entirely inside the sheet, so entering one opens it.
+  // Step 2 is the canvas, and the sheet starts out of the way there — but only
+  // on arrival. It used to close on every render of this effect, which meant
+  // tapping "Design" in the sheet's own step header slammed the sheet shut on
+  // the user mid-gesture.
+  const lastAutoPanelStepRef = useRef<number | null>(null)
   useEffect(() => {
-    if (isMobile) setShowMobilePanel(activeWorkflowStep !== 2)
+    if (!isMobile) return
+    if (lastAutoPanelStepRef.current === activeWorkflowStep) return
+    lastAutoPanelStepRef.current = activeWorkflowStep
+    if (activeWorkflowStep !== 2) setShowMobilePanel(true)
   }, [isMobile, activeWorkflowStep])
 
   const displayedImage = useMemo(() => {
@@ -4282,11 +4283,11 @@ function StudioPage() {
         )}
       </div>
 
-      {isPhoneDevice && !isLandscapeOrientation ? (
-        <span style={{ fontSize: 11, color: '#8a8177', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          ↻ Rotate to landscape to expand
-        </span>
-      ) : !isPhoneCanvasLandscape ? (
+      {/* Expand hides the side panel to give the canvas the width. On a phone
+          in portrait there is no side panel to hide (the tools are a bottom
+          sheet), so the control has nothing to do and is left out rather than
+          replaced by a nag to rotate. */}
+      {!isPhoneCanvasLandscape && !(isPhoneDevice && !isLandscapeOrientation) ? (
         <button
           type="button"
           onClick={() => setIsPreviewExpanded((current) => !current)}
@@ -5227,7 +5228,7 @@ function StudioPage() {
                     <button
                       key={step.id}
                       type="button"
-                      onClick={() => { if (!locked) { setActiveWorkflowStep(step.id); if (mobileDrawer && step.id !== 2) setShowMobilePanel(false) } }}
+                      onClick={() => { if (!locked) setActiveWorkflowStep(step.id) }}
                       disabled={locked}
                       style={{
                         display: 'grid',
@@ -5347,7 +5348,7 @@ function StudioPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        {tab === 'tools' ? 'Tools & Colors' : 'Size & Design'}
+                        {tab === 'tools' ? '🎨 Colors & Tools' : '📐 Size & Finish'}
                       </button>
                     ))}
                   </div>
@@ -5627,7 +5628,22 @@ function StudioPage() {
                 <button type="button" onClick={handleUndoColorChange} disabled={!undoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Undo</button>
                 <button type="button" onClick={handleRedoColorChange} disabled={!redoStack.length} style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px' }}>Redo</button>
                 <div style={{ flex: 1 }} />
-                <button type="button" onClick={() => setShowMobilePanel(true)} style={{ ...btnSecondary, fontSize: 12, padding: '5px 12px', fontWeight: 700 }}>⚙ Tools</button>
+                {/* Finalize used to be three levels down: open the sheet, find
+                    the "Size & Design" tab, then the step header inside it. It
+                    is the end of the job, so it gets its own control. */}
+                <button
+                  type="button"
+                  onClick={() => { setMobileSheetTab('design'); setActiveWorkflowStep(3); setShowMobilePanel(true) }}
+                  style={{ ...btnSecondary, fontSize: 12, padding: '5px 10px', fontWeight: 700 }}
+                >Finish</button>
+                {/* An up arrow, because this pulls a drawer up from the bottom.
+                    "Tools" alone said nothing about where import and finalize
+                    had gone. */}
+                <button
+                  type="button"
+                  onClick={() => { setMobileSheetTab('tools'); setShowMobilePanel(true) }}
+                  style={{ ...btnSecondary, fontSize: 12, padding: '5px 12px', fontWeight: 700 }}
+                >▲ Tools</button>
               </div>
             ) : (
               <div
@@ -5893,18 +5909,40 @@ function StudioPage() {
           <div
             role="dialog"
             aria-modal="true"
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: 18 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10025, padding: isMobile ? 12 : 18 }}
           >
             <div
-              style={{ background: '#fffdf8', borderRadius: 12, width: 480, maxWidth: '100%', display: 'grid', gap: 0, boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8' }}
+              style={{
+                background: '#fffdf8', borderRadius: 12, width: 480, maxWidth: '100%',
+                // Cap against the viewport and scroll inside. Landscape on a
+                // phone is barely 350px tall, so an uncapped dialog put the
+                // buttons below the fold with nothing to scroll.
+                maxHeight: 'calc(100dvh - 24px)',
+                display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 0,
+                boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #e7e1d8',
+              }}
             >
-              <div style={{ padding: '22px 24px 16px', borderBottom: '1px solid #e7e1d8' }}>
-                <h2 style={{ margin: 0, fontSize: 20 }}>Your design is ready</h2>
-                <p style={{ margin: '6px 0 0', color: '#8a8177', fontSize: 14 }}>Choose what to do next — you can do both.</p>
+              <div style={{ padding: isMobile ? '16px 18px 12px' : '22px 24px 16px', borderBottom: '1px solid #e7e1d8' }}>
+                <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 20 }}>Your design is ready</h2>
+                <p style={{ margin: '6px 0 0', color: '#8a8177', fontSize: isMobile ? 13 : 14 }}>Choose what to do next — you can do both.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
-                <div style={{ padding: '20px 20px 20px', borderRight: '1px solid #e7e1d8', display: 'grid', gap: 12, alignContent: 'start' }}>
+              <div style={{
+                display: 'grid',
+                // Side by side needs ~240px a column. A phone has half that,
+                // so the two choices stack instead of being crushed.
+                gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
+                gap: 0,
+                minHeight: 0,
+                overflowY: 'auto',
+                WebkitOverflowScrolling: 'touch',
+              }}>
+                <div style={{
+                  padding: isMobile ? '16px 18px' : '20px 20px 20px',
+                  borderRight: isMobile ? 'none' : '1px solid #e7e1d8',
+                  borderBottom: isMobile ? '1px solid #e7e1d8' : 'none',
+                  display: 'grid', gap: 12, alignContent: 'start',
+                }}>
                   <div>
                     <strong style={{ fontSize: 15 }}>Order a print</strong>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
@@ -5943,7 +5981,7 @@ function StudioPage() {
                   </button>
                 </div>
 
-                <div style={{ padding: '20px 20px 20px', display: 'grid', gap: 12, alignContent: 'start' }}>
+                <div style={{ padding: isMobile ? '16px 18px' : '20px 20px 20px', display: 'grid', gap: 12, alignContent: 'start' }}>
                   <div>
                     <strong style={{ fontSize: 15 }}>Share to gallery</strong>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6f675f', lineHeight: 1.4 }}>
@@ -5964,7 +6002,7 @@ function StudioPage() {
                 </div>
               </div>
 
-              <div style={{ padding: '14px 24px', borderTop: '1px solid #e7e1d8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ padding: isMobile ? '12px 18px' : '14px 24px', borderTop: '1px solid #e7e1d8', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {finalPdfPath && (
                   <a href={assetUrl(finalPdfPath) ?? '#'} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: '#8a8177', textDecoration: 'underline' }}>
                     Download PDF
@@ -6564,25 +6602,6 @@ function StudioPage() {
           {(saveStatus === 'error' || saveStatus === 'limit') && (draftSaveError || 'Error saving draft')}
         </div>
       )}
-      {showPortraitWarning && (
-        <div style={{
-          position: 'fixed', bottom: 'env(safe-area-inset-bottom, 0px)', left: 0, right: 0, zIndex: 99999,
-          background: '#3f382f', color: '#f5f1ea',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-          padding: '10px 14px',
-          fontFamily: 'Georgia, "Times New Roman", serif',
-          fontSize: 13,
-        }}>
-          <span>↻ Landscape works better for editing</span>
-          <button
-            type="button"
-            onClick={() => setShowPortraitWarning(false)}
-            style={{ border: 0, background: 'none', color: '#f5f1ea', fontSize: 20, cursor: 'pointer', padding: '0 0 0 8px', lineHeight: 1, flexShrink: 0 }}
-            aria-label="Dismiss"
-          >✕</button>
-        </div>
-      )}
-
       {recoveryCandidate && (
         <div
           role="dialog"

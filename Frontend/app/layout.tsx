@@ -65,6 +65,17 @@ export default function RootLayout({
           background: '#f5f1ea',
         }}
       >
+        {/* iOS zooms the whole page in when a focused input renders text
+            below 16px, and it never zooms back out, so the user is left
+            pinching the layout back to size. The studio's inputs are
+            deliberately small, so raise only the font size, and only where the
+            pointer is a finger. !important because every other style in this
+            app is inline and would otherwise win. */}
+        <style
+          dangerouslySetInnerHTML={{ __html: `@media (pointer: coarse) {
+  input, select, textarea { font-size: 16px !important; }
+}` }}
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION_JSON_LD) }}
