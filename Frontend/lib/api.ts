@@ -947,6 +947,15 @@ export async function fetchGalleryItemProject(itemId: string): Promise<Record<st
   return res.json()
 }
 
+/** Designs the shop publishes for anyone to build on, for the studio's import
+ *  picker. The server decides what counts as a shop design and leaves out the
+ *  ones that have no stitch grid or still owe another creator a royalty. */
+export async function fetchShopDesigns(): Promise<GalleryItem[]> {
+  const res = await fetch(`${API_BASE}/gallery/shop-designs`)
+  if (!res.ok) throw new Error('Could not load MNS designs')
+  return res.json()
+}
+
 export async function fetchGalleryItem(itemId: string): Promise<GalleryItem | null> {
   const res = await fetch(`${API_BASE}/gallery/${itemId}`)
   if (!res.ok) return null

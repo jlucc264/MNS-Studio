@@ -70,6 +70,7 @@ from app.services.stripe_service import (
     create_cart_checkout,
 )
 from app.services.canvas_pricing import (
+    SHOP_CREATOR_USER_IDS,
     get_canvas_for_design,
     is_design_printable,
     is_standard_order,
@@ -85,6 +86,7 @@ from app.services.supabase_db import (
     update_project,
     delete_project,
     list_gallery_items,
+    list_gallery_items_by_creator,
     create_gallery_item,
     toggle_gallery_like,
     get_public_project_by_gallery_item,
@@ -965,6 +967,35 @@ def list_gallery_creators():
     crawled links to find them."""
     from app.services.supabase_db import list_creator_slugs
     return list_creator_slugs()
+
+
+@app.get("/gallery/shop-designs", response_model=list[GalleryItemResponse], dependencies=[Depends(require_enabled("gallery"))])
+def get_shop_designs(user_id: str | None = Depends(get_optional_user_id)):
+    """Every design the shop publishes, for the studio's import picker.
+
+    Its own route rather than a flag on /gallery, for two reasons. The picker
+    wants all of them, not whichever thirty land on the feed's first page. And
+    "published by the shop" is a fact the server holds; making the client infer
+    it from a display name would let any creator into the list by renaming
+    themselves.
+
+    Listings with no project behind them are left out: the picker needs the
+    stitch grid, and a listing without one can only offer a flat preview image.
+
+    So are the few shop listings that are themselves remixes of someone else's
+    design and still owe that person a royalty. An import drops stitches into
+    another design with no link back, so offering those here would hand a
+    creator's work away with neither credit nor payment.
+    """
+    items: list[dict] = []
+    for shop_id in sorted(SHOP_CREATOR_USER_IDS):
+        items.extend(list_gallery_items_by_creator(shop_id, user_id))
+    items = [
+        item for item in items
+        if item.get("project_id") and item.get("pays_creator_royalty") is False
+    ]
+    items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return items
 
 
 @app.get("/gallery/by-project/{project_id}", dependencies=[Depends(require_enabled("gallery"))])

@@ -39,6 +39,7 @@ import { useSiteStatus } from '../../lib/siteStatus'
 import { MaintenanceNote } from '../../components/MaintenanceScreen'
 import { useCanvasCredit } from '../../lib/useCanvasCredit'
 import { BREAKPOINTS, useIsMobile, useIsTouch, useIsPhoneDevice, useIsLandscape } from '../../lib/useViewport'
+import { fitStampToCanvas, scaleStitchCells, stampSizeFor } from '../../lib/stitchResample'
 import {
   assetUrl,
   CanvasContext,
@@ -49,6 +50,9 @@ import {
   fetchDmcColors,
   fetchGalleryItem,
   fetchGalleryItemByProject,
+  fetchGalleryItemProject,
+  fetchShopDesigns,
+  type GalleryItem,
   finalizePreview,
   formatCents,
   formatCustomerCanvasLabel,
@@ -724,10 +728,28 @@ function StudioPage() {
   const [importableProjects, setImportableProjects] = useState<Project[] | null>(null)
   const [importProjectsLoading, setImportProjectsLoading] = useState(false)
   const [importProjectsError, setImportProjectsError] = useState('')
+  // The shop publishes designs for anyone to build on, so the picker has two
+  // shelves: your own saved work, and those.
+  const [importSource, setImportSource] = useState<'mine' | 'mns'>('mine')
+  const [shopDesigns, setShopDesigns] = useState<GalleryItem[] | null>(null)
+  const [shopDesignsLoading, setShopDesignsLoading] = useState(false)
+  const [shopDesignsError, setShopDesignsError] = useState('')
+  const [importBusyId, setImportBusyId] = useState<string | null>(null)
+  // A design lands at the size it was printed at, allowing for the mesh here,
+  // and is then dragged by a corner like every other live box on the canvas.
+  // There is no size to choose before importing: picking a percentage of
+  // something you cannot see yet was guesswork, and the answer is obvious once
+  // it is sitting on the design.
+  const importScalePercent = null
   const [floatingStamp, setFloatingStamp] = useState<{
     cells: (string | null)[][]
     anchorRow: number
     anchorCol: number
+    // The stitches this stamp was made from, at their original size. Every
+    // resize resamples from these rather than from the last result: resampling
+    // a resampled grid compounds its losses, so dragging a corner smaller and
+    // back out again would never recover the detail it gave up.
+    sourceCells: (string | null)[][]
   } | null>(null)
   // Cut blanks the source cells immediately so the stamp can be dragged
   // around; cancelling it needs to undo that deletion, not just drop the
@@ -2627,7 +2649,7 @@ function StudioPage() {
     if (!captured) return
     stampCameFromCutRef.current = false
     setStampClipboard(captured.cells)
-    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
+    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left, sourceCells: captured.cells })
     setSelectedRegions([])
   }
 
@@ -2652,7 +2674,7 @@ function StudioPage() {
     refreshPreviewPalette(nextCells)
     stampCameFromCutRef.current = true
     setStampClipboard(captured.cells)
-    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left })
+    setFloatingStamp({ cells: captured.cells, anchorRow: captured.top, anchorCol: captured.left, sourceCells: captured.cells })
     setSelectedRegions([])
     setFinalPdfPath(null)
     setFinalPreviewImagePath(null)
@@ -2669,13 +2691,23 @@ function StudioPage() {
     const anchorRow = Math.max(0, Math.round((cells.length - stampH) / 2))
     const anchorCol = Math.max(0, Math.round(((cells[0]?.length ?? 0) - stampW) / 2))
     stampCameFromCutRef.current = false
-    setFloatingStamp({ cells: source, anchorRow, anchorCol })
+    setFloatingStamp({ cells: source, anchorRow, anchorCol, sourceCells: source })
     setSelectedRegions([])
     setViewMode('stitch')
   }
 
   function handleOpenImportProjectPicker() {
     setShowImportProjectPicker(true)
+    if (!session?.access_token) setImportSource('mns')
+    // The MNS shelf needs no account: these designs are published for anyone.
+    if (shopDesigns === null && !shopDesignsLoading) {
+      setShopDesignsLoading(true)
+      setShopDesignsError('')
+      fetchShopDesigns()
+        .then(setShopDesigns)
+        .catch(() => setShopDesignsError('Could not load MNS designs.'))
+        .finally(() => setShopDesignsLoading(false))
+    }
     if (importableProjects !== null || !session?.access_token) return
     setImportProjectsLoading(true)
     setImportProjectsError('')
@@ -2685,13 +2717,94 @@ function StudioPage() {
       .finally(() => setImportProjectsLoading(false))
   }
 
-  function handleImportProject(project: Project) {
-    const cropped = cropCellsToContent(project.cells ?? [])
-    if (!cropped.length || !cropped[0]?.length) return
-    setStampClipboard(cropped)
+  /** Drop a design onto this canvas as a movable stamp, sized to fit.
+   *
+   *  Sizing is deliberate rather than a straight cell-for-cell copy: see
+   *  fitStampToCanvas. A design built at a different mesh would otherwise
+   *  arrive at the wrong physical size, and one bigger than this canvas could
+   *  only ever be cropped.
+   */
+  function stampDesignCells(
+    sourceCells: string[][] | null | undefined,
+    sourceMeshCount: number | null | undefined,
+  ) {
+    const cropped = cropCellsToContent(sourceCells ?? [])
+    if (!cropped.length || !cropped[0]?.length || !cells.length) return
+    const { cells: fitted } = fitStampToCanvas(cropped, {
+      sourceMeshCount,
+      targetMeshCount: lastSettings?.mesh_count ?? draftSettings.mesh_count,
+      maxRows: cells.length,
+      maxCols: cells[0]?.length ?? 0,
+      scaleOverride: importScalePercent,
+    })
+    if (!fitted.length || !fitted[0]?.length) return
+    setStampClipboard(fitted)
     setShowImportProjectPicker(false)
-    handlePasteClipboard(cropped)
+    handlePasteClipboard(fitted)
   }
+
+  function handleImportProject(project: Project) {
+    stampDesignCells(project.cells, project.mesh_count)
+  }
+
+  /** A gallery listing carries its dimensions but not its stitches, so the grid
+   *  is fetched on pick rather than for every row in the list. */
+  async function handleImportShopDesign(item: GalleryItem) {
+    if (importBusyId) return
+    setImportBusyId(item.id)
+    setShopDesignsError('')
+    try {
+      const project = await fetchGalleryItemProject(item.id)
+      stampDesignCells((project as { cells?: string[][] }).cells, item.mesh_count)
+    } catch {
+      setShopDesignsError('Could not open that design.')
+    } finally {
+      setImportBusyId(null)
+    }
+  }
+
+  /** What a design will become on this canvas, for the row label. Own projects
+   *  carry their stitches already; a gallery listing has to be estimated from
+   *  its inches and mesh, which is exact enough to warn on. */
+  function importPreviewFor(sourceRows: number, sourceCols: number, sourceMeshCount: number | null | undefined) {
+    if (!cells.length) return null
+    return stampSizeFor(sourceRows, sourceCols, {
+      sourceMeshCount,
+      targetMeshCount: lastSettings?.mesh_count ?? draftSettings.mesh_count,
+      maxRows: cells.length,
+      maxCols: cells[0]?.length ?? 0,
+      scaleOverride: importScalePercent,
+    })
+  }
+
+  /** A corner drag on the stamp. The box comes from the canvas; the stitches
+   *  are resampled to fill it, from the original every time. */
+  const handleStampResize = useCallback(
+    (next: { anchorRow: number; anchorCol: number; rows: number; cols: number }) => {
+      setFloatingStamp((current) => {
+        if (!current) return current
+        const gridRows = cells.length
+        const gridCols = cells[0]?.length ?? 0
+        const rows = Math.max(1, Math.min(next.rows, gridRows))
+        const cols = Math.max(1, Math.min(next.cols, gridCols))
+        const anchorRow = Math.max(0, Math.min(next.anchorRow, Math.max(0, gridRows - rows)))
+        const anchorCol = Math.max(0, Math.min(next.anchorCol, Math.max(0, gridCols - cols)))
+        if (
+          current.cells.length === rows &&
+          (current.cells[0]?.length ?? 0) === cols &&
+          current.anchorRow === anchorRow &&
+          current.anchorCol === anchorCol
+        ) return current
+        return {
+          ...current,
+          anchorRow,
+          anchorCol,
+          cells: scaleStitchCells(current.sourceCells, rows, cols),
+        }
+      })
+    },
+    [cells],
+  )
 
   const handleStampMove = useCallback((anchor: { row: number; col: number }) => {
     setFloatingStamp((current) => {
@@ -2716,27 +2829,43 @@ function StudioPage() {
     setFloatingStamp({ ...floatingStamp, ...next })
   }
 
-  function handleRotateStamp() {
-    if (!floatingStamp) return
-    const source = floatingStamp.cells
+  function rotateStampCells(source: (string | null)[][]): (string | null)[][] {
     const srcH = source.length
     const srcW = source[0]?.length ?? 0
-    const rotated: (string | null)[][] = Array.from({ length: srcW }, (_, r) =>
+    return Array.from({ length: srcW }, (_, r) =>
       Array.from({ length: srcH }, (_, c) => source[srcH - 1 - c][r])
     )
+  }
+
+  function handleRotateStamp() {
+    if (!floatingStamp) return
+    const srcH = floatingStamp.cells.length
+    const srcW = floatingStamp.cells[0]?.length ?? 0
+    const rotated = rotateStampCells(floatingStamp.cells)
     // Keep the stamp centered on the same spot as it rotates
     const anchorRow = Math.round(floatingStamp.anchorRow + srcH / 2 - srcW / 2)
     const anchorCol = Math.round(floatingStamp.anchorCol + srcW / 2 - srcH / 2)
     const next = clampStampAnchor(anchorRow, anchorCol, rotated)
-    setFloatingStamp({ cells: rotated, ...next })
+    // The original turns with it, so resizing after a rotate resamples the
+    // stitches in the orientation on screen rather than the one they started in.
+    setFloatingStamp({
+      ...floatingStamp,
+      cells: rotated,
+      sourceCells: rotateStampCells(floatingStamp.sourceCells),
+      ...next,
+    })
   }
 
   function handleFlipStamp(axis: 'horizontal' | 'vertical') {
     if (!floatingStamp) return
-    const flipped = axis === 'horizontal'
-      ? floatingStamp.cells.map((row) => [...row].reverse())
-      : [...floatingStamp.cells].reverse().map((row) => [...row])
-    setFloatingStamp({ ...floatingStamp, cells: flipped })
+    const flip = (source: (string | null)[][]) => axis === 'horizontal'
+      ? source.map((row) => [...row].reverse())
+      : [...source].reverse().map((row) => [...row])
+    setFloatingStamp({
+      ...floatingStamp,
+      cells: flip(floatingStamp.cells),
+      sourceCells: flip(floatingStamp.sourceCells),
+    })
   }
 
   function handlePlaceStamp() {
@@ -5483,6 +5612,7 @@ function StudioPage() {
                   onEyedropperSample={handleEyedropperSample}
                   floatingStamp={floatingStamp}
                   onStampMove={handleStampMove}
+                  onStampResize={handleStampResize}
                   clearSelectionSignal={clearSelectionSignal}
                   clearMeasurementsSignal={clearMeasurementsSignal}
                   onMeasurementCountChange={setMeasurementCount}
@@ -5682,22 +5812,93 @@ function StudioPage() {
           >
             <div
               onClick={(event) => event.stopPropagation()}
-              style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 480, maxWidth: '100%', maxHeight: '80vh', display: 'grid', gridTemplateRows: 'auto 1fr', gap: 14, boxSizing: 'border-box' }}
+              style={{ background: '#fffdf8', padding: 24, borderRadius: 12, width: 480, maxWidth: '100%', maxHeight: '80vh', display: 'grid', gridTemplateRows: 'auto auto minmax(0, 1fr)', gap: 14, boxSizing: 'border-box' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                 <div style={{ display: 'grid', gap: 4 }}>
-                  <h2 style={{ margin: 0 }}>Import a saved project</h2>
-                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13 }}>Pick a design to drop onto this canvas — you can move, rotate, and flip it before placing.</p>
+                  <h2 style={{ margin: 0 }}>Import a design</h2>
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13 }}>Pick a design to drop onto this canvas — drag it to move, drag a corner to resize, then rotate or flip before placing.</p>
                 </div>
                 <button type="button" onClick={() => setShowImportProjectPicker(false)} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#7f776d', lineHeight: 1, padding: 4 }}>✕</button>
               </div>
+
+              <div style={{ display: 'grid', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, padding: 3, border: '1px solid #d7d0c8', borderRadius: 999, background: '#f0ece5' }}>
+                  {([['mine', 'Your designs'], ['mns', 'MNS designs']] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setImportSource(key)}
+                      style={{
+                        padding: '7px 0', borderRadius: 999, border: 0, fontFamily: 'inherit',
+                        fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                        background: importSource === key ? '#3f382f' : 'transparent',
+                        color: importSource === key ? '#fff' : '#8a8177',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div style={{ overflow: 'auto', minHeight: 0 }}>
-                {importProjectsLoading ? (
+                {importSource === 'mns' ? (
+                  shopDesignsLoading ? (
+                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>Loading MNS designs…</p>
+                  ) : shopDesignsError ? (
+                    <p style={{ margin: 0, color: '#b0453a', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>{shopDesignsError}</p>
+                  ) : !shopDesigns || shopDesigns.length === 0 ? (
+                    <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No MNS designs available yet.</p>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                      {shopDesigns.map((item) => {
+                        const mesh = item.mesh_count ?? 13
+                        const preview = importPreviewFor(
+                          Math.round((item.height_inches ?? 0) * mesh),
+                          Math.round((item.width_inches ?? 0) * mesh),
+                          item.mesh_count,
+                        )
+                        const busy = importBusyId === item.id
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => void handleImportShopDesign(item)}
+                            disabled={Boolean(importBusyId)}
+                            title={item.title ?? undefined}
+                            style={{ display: 'grid', gap: 5, border: '1px solid #e0d8cf', borderRadius: 8, padding: 6, background: '#fff', cursor: importBusyId ? 'wait' : 'pointer', textAlign: 'left', opacity: importBusyId && !busy ? 0.5 : 1 }}
+                          >
+                            <div style={{ width: '100%', aspectRatio: '1', borderRadius: 5, overflow: 'hidden', background: '#f8f4ec', display: 'grid', placeItems: 'center' }}>
+                              {item.preview_image_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={assetUrl(item.preview_image_url) ?? item.preview_image_url} alt={item.title ?? 'MNS design'} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                              ) : (
+                                <span style={{ fontSize: 10, color: '#b0a89e' }}>No preview</span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#3f382f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {busy ? 'Opening…' : item.title}
+                            </span>
+                            {preview && (
+                              <span style={{ fontSize: 10, color: preview.detailLoss ? '#a5642f' : '#8a8177' }}>
+                                {preview.cols}×{preview.rows} stitches
+                                {preview.detailLoss ? ' · fine detail will be lost' : ''}
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                ) : importProjectsLoading ? (
                   <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>Loading your projects…</p>
                 ) : importProjectsError ? (
                   <p style={{ margin: 0, color: '#b0453a', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>{importProjectsError}</p>
                 ) : !importableProjects || importableProjects.length === 0 ? (
-                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No other saved projects yet.</p>
+                  <p style={{ margin: 0, color: '#8a8177', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>
+                    {session?.access_token ? 'No other saved projects yet.' : 'Sign in to import your own saved designs.'}
+                  </p>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
                     {importableProjects.map((project) => {
@@ -5706,6 +5907,8 @@ function StudioPage() {
                           ? project.preview_image_url
                           : assetUrl(project.preview_image_url)
                         : null
+                      const cropped = cropCellsToContent(project.cells ?? [])
+                      const preview = importPreviewFor(cropped.length, cropped[0]?.length ?? 0, project.mesh_count)
                       return (
                         <button
                           key={project.id}
@@ -5723,6 +5926,12 @@ function StudioPage() {
                             )}
                           </div>
                           <span style={{ fontSize: 11, fontWeight: 600, color: '#3f382f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
+                          {preview && (
+                            <span style={{ fontSize: 10, color: preview.detailLoss ? '#a5642f' : '#8a8177' }}>
+                              {preview.cols}×{preview.rows} stitches
+                              {preview.detailLoss ? ' · fine detail will be lost' : ''}
+                            </span>
+                          )}
                         </button>
                       )
                     })}

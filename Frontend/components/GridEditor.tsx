@@ -44,6 +44,9 @@ type Props = {
   textOutline?: boolean
   floatingStamp?: { cells: (string | null)[][]; anchorRow: number; anchorCol: number } | null
   onStampMove?: (anchor: { row: number; col: number }) => void
+  /** A corner drag on the stamp. Reports the box the user dragged out; the
+   *  parent owns the stitches and resamples them to fit it. */
+  onStampResize?: (next: { anchorRow: number; anchorCol: number; rows: number; cols: number }) => void
   clearSelectionSignal?: number
   // "Clear all" for the measure tool lives in the Palette panel while the
   // measurements themselves live here, so it comes in as an incrementing
@@ -749,6 +752,7 @@ export default function GridEditor({
   textOutline = false,
   floatingStamp = null,
   onStampMove,
+  onStampResize,
   clearSelectionSignal = 0,
   clearMeasurementsSignal = 0,
   onMeasurementCountChange,
@@ -876,6 +880,13 @@ export default function GridEditor({
   } | null>(null)
   const onStampMoveRef = useRef(onStampMove)
   useEffect(() => { onStampMoveRef.current = onStampMove })
+  const onStampResizeRef = useRef(onStampResize)
+  useEffect(() => { onStampResizeRef.current = onStampResize })
+  // The stamp's corner handles, and the drag in progress on one. Same shape as
+  // the selection marquee's, so a stamp resizes the way every other live box on
+  // this canvas does.
+  const stampHandleRectsRef = useRef<BoxHandleRect[]>([])
+  const stampResizeRef = useRef<{ kind: BoxHandleKind; bounds: BoxBounds } | null>(null)
   const paintingPointerIdRef = useRef<number | null>(null)
   const selectionPointerIdRef = useRef<number | null>(null)
   const lastPaintedCellRef = useRef<{ row: number; col: number } | null>(null)
@@ -1022,6 +1033,7 @@ export default function GridEditor({
     textMoveStartRef.current = null
     textResizeRef.current = null
     stampMoveStartRef.current = null
+    stampResizeRef.current = null
   }, [])
 
   const focusTextInputForKeyboard = useCallback(() => {
@@ -1255,6 +1267,7 @@ export default function GridEditor({
       selectionEditRef.current = null
       lastPaintedCellRef.current = null
       stampMoveStartRef.current = null
+      stampResizeRef.current = null
     }
 
     window.addEventListener('pointerup', stopPainting)
@@ -1908,6 +1921,24 @@ export default function GridEditor({
         input.preventDefault()
         const hit = getCellFromClientPoint(input.clientX, input.clientY, 'stage')
         if (!hit) return
+        // A corner takes precedence over the body, the same way it does on a
+        // selection: the handles sit on top of the stamp, so a grab there means
+        // resize even though the point is also inside the stamp.
+        const overlayPoint = getOverlayPointFromClient(input.clientX, input.clientY)
+        const grabbed = overlayPoint ? hitBoxHandle(stampHandleRectsRef.current, overlayPoint) : null
+        if (grabbed && onStampResizeRef.current) {
+          stampResizeRef.current = {
+            kind: grabbed,
+            bounds: {
+              top: floatingStamp.anchorRow,
+              left: floatingStamp.anchorCol,
+              bottom: floatingStamp.anchorRow + floatingStamp.cells.length - 1,
+              right: floatingStamp.anchorCol + (floatingStamp.cells[0]?.length ?? 1) - 1,
+            },
+          }
+          selectionPointerIdRef.current = input.pointerId
+          return
+        }
         stampMoveStartRef.current = {
           initAnchorRow: floatingStamp.anchorRow,
           initAnchorCol: floatingStamp.anchorCol,
@@ -2238,6 +2269,20 @@ export default function GridEditor({
   const handleCanvasPointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (event.pointerType === 'touch' && touchActivePointersRef.current.size > 1) return
+      if (highlightSelection && stampResizeRef.current && selectionPointerIdRef.current === event.pointerId) {
+        const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
+        if (!hit) return
+        const resize = stampResizeRef.current
+        const next = resizeBounds(resize.bounds, resize.kind, hit)
+        onStampResizeRef.current?.({
+          anchorRow: next.top,
+          anchorCol: next.left,
+          // A box dragged onto a single cell is one stitch wide, not zero.
+          rows: Math.max(1, next.bottom - next.top + 1),
+          cols: Math.max(1, next.right - next.left + 1),
+        })
+        return
+      }
       if (highlightSelection && stampMoveStartRef.current && selectionPointerIdRef.current === event.pointerId) {
         const hit = getCellFromClientPoint(event.clientX, event.clientY, 'stage')
         if (!hit) return
@@ -3002,6 +3047,30 @@ export default function GridEditor({
       context.setLineDash([Math.max(4, cellSize * 0.35), Math.max(2, cellSize * 0.2)])
       context.strokeRect(bx, by, stampCols * cellSize, stampRows * cellSize)
       context.setLineDash([])
+
+      // Corner handles, matching the shape, text and selection boxes. Drawn
+      // last so they sit above the stamp's own stitches, and recorded so the
+      // pointer handler hit-tests what is actually on screen rather than where
+      // the maths says a corner ought to be.
+      const stampHandleSize = Math.max(10, Math.min(16, cellSize * 1.2))
+      stampHandleRectsRef.current = boxCornerHandles(
+        {
+          top: floatingStamp.anchorRow,
+          left: floatingStamp.anchorCol,
+          bottom: floatingStamp.anchorRow + stampRows - 1,
+          right: floatingStamp.anchorCol + stampCols - 1,
+        },
+        (col) => gridOriginX + (col + borderStitches + contentOriginCol) * cellSize,
+        (row) => gridOriginY + (row + borderStitches + contentOriginRow) * cellSize,
+      ).map((corner) => ({
+        kind: corner.kind,
+        ...drawBoxHandle(context, {
+          cx: corner.cx, cy: corner.cy, size: stampHandleSize,
+          accent: 'rgba(74, 124, 89, 0.98)',
+        }),
+      }))
+    } else {
+      stampHandleRectsRef.current = []
     }
 
     selectionHandleRectsRef.current = []
