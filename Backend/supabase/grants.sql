@@ -230,6 +230,21 @@ create table if not exists public.gallery_ip_checks (
   dismissed_by text
 );
 
+-- A named exception to the import split. A design made from an uploaded photo
+-- is barred from the gallery by origin alone, because origin is the only thing
+-- the server can verify; whether a particular import is someone else's work is
+-- a judgement no code can make. These columns record an admin making that
+-- judgement for one project: who, when, and on what grounds.
+--
+-- This never rewrites provenance. The image keeps its 'uploaded' path prefix
+-- forever, so the design still reads as an import everywhere it is inspected —
+-- what is stored here is the decision to publish it anyway, which is exactly
+-- the thing worth being able to produce later if the listing is ever queried.
+alter table public.projects
+add column if not exists origin_exception_at timestamptz,
+add column if not exists origin_exception_by text,
+add column if not exists origin_exception_reason text;
+
 grant usage on schema public to service_role;
 
 grant select, insert, update, delete on table public.projects to service_role;

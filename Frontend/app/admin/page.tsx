@@ -7,10 +7,15 @@ import {
   adminListGallery,
   adminSuspendGalleryItem,
   adminRestoreGalleryItem,
+  adminReadProjectOrigin,
+  adminListOriginExceptions,
+  adminGrantOriginException,
+  adminRevokeOriginException,
   adminScreenGallery,
   adminScreenGalleryItem,
   adminDismissIpFlag,
   type AdminGalleryItem,
+  type ProjectOrigin,
 } from '../../lib/api'
 import {
   listProjects,
@@ -306,6 +311,13 @@ export default function AdminPage() {
   const [galleryNotice, setGalleryNotice] = useState('')
   const [reasonFor, setReasonFor] = useState<Record<string, string>>({})
   const [notifyOnHide, setNotifyOnHide] = useState(true)
+  const [exceptions, setExceptions] = useState<ProjectOrigin[]>([])
+  const [exceptionLookupId, setExceptionLookupId] = useState('')
+  const [exceptionReason, setExceptionReason] = useState('')
+  const [exceptionCandidate, setExceptionCandidate] = useState<ProjectOrigin | null>(null)
+  const [exceptionBusy, setExceptionBusy] = useState(false)
+  const [exceptionError, setExceptionError] = useState('')
+  const [exceptionNotice, setExceptionNotice] = useState('')
   const [showSuspendedOnly, setShowSuspendedOnly] = useState(false)
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false)
   const [screenBusy, setScreenBusy] = useState(false)
@@ -644,6 +656,9 @@ export default function AdminPage() {
     adminListGallery(session.access_token).then(setGalleryItems).catch(() => {
       setGalleryError('Could not load gallery listings.')
     })
+    adminListOriginExceptions(session.access_token).then(setExceptions).catch(() => {
+      setExceptionError('Could not load import exceptions.')
+    })
   }, [session?.access_token])
 
   if (loading || !session) return null
@@ -661,6 +676,74 @@ export default function AdminPage() {
       setGalleryItems(await adminListGallery(session.access_token))
     } catch {
       setGalleryError('Could not reload gallery listings.')
+    }
+  }
+
+  // Look the project up before offering to clear it. The id is pasted from a
+  // studio URL, and granting straight from a paste would attach the decision to
+  // whatever design that id happened to name.
+  async function handleLookupProject() {
+    if (!session?.access_token) return
+    const id = exceptionLookupId.trim()
+    if (!id) return
+    setExceptionBusy(true)
+    setExceptionError('')
+    setExceptionNotice('')
+    setExceptionCandidate(null)
+    try {
+      setExceptionCandidate(await adminReadProjectOrigin(id, session.access_token))
+    } catch (e: unknown) {
+      setExceptionError(e instanceof Error ? e.message : 'Could not look up this project.')
+    } finally {
+      setExceptionBusy(false)
+    }
+  }
+
+  async function handleGrantException() {
+    if (!session?.access_token || !exceptionCandidate) return
+    const reason = exceptionReason.trim()
+    if (!reason) {
+      setExceptionError('Say how you know this design is not someone else\u2019s work.')
+      return
+    }
+    setExceptionBusy(true)
+    setExceptionError('')
+    try {
+      const updated = await adminGrantOriginException(exceptionCandidate.id, reason, session.access_token)
+      setExceptionCandidate(updated)
+      setExceptions(await adminListOriginExceptions(session.access_token))
+      setExceptionReason('')
+      setExceptionNotice(
+        `${updated.name || 'Design'} can now be published. Its origin is still recorded as `
+        + `${updated.origin.replace(/_/g, ' ')} \u2014 the exception is what changed, not the file.`,
+      )
+    } catch (e: unknown) {
+      setExceptionError(e instanceof Error ? e.message : 'Could not grant the exception.')
+    } finally {
+      setExceptionBusy(false)
+    }
+  }
+
+  // Revoking only governs future publishes. If the design is already live and
+  // should come down, that is a takedown in the section above — saying so here
+  // stops a revoke being mistaken for one.
+  async function handleRevokeException(projectId: string) {
+    if (!session?.access_token) return
+    setExceptionBusy(true)
+    setExceptionError('')
+    setExceptionNotice('')
+    try {
+      const updated = await adminRevokeOriginException(projectId, session.access_token)
+      setExceptions(await adminListOriginExceptions(session.access_token))
+      if (exceptionCandidate?.id === projectId) setExceptionCandidate(updated)
+      setExceptionNotice(
+        'Exception revoked \u2014 this design is back under the import rule. Any listing already '
+        + 'published from it is still live; hide it above if it should come down.',
+      )
+    } catch (e: unknown) {
+      setExceptionError(e instanceof Error ? e.message : 'Could not revoke the exception.')
+    } finally {
+      setExceptionBusy(false)
     }
   }
 
@@ -1016,6 +1099,189 @@ export default function AdminPage() {
             </div>
           )
         })}
+      </div>
+
+      {/* Import exceptions */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Gallery &mdash; import exceptions</div>
+        <div style={styles.sectionDesc}>
+          A design made from an uploaded photo is kept out of the gallery by origin alone, because
+          origin is the only part a server can check. Whether a particular import copies someone
+          else&rsquo;s work is a judgement only you can make &mdash; this is where you make it, for one
+          design at a time. <strong>Granting an exception never rewrites provenance:</strong> the
+          image keeps its uploaded tag everywhere it is inspected, and what gets stored is your
+          decision to publish it anyway, with the grounds and the date. That record is the point.
+          Write the reason for someone reading it a year from now who was not in the room.
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          <input
+            value={exceptionLookupId}
+            onChange={(e) => setExceptionLookupId(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleLookupProject() }}
+            placeholder="Project ID (from the studio URL)"
+            style={{
+              flex: '1 1 320px', padding: '9px 12px', border: '1px solid #D7D0C8',
+              borderRadius: 8, fontFamily: 'inherit', fontSize: 13, color: '#2D332F',
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleLookupProject}
+            disabled={exceptionBusy || !exceptionLookupId.trim()}
+            style={{
+              ...styles.btnSecondary,
+              ...(exceptionBusy || !exceptionLookupId.trim() ? styles.btnDisabled : {}),
+            }}
+          >
+            {exceptionBusy ? '\u2026' : 'Look up'}
+          </button>
+        </div>
+
+        {exceptionError && <div style={{ fontSize: 12, color: '#b0453a', marginBottom: 10 }}>{exceptionError}</div>}
+        {exceptionNotice && <div style={{ fontSize: 12, color: '#5c7856', marginBottom: 10, lineHeight: 1.5 }}>{exceptionNotice}</div>}
+
+        {exceptionCandidate && (
+          <div style={{
+            border: '1px solid #E8E4DC', borderRadius: 10, padding: 14,
+            background: '#FAFAF8', marginBottom: 18,
+          }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              {exceptionCandidate.preview_image_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={exceptionCandidate.preview_image_url}
+                  alt=""
+                  style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid #E8E4DC' }}
+                />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#2D332F' }}>
+                  {exceptionCandidate.name || 'Untitled'}
+                </div>
+                <div style={{ fontSize: 11, color: '#7A817A', marginTop: 3, lineHeight: 1.6 }}>
+                  Origin: <strong>{exceptionCandidate.origin.replace(/_/g, ' ')}</strong>
+                  {' \u00b7 '}
+                  {exceptionCandidate.blocked_by_rule
+                    ? 'blocked by the import rule'
+                    : 'publishable without an exception'}
+                  <br />
+                  Project {exceptionCandidate.id}
+                </div>
+
+                {/* A design the rule already admits needs nothing. Saying so
+                    prevents an exception that would sit in the record implying
+                    a judgement was needed when none was. */}
+                {!exceptionCandidate.blocked_by_rule && !exceptionCandidate.exception_granted && (
+                  <div style={{ fontSize: 12, color: '#5c7856', marginTop: 10, lineHeight: 1.5 }}>
+                    This design can already be published &mdash; no exception needed.
+                  </div>
+                )}
+
+                {exceptionCandidate.exception_granted && (
+                  <div style={{ fontSize: 12, color: '#3A413B', marginTop: 10, lineHeight: 1.55 }}>
+                    <strong>Exception granted</strong>
+                    {exceptionCandidate.origin_exception_at
+                      && ` on ${new Date(exceptionCandidate.origin_exception_at).toLocaleDateString()}`}
+                    {exceptionCandidate.origin_exception_reason && (
+                      <div style={{ color: '#5B635C', marginTop: 3 }}>
+                        &ldquo;{exceptionCandidate.origin_exception_reason}&rdquo;
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRevokeException(exceptionCandidate.id)}
+                      disabled={exceptionBusy}
+                      style={{
+                        ...styles.btnSecondary, marginTop: 10, padding: '7px 14px', fontSize: 12,
+                        color: '#b0453a', borderColor: '#d8b4ae',
+                        ...(exceptionBusy ? styles.btnDisabled : {}),
+                      }}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                )}
+
+                {exceptionCandidate.blocked_by_rule && !exceptionCandidate.exception_granted && (
+                  <div style={{ marginTop: 12 }}>
+                    <textarea
+                      value={exceptionReason}
+                      onChange={(e) => setExceptionReason(e.target.value)}
+                      placeholder="How do we know this is not someone else's work? e.g. photo taken by the creator, original artwork, licensed with permission on file"
+                      rows={2}
+                      style={{
+                        width: '100%', padding: '9px 12px', border: '1px solid #D7D0C8',
+                        borderRadius: 8, fontFamily: 'inherit', fontSize: 12.5,
+                        color: '#2D332F', resize: 'vertical', boxSizing: 'border-box',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGrantException}
+                      disabled={exceptionBusy || !exceptionReason.trim()}
+                      style={{
+                        ...styles.btn, marginTop: 8,
+                        ...(exceptionBusy || !exceptionReason.trim() ? styles.btnDisabled : {}),
+                      }}
+                    >
+                      {exceptionBusy ? '\u2026' : 'Allow this design in the gallery'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#2D332F', marginBottom: 8 }}>
+          Standing exceptions ({exceptions.length})
+        </div>
+        {exceptions.length === 0 && (
+          <div style={{ fontSize: 12, color: '#7A817A' }}>
+            None. Every design in the gallery got there under the rule.
+          </div>
+        )}
+        {exceptions.map((ex) => (
+          <div
+            key={ex.id}
+            style={{
+              display: 'flex', gap: 12, alignItems: 'center', padding: '10px 12px',
+              border: '1px solid #E8E4DC', borderRadius: 8, marginBottom: 8, background: '#fff',
+            }}
+          >
+            {ex.preview_image_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={ex.preview_image_url}
+                alt=""
+                style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 5, border: '1px solid #E8E4DC' }}
+              />
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: '#2D332F' }}>{ex.name || 'Untitled'}</div>
+              <div style={{ fontSize: 11, color: '#7A817A', marginTop: 2, lineHeight: 1.5 }}>
+                {ex.origin.replace(/_/g, ' ')}
+                {ex.origin_exception_at && ` \u00b7 ${new Date(ex.origin_exception_at).toLocaleDateString()}`}
+                {ex.origin_exception_reason && (
+                  <span style={{ color: '#5B635C' }}> &middot; &ldquo;{ex.origin_exception_reason}&rdquo;</span>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleRevokeException(ex.id)}
+              disabled={exceptionBusy}
+              style={{
+                ...styles.btnSecondary, padding: '7px 14px', fontSize: 12,
+                color: '#b0453a', borderColor: '#d8b4ae',
+                ...(exceptionBusy ? styles.btnDisabled : {}),
+              }}
+            >
+              Revoke
+            </button>
+          </div>
+        ))}
       </div>
 
       {/* Calibration */}

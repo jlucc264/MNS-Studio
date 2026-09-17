@@ -18,6 +18,7 @@ from app.models import (
     ContactRequest,
     GallerySuspendRequest,
     ImportUrlRequest,
+    OriginExceptionRequest,
     PrintOrderIdsRequest,
     PrintRunOutcomeRequest,
     RollPrintRequest,
@@ -767,8 +768,7 @@ def publish_gallery_item(
         _require_standard_order(request.width_inches, request.height_inches)
 
     # The import split: a photo-derived design may be printed privately but not
-    # published. OFF until John turns it on, because switching it changes what
-    # creators can do and the grandfathering question below is his to answer.
+    # published. Live since 2026-09-04.
     #
     # BLOCK_UNKNOWN_ORIGIN governs images written before provenance existed,
     # which is most of the current gallery. Left False so an old design is not
@@ -777,7 +777,18 @@ def publish_gallery_item(
     if ENFORCE_GALLERY_ORIGIN_RULE:
         project = get_project(request.project_id, user_id) if request.project_id else None
         origin = provenance.origin_of((project or {}).get("source_image_url"))
-        if provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN):
+        blocked = provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN)
+        # An admin can clear one project by hand. The rule stays categorical for
+        # everyone else precisely because origin is checkable and authorship is
+        # not; the exception is a person taking responsibility for the second
+        # question, recorded on the project rather than written into its path.
+        if blocked and provenance.exception_granted(project):
+            blocked = False
+            logger.info(
+                "Gallery publish allowed by origin exception: project=%s origin=%s granted_by=%s",
+                request.project_id, origin, (project or {}).get("origin_exception_by"),
+            )
+        if blocked:
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -1655,6 +1666,97 @@ def admin_restore_gallery_item(item_id: str, user_id: str = Depends(get_current_
     if item is None:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
     return {"item": item}
+
+
+@app.get("/admin/origin-exceptions")
+def admin_list_origin_exceptions(user_id: str = Depends(get_current_user_id)):
+    """Every project currently cleared to publish despite its origin.
+
+    Listed rather than fire-and-forget because an exception is a standing
+    decision: it keeps applying every time that design is republished, and the
+    only way it gets revisited is if someone can see it.
+    """
+    _require_admin(user_id)
+    from app.services.supabase_db import list_origin_exceptions
+
+    return list_origin_exceptions()
+
+
+@app.get("/admin/projects/{project_id}/origin")
+def admin_read_project_origin(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """What the origin rule currently makes of one project.
+
+    A lookup before granting, so an exception is attached to a design the
+    operator has actually identified — the id comes off a studio URL and a
+    wrong one would otherwise fail silently by clearing something else.
+    """
+    _require_admin(user_id)
+    from app.services.supabase_db import get_project_by_id
+
+    project = get_project_by_id(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    origin = provenance.origin_of(project.get("source_image_url"))
+    return {
+        "id": project.get("id"),
+        "name": project.get("name"),
+        "user_id": project.get("user_id"),
+        "preview_image_url": project.get("preview_image_url"),
+        "origin": origin,
+        "blocked_by_rule": provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN),
+        "exception_granted": provenance.exception_granted(project),
+        "origin_exception_at": project.get("origin_exception_at"),
+        "origin_exception_by": project.get("origin_exception_by"),
+        "origin_exception_reason": project.get("origin_exception_reason"),
+    }
+
+
+@app.post("/admin/projects/{project_id}/origin-exception")
+def admin_grant_origin_exception(
+    project_id: str,
+    request: OriginExceptionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Clear one imported design to be published.
+
+    The reason is mandatory here, unlike a takedown reason which can be filled
+    in afterwards. A takedown with no note is still a listing that came down;
+    an exception with no note is a rule bypassed for no recorded cause, which
+    is the one artifact of this feature that could look worse than the listing.
+    """
+    _require_admin(user_id)
+    from app.services.supabase_db import set_origin_exception
+
+    reason = (request.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=422,
+            detail="A reason is required — say how we know this design is not someone else's work.",
+        )
+
+    project = set_origin_exception(project_id, reason, user_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    logger.info("Origin exception granted: project=%s by=%s", project_id, user_id)
+    return admin_read_project_origin(project_id, user_id)
+
+
+@app.delete("/admin/projects/{project_id}/origin-exception")
+def admin_revoke_origin_exception(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Put a project back under the origin rule.
+
+    This only governs future publishes. If the design is already in the gallery
+    and should come down, suspend the listing — that is the action that leaves
+    a takedown record, and revoking here would quietly leave it live.
+    """
+    _require_admin(user_id)
+    from app.services.supabase_db import revoke_origin_exception
+
+    project = revoke_origin_exception(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    logger.info("Origin exception revoked: project=%s by=%s", project_id, user_id)
+    return admin_read_project_origin(project_id, user_id)
 
 
 @app.post("/admin/gallery/screen")

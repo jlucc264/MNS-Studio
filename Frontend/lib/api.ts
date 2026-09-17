@@ -1797,3 +1797,73 @@ export async function adminRestoreGalleryItem(
   if (!res.ok) throw new Error('Could not restore this listing')
   return res.json()
 }
+
+// ── Import exceptions (admin) ────────────────────────────────────────────────
+
+/** What the origin rule makes of one project, and whether it has been excepted. */
+export type ProjectOrigin = {
+  id: string
+  name?: string | null
+  user_id?: string | null
+  preview_image_url?: string | null
+  /** 'uploaded' | 'generated' | 'derived_from_upload' | 'unknown', read off the stored image path. */
+  origin: string
+  /** Whether origin alone would keep this design out of the gallery. Stays true even once excepted. */
+  blocked_by_rule: boolean
+  exception_granted: boolean
+  origin_exception_at?: string | null
+  origin_exception_by?: string | null
+  origin_exception_reason?: string | null
+}
+
+/** Look a project up before clearing it, so an exception lands on the right design. */
+export async function adminReadProjectOrigin(
+  projectId: string,
+  accessToken: string,
+): Promise<ProjectOrigin> {
+  const res = await fetch(`${API_BASE}/admin/projects/${encodeURIComponent(projectId)}/origin`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!res.ok) {
+    throw new Error(res.status === 404 ? 'No project with that ID' : 'Could not look up this project')
+  }
+  return res.json()
+}
+
+/** Every project currently cleared to publish despite its origin. */
+export async function adminListOriginExceptions(accessToken: string): Promise<ProjectOrigin[]> {
+  const res = await fetch(`${API_BASE}/admin/origin-exceptions`, { headers: authHeaders(accessToken) })
+  if (!res.ok) throw new Error('Could not load import exceptions')
+  return res.json()
+}
+
+/** Clear one imported design to be published. The reason is required by the server. */
+export async function adminGrantOriginException(
+  projectId: string,
+  reason: string,
+  accessToken: string,
+): Promise<ProjectOrigin> {
+  const res = await fetch(`${API_BASE}/admin/projects/${encodeURIComponent(projectId)}/origin-exception`, {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ reason }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.detail || 'Could not grant the exception')
+  }
+  return res.json()
+}
+
+/** Put a project back under the origin rule. Does not touch an already-published listing. */
+export async function adminRevokeOriginException(
+  projectId: string,
+  accessToken: string,
+): Promise<ProjectOrigin> {
+  const res = await fetch(`${API_BASE}/admin/projects/${encodeURIComponent(projectId)}/origin-exception`, {
+    method: 'DELETE',
+    headers: jsonHeaders(accessToken),
+  })
+  if (!res.ok) throw new Error('Could not revoke the exception')
+  return res.json()
+}

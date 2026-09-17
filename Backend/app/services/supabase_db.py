@@ -204,6 +204,68 @@ def delete_project(project_id: str, user_id: str) -> bool:
     return result is not None
 
 
+def set_origin_exception(project_id: str, reason: str | None, admin_user_id: str) -> dict | None:
+    """Clear one project to be published despite its origin, or withdraw that.
+
+    Unscoped like get_project_by_id: the design being vouched for may belong to
+    any account, and an admin granting an exception is not acting as its owner.
+
+    Idempotent on the timestamp, matching suspend_gallery_item: re-granting
+    refreshes the reason without moving origin_exception_at, so the record keeps
+    saying when the decision was actually made rather than when it was last
+    edited. Pass reason=None with revoke via revoke_origin_exception instead —
+    this function never clears.
+    """
+    encoded = quote(project_id, safe="")
+    existing = get_project_by_id(project_id)
+    if existing is None:
+        return None
+    body = {
+        "origin_exception_reason": (reason or "").strip()[:500] or None,
+        "origin_exception_by": admin_user_id,
+    }
+    if not existing.get("origin_exception_at"):
+        body["origin_exception_at"] = datetime.now(timezone.utc).isoformat()
+    result = _request("PATCH", "/projects", body=body, params=f"id=eq.{encoded}")
+    if isinstance(result, list) and result:
+        return result[0]
+    return None
+
+
+def revoke_origin_exception(project_id: str) -> dict | None:
+    """Put a project back under the origin rule. Clears the reason with it: a
+    revoked exception carrying its old grounds would misread as still granted.
+
+    Already-published listings are not touched — withdrawing permission to
+    publish is a takedown, which is what suspend_gallery_item is for.
+    """
+    encoded = quote(project_id, safe="")
+    body = {"origin_exception_at": None, "origin_exception_reason": None, "origin_exception_by": None}
+    result = _request("PATCH", "/projects", body=body, params=f"id=eq.{encoded}")
+    if isinstance(result, list) and result:
+        return result[0]
+    return None
+
+
+def list_origin_exceptions() -> list[dict]:
+    """Every project currently holding an exception, most recent first.
+
+    Only the columns a reviewer needs: granting one is a decision that should
+    stay visible after the day it was made, and an exception nobody can see is
+    one nobody will revisit.
+    """
+    result = _request(
+        "GET",
+        "/projects",
+        params=(
+            "origin_exception_at=not.is.null&order=origin_exception_at.desc&limit=200"
+            "&select=id,name,user_id,design_origin,source_image_url,preview_image_url,"
+            "origin_exception_at,origin_exception_by,origin_exception_reason"
+        ),
+    )
+    return result if isinstance(result, list) else []
+
+
 # ── gallery ──────────────────────────────────────────────────────────────────
 
 def _normalize_gallery_item(

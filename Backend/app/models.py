@@ -415,6 +415,13 @@ class UpdateExpenseRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class OriginExceptionRequest(BaseModel):
+    """Admin clearance for one imported design to reach the gallery. `reason` is
+    the grounds — who made it, or how we know it is not someone else's work. It
+    is required in the endpoint rather than here so the message can explain why."""
+    reason: str | None = None
+
+
 class GallerySuspendRequest(BaseModel):
     """Admin takedown. `reason` is for our own records and the notice's
     reference line — it should name the complaint, never characterize the

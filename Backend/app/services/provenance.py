@@ -96,3 +96,18 @@ def blocks_gallery(origin: str, *, block_unknown: bool = False) -> bool:
     if origin in (UPLOADED, DERIVED):
         return True
     return origin == UNKNOWN and block_unknown
+
+
+def exception_granted(project: dict | None) -> bool:
+    """Whether an admin has cleared this specific project to be published
+    despite its origin.
+
+    The origin rule answers a question the server can check — where the pixels
+    came from. It deliberately does not answer the one that actually matters,
+    whether the design copies someone's work, because nothing here can. An
+    exception is a person answering that second question on the record, so it
+    lives beside the design rather than in the path: the path keeps saying
+    'uploaded' no matter what is decided, and that is the point. Revoking is
+    just clearing the timestamp, which puts the design back under the rule.
+    """
+    return bool((project or {}).get("origin_exception_at"))
