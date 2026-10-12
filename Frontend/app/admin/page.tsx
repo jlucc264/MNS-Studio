@@ -1163,7 +1163,7 @@ export default function AdminPage() {
                   Origin: <strong>{exceptionCandidate.origin.replace(/_/g, ' ')}</strong>
                   {' \u00b7 '}
                   {exceptionCandidate.blocked_by_rule
-                    ? 'blocked by the import rule'
+                    ? 'caught by the import rule'
                     : 'publishable without an exception'}
                   <br />
                   Project {exceptionCandidate.id}

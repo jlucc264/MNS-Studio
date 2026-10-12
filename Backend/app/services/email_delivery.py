@@ -286,3 +286,62 @@ def send_takedown_notice(
     }
     resend.Emails.send(params)
     return True
+
+
+# Imported designs may be published to the gallery again (owner's call,
+# 2026-10-10), on the condition that each one is reported here so it can be
+# checked by hand. The origin rule still identifies them; it just no longer
+# refuses them. Goes to RECIPIENT, the same inbox as contact mail and orders.
+def send_imported_publish_alert(
+    item_id: str,
+    title: str,
+    origin: str,
+    creator_user_id: str,
+    submitter_name: str | None,
+    project_id: str | None,
+    preview_url: str | None,
+    screening: dict | None,
+) -> bool:
+    if not _ready():
+        return False
+
+    site = os.getenv("FRONTEND_URL", "https://mns.studio").rstrip("/")
+    lines = [
+        "A design made from an uploaded photo was just published to the gallery.",
+        "",
+        f"Title: {title or '(untitled)'}",
+        f"Creator: {submitter_name or '(no display name)'} ({creator_user_id})",
+        f"Origin: {origin}",
+        f"Gallery item: {item_id}",
+        f"Project: {project_id or '(none)'}",
+        f"Listing: {site}/gallery?item={item_id}",
+    ]
+    if preview_url:
+        lines.append(f"Preview image: {preview_url}")
+
+    lines.append("")
+    if screening:
+        status = screening.get("status", "unknown")
+        lines.append(f"Automated copyright screen: {status.upper()}")
+        if screening.get("subject"):
+            lines.append(f"  Subject: {screening['subject']}")
+        if screening.get("detail"):
+            lines.append(f"  Detail: {screening['detail']}")
+        if status in ("error", "not_configured"):
+            lines.append("  The listing is UNSCREENED, not clear.")
+    else:
+        lines.append("Automated copyright screen: did not run.")
+
+    lines += [
+        "",
+        "The listing is live. Take it down from the admin panel if it does not pass.",
+    ]
+
+    flag = " [FLAGGED]" if screening and screening.get("status") == "flagged" else ""
+    resend.Emails.send({
+        "from": FROM_EMAIL,
+        "to": [RECIPIENT],
+        "subject": f"[Imported to gallery]{flag} {title or item_id}",
+        "text": "\n".join(lines),
+    })
+    return True

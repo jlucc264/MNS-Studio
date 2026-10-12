@@ -641,11 +641,15 @@ MAX_DRAFTS = 3
 def is_active_draft(project: dict) -> bool:
     return not bool(project.get("finalized") or project.get("pdf_url"))
 
-# The import split, live since 2026-09-04. A design made from an uploaded photo
-# can still be printed; it just cannot be published to the gallery. Both formal
-# legal actions against the shop concerned imported designs, so this closes the
-# path they came down while leaving the print business untouched.
-ENFORCE_GALLERY_ORIGIN_RULE = True
+# The import split, live 2026-09-04 to 2026-10-10. A design made from an
+# uploaded photo could be printed but not published. Both formal legal actions
+# against the shop concerned imported designs, which is why it existed.
+#
+# Switched off 2026-10-10 (owner's call): imported designs may be published,
+# but every one is emailed to the owner for a manual check (see
+# _alert_imported_publish). The origin is still worked out on every publish;
+# setting this back to True restores the refusal with nothing else to change.
+ENFORCE_GALLERY_ORIGIN_RULE = False
 
 # Grandfathering, John's call. Images written before provenance tracking existed
 # read as unknown, and that is most of the current gallery. Blocking them would
@@ -752,6 +756,47 @@ def _screen_listing(item_id: str, image_url: str, title: str = "") -> None:
         logger.exception("Copyright screening failed for gallery item %s", item_id)
 
 
+def _alert_imported_publish(item: dict, origin: str, project_id: str | None, user_id: str) -> None:
+    """Screen an imported listing, then email the owner about it. Swallows
+    everything, like _screen_listing, which it replaces for these listings so
+    the screen runs once and its verdict rides along in the email.
+
+    The email goes out even if screening fails: the alert is the point, and an
+    unscreened listing says so in the message rather than reading as clear.
+    """
+    item_id = item.get("id") or ""
+    title = item.get("title") or ""
+    preview = item.get("preview_image_url")
+    screening = None
+    try:
+        from app.services.image_matching import screen_image
+        from app.services.supabase_db import save_ip_check
+
+        if preview:
+            screening = screen_image(preview, title)
+            save_ip_check(item_id, screening)
+    except Exception:  # noqa: BLE001 - background work
+        logger.exception("Copyright screening failed for imported gallery item %s", item_id)
+
+    try:
+        from app.services.email_delivery import send_imported_publish_alert
+
+        sent = send_imported_publish_alert(
+            item_id=item_id,
+            title=title,
+            origin=origin,
+            creator_user_id=user_id,
+            submitter_name=item.get("submitter_name"),
+            project_id=project_id,
+            preview_url=preview,
+            screening=screening,
+        )
+        if not sent:
+            logger.warning("Imported-publish alert NOT sent (email unconfigured): item=%s", item_id)
+    except Exception:  # noqa: BLE001 - background work
+        logger.exception("Imported-publish alert failed for gallery item %s", item_id)
+
+
 @app.post("/gallery", response_model=GalleryItemResponse, status_code=201, dependencies=[Depends(require_enabled("gallery"))])
 def publish_gallery_item(
     request: GalleryCreateRequest,
@@ -774,28 +819,32 @@ def publish_gallery_item(
     # which is most of the current gallery. Left False so an old design is not
     # retroactively barred on the strength of a marker that did not exist when
     # it was made; set True only alongside a decision about those listings.
-    if ENFORCE_GALLERY_ORIGIN_RULE:
-        project = get_project(request.project_id, user_id) if request.project_id else None
-        origin = provenance.origin_of((project or {}).get("source_image_url"))
-        blocked = provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN)
-        # An admin can clear one project by hand. The rule stays categorical for
-        # everyone else precisely because origin is checkable and authorship is
-        # not; the exception is a person taking responsibility for the second
-        # question, recorded on the project rather than written into its path.
-        if blocked and provenance.exception_granted(project):
-            blocked = False
-            logger.info(
-                "Gallery publish allowed by origin exception: project=%s origin=%s granted_by=%s",
-                request.project_id, origin, (project or {}).get("origin_exception_by"),
-            )
-        if blocked:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Designs made from an uploaded photo can be printed but not published "
-                    "to the gallery. Designs you draw, or generate in chat, can be published."
-                ),
-            )
+    #
+    # Since 2026-10-10 the rule is off, so a would-be-blocked publish goes
+    # through and is reported to the owner instead (imported_needs_alert).
+    project = get_project(request.project_id, user_id) if request.project_id else None
+    origin = provenance.origin_of((project or {}).get("source_image_url"))
+    blocked = provenance.blocks_gallery(origin, block_unknown=BLOCK_UNKNOWN_ORIGIN)
+    # An admin can clear one project by hand. The rule stays categorical for
+    # everyone else precisely because origin is checkable and authorship is
+    # not; the exception is a person taking responsibility for the second
+    # question, recorded on the project rather than written into its path.
+    # A cleared project has already been checked, so it raises no alert either.
+    if blocked and provenance.exception_granted(project):
+        blocked = False
+        logger.info(
+            "Gallery publish allowed by origin exception: project=%s origin=%s granted_by=%s",
+            request.project_id, origin, (project or {}).get("origin_exception_by"),
+        )
+    imported_needs_alert = blocked and not ENFORCE_GALLERY_ORIGIN_RULE
+    if blocked and ENFORCE_GALLERY_ORIGIN_RULE:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Designs made from an uploaded photo can be printed but not published "
+                "to the gallery. Designs you draw, or generate in chat, can be published."
+            ),
+        )
 
     tags = []
     seen_tags = set()
@@ -815,9 +864,17 @@ def publish_gallery_item(
     if result is None:
         raise HTTPException(status_code=502, detail="Could not publish to gallery.")
 
+    # An imported design that the rule would have refused: screen it and email
+    # the owner. Queued, so the creator never waits on either.
+    if imported_needs_alert and result.get("id"):
+        logger.info(
+            "Imported design published to gallery: item=%s project=%s origin=%s user=%s",
+            result["id"], request.project_id, origin, user_id,
+        )
+        background.add_task(_alert_imported_publish, result, origin, request.project_id, user_id)
     # Screen the new listing for copies. Queued rather than awaited: this is a
     # review aid, and it never gates publication.
-    if result.get("id") and result.get("preview_image_url"):
+    elif result.get("id") and result.get("preview_image_url"):
         background.add_task(
             _screen_listing, result["id"], result["preview_image_url"], result.get("title") or "",
         )
