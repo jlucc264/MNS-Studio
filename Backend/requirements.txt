@@ -10,7 +10,7 @@ reportlab==4.2.2
 # permissive too (cryptography is Apache-2.0/BSD-3). Deliberately not PyMuPDF,
 # which is AGPL-or-commercial: the AGPL's network clause would reach a backend
 # users talk to over the wire, and the alternative is a paid Artifex licence.
-pdfplumber==0.11.10
+pdfplumber==0.11.9
 qrcode[pil]==8.2
 PyJWT[crypto]==2.9.0
 stripe==15.1.0
