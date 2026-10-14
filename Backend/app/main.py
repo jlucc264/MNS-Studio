@@ -41,6 +41,7 @@ from app.models import (
     GridRenderResponse,
     ImportPatternRequest,
     ImportPatternResponse,
+    ImportPdfChartResponse,
     ImportStitchlyResponse,
     NearestDmcRequest,
     SamplePixelRequest,
@@ -116,6 +117,7 @@ from app.services.stitch_visualizer import nearest_dmc, hex_to_rgb, rgb_to_hex
 from app.services.stitch_visualizer import import_pattern_image, PatternImportError
 from app.services.stitch_visualizer import render_preview_image_from_cells
 from app.services.stitchly_import import parse_stitchly, StitchlyParseError
+from app.services.pdf_chart_import import parse_pdf_chart, PdfChartParseError
 from app.data.dmc_colors import DMC_COLORS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -541,6 +543,67 @@ def import_stitchly(file: UploadFile = File(...)):
         unknown_codes=parsed["unknown_codes"],
         backstitch_count=parsed["backstitch_count"],
         point_stitch_count=parsed["point_stitch_count"],
+    )
+
+
+@app.post("/import-pdf-chart", response_model=ImportPdfChartResponse, dependencies=[Depends(require_enabled("import"))])
+def import_pdf_chart(file: UploadFile = File(...)):
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Expected a .pdf file.")
+
+    try:
+        parsed = parse_pdf_chart(file.file.read())
+    except PdfChartParseError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
+
+    fabric_count = parsed["fabric_count"]
+    mesh_count = fabric_count if fabric_count in (13, 18) else 13
+
+    preview_url = render_preview_image_from_cells(
+        cells=parsed["cells"], mesh_count=mesh_count, show_grid=False
+    )
+
+    # A chart PDF is somebody else's design by default — that is the whole
+    # point of importing one — so it is marked UPLOADED and the gallery rule
+    # treats it exactly as a photo import: publishing it emails the owner for a
+    # check (or is refused, if ENFORCE_GALLERY_ORIGIN_RULE is back on). There
+    # is no photograph here to carry that marker, so the rendered chart stands
+    # in as the source: origin lives on the storage path (see provenance), and
+    # a design with no source image at all would read as UNKNOWN and slip the
+    # rule. A designer importing their own chart is the case the existing
+    # per-project admin exception is for.
+    source_image_url = None
+    rendered = local_asset_path(preview_url)
+    if rendered is not None:
+        from uuid import uuid4
+        from shutil import copyfile
+        from app.services.storage import UPLOADS_DIR
+
+        filename = f"{uuid4().hex}.png"
+        copyfile(rendered, UPLOADS_DIR / filename)
+        source_image_url = durable_image_url(
+            f"/assets/uploads/{filename}", prefix=provenance.prefix_for(provenance.UPLOADED)
+        )
+
+    preview_url = durable_preview_url(preview_url, prefix="draft-previews")
+
+    pattern_name = parsed["pattern_name"]
+    if not pattern_name and file.filename:
+        pattern_name = Path(file.filename).stem or None
+
+    return ImportPdfChartResponse(
+        message="Chart imported.",
+        cells=parsed["cells"],
+        palette=[PaletteColor(**c) for c in parsed["palette"]],
+        stitch_width=parsed["stitch_width"],
+        stitch_height=parsed["stitch_height"],
+        stitch_count=parsed["stitch_count"],
+        mesh_count=mesh_count,
+        fabric_count=fabric_count,
+        pattern_name=pattern_name,
+        source_image_url=source_image_url,
+        preview_image_url=preview_url,
+        unknown_codes=parsed["unknown_codes"],
     )
 
 

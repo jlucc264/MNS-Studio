@@ -69,6 +69,24 @@ class ImportStitchlyResponse(BaseModel):
     point_stitch_count: int = 0
 
 
+class ImportPdfChartResponse(BaseModel):
+    message: str
+    cells: list[list[str]]
+    palette: list[PaletteColor]
+    stitch_width: int
+    stitch_height: int
+    stitch_count: int
+    mesh_count: int | None = None
+    # What the chart itself declared, which may be a count we don't sell (14,
+    # say). mesh_count above is that coerced onto a canvas we can print, so the
+    # two differing is what tells the UI the finished size will change.
+    fabric_count: int | None = None
+    pattern_name: str | None = None
+    source_image_url: str | None = None
+    preview_image_url: str | None = None
+    unknown_codes: list[str] = []
+
+
 class GridRenderRequest(BaseModel):
     image_url: str
     stitch_width: int

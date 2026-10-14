@@ -410,6 +410,33 @@ export async function importStitchlyFile(file: File): Promise<ImportStitchlyResp
   return res.json()
 }
 
+export type ImportPdfChartResponse = {
+  message: string
+  cells: string[][]
+  palette: PaletteColor[]
+  stitch_width: number
+  stitch_height: number
+  stitch_count: number
+  mesh_count: number | null
+  fabric_count: number | null
+  pattern_name: string | null
+  source_image_url: string | null
+  preview_image_url: string | null
+  unknown_codes: string[]
+}
+
+export async function importPdfChartFile(file: File): Promise<ImportPdfChartResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE}/import-pdf-chart`, { method: 'POST', body: form })
+  if (res.status === 422) {
+    const body = await res.json().catch(() => null)
+    throw new ImportPatternError(body?.detail?.code ?? 'unreadable', body?.detail?.message ?? 'Could not read this chart PDF')
+  }
+  if (!res.ok) throw new Error('Chart PDF import failed')
+  return res.json()
+}
+
 export async function nearestDmc(hex: string): Promise<PaletteColor> {
   const res = await fetch(`${API_BASE}/nearest-dmc`, {
     method: 'POST',

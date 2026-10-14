@@ -82,6 +82,7 @@ import {
   uploadImage,
   importPatternImage,
   importStitchlyFile,
+  importPdfChartFile,
   ImportPatternError,
   type ImportPatternResponse,
   MAX_PRINTABLE_LONG_SIDE,
@@ -3762,6 +3763,31 @@ function StudioPage() {
     }
     setLoading(true)
     try {
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        const res = await importPdfChartFile(file)
+        applyImportedPattern(res.source_image_url, res, {
+          meshCount: res.mesh_count === 18 ? 18 : 13,
+          patternName: res.pattern_name ?? undefined,
+          previewUrl: res.preview_image_url,
+        })
+        // The chart's own fabric count is the one the designer sized it for.
+        // Where we can't print that count the design still imports, but at a
+        // different finished size, so say so rather than let it surprise them.
+        const notes: string[] = []
+        if (res.fabric_count && res.fabric_count !== res.mesh_count) {
+          notes.push(
+            `This chart was made for ${res.fabric_count} count. We print 13 and 18 mesh, so it's been placed on ${res.mesh_count} mesh and the finished size has changed.`
+          )
+        }
+        if (res.unknown_codes.length > 0) {
+          notes.push(
+            `We don't recognise ${res.unknown_codes.length} thread code(s) (${res.unknown_codes.slice(0, 6).join(', ')}). The colours are right — they're taken from the chart — but check those codes before ordering thread.`
+          )
+        }
+        if (notes.length > 0) setUploadError(notes.join(' '))
+        return
+      }
+
       if (file.name.toLowerCase().endsWith('.stitchly')) {
         const res = await importStitchlyFile(file)
         applyImportedPattern(res.source_image_url, res, {
@@ -4669,7 +4695,7 @@ function StudioPage() {
                 <input
                   ref={patternImportInputRef}
                   type="file"
-                  accept="image/*,.stitchly"
+                  accept="image/*,.stitchly,.pdf"
                   hidden
                   disabled={loading}
                   onChange={(event) => {
@@ -4678,7 +4704,7 @@ function StudioPage() {
                     event.target.value = ''
                   }}
                 />
-                Import from Stitchly (.stitchly or chart image)
+                Import a chart (.stitchly, chart PDF, or chart image)
               </label>
             </>
           )}
