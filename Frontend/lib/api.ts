@@ -1127,11 +1127,12 @@ export function canvasMarginInches(widthInches: number, heightInches: number): n
 }
 
 // Standard orders are cut from a small set of pre-cut roll widths rather
-// than a bespoke width per design (8", 10", 12" and 16" are what's actually
-// kept cut) — see get_canvas_for_design in canvas_pricing.py. Always <=
-// STANDARD_MAX_SHORT_SIDE + 2*CANVAS_MARGIN_INCHES (16"), so 16 is a safe
+// than a bespoke width per design (10", 12" and 16" are what's actually kept
+// cut; 8" was dropped 2026-10-13 for print quality) — see
+// STANDARD_WIDTH_TIERS_IN in canvas_pricing.py, which this must match. Always
+// <= STANDARD_MAX_SHORT_SIDE + 2*CANVAS_MARGIN_INCHES (16"), so 16 is a safe
 // last resort. Non-standard orders and belts stay fully continuous.
-const STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
+const STANDARD_WIDTH_TIERS_IN = [10.0, 12.0, 16.0]
 
 /** Narrowest pre-cut stock that fits this canvas width. The epsilon matters: a
  *  downgrade margin is derived as (tier - short)/2, so short + 2*margin lands

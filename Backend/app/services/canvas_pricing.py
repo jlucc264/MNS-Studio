@@ -28,7 +28,8 @@ _MATERIAL_COST_PER_SQ_IN_CENTS = ROLL_COST_CENTS / ROLL_SELLABLE_SQ_IN
 # Price increase (owner's call), on top of the margin-derived rate above
 # rather than folded into TARGET_MATERIAL_MARGIN, so the 80% material basis
 # stays legible on its own. Calibrated so a 4x4 print-own design (an 8x8
-# canvas, the flagship reference point) lands at exactly $18.00 before the
+# canvas, the flagship reference point, until the 8" tier was dropped on
+# 2026-10-13 and it moved to 10x8) lands at exactly $18.00 before the
 # round-up-to-50-cents step below: $18.00 / $13.57 original price. (A first
 # pass targeted $15.00 = 1500/1357 for 2026-09-01; superseded before launch
 # by this larger increase, done at the same time as opening the gallery to
@@ -280,14 +281,20 @@ def _fmt_canvas(n: float) -> str:
 
 
 # Standard orders (see is_standard_order) are cut from a small set of
-# pre-cut roll widths rather than a bespoke width per design — 8", 10", 12"
-# and 16" are what's actually kept cut (added the latter two 2026-08-30 when
-# the standard envelope grew to a 12" short side), so a design whose required
-# width rounds to, say, 8.5" prints on the 10" stock rather than a one-off
-# 8.5"/9" cut. This always tops out at STANDARD_MAX_SHORT_IN +
-# 2*CANVAS_MARGIN_IN (16"), so 16" is always a safe last resort. Non-standard
-# orders and belts stay fully continuous.
-STANDARD_WIDTH_TIERS_IN = [8.0, 10.0, 12.0, 16.0]
+# pre-cut roll widths rather than a bespoke width per design — 10", 12" and
+# 16" are what's actually kept cut, so a design whose required width rounds
+# to, say, 10.5" prints on the 12" stock rather than a one-off 10.5"/11" cut.
+# This always tops out at STANDARD_MAX_SHORT_IN + 2*CANVAS_MARGIN_IN (16"), so
+# 16" is always a safe last resort. Non-standard orders and belts stay fully
+# continuous.
+#
+# 10" is the narrowest stock (owner's call, 2026-10-13). The 8" tier was
+# dropped because print quality is much more consistent on 10" and wider:
+# narrow stock loses ~2% of feed to poor grip (see the 8" calibration notes
+# in the admin page). The cost is passed through: any design with a short
+# side of 4" or less is now billed on 10" of width, about 25% more — a 4x4
+# design on what was the 8x8 flagship canvas went from $18.00 to $22.50.
+STANDARD_WIDTH_TIERS_IN = [10.0, 12.0, 16.0]
 
 
 def tier_downgrade_margin_inches(width_inches: float, height_inches: float) -> float | None:
