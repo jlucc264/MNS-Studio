@@ -680,7 +680,7 @@ export default function CreatorProfilePage() {
                   // Zero on the shop's own templates: no royalty is owed, so no
                   // markup was charged and there is nothing to credit.
                   const creatorCreditCents = galleryTotalCents !== null
-                    ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                    ? ((selectedPreview.owes_creator_royalty ?? selectedPreview.pays_creator_royalty) === false ? 0 : creatorEarningsCents(galleryTotalCents))
                     : null
                   const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                     ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents

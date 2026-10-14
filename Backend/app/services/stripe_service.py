@@ -88,6 +88,7 @@ def create_print_own_checkout(
     internal_pdf_supabase_path: str | None = None,
     project_id: str | None = None,
     tier_downgrade: bool = False,
+    charge_markup: bool | None = None,
 ) -> str:
     margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
     canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
@@ -97,9 +98,15 @@ def create_print_own_checkout(
     # links back to the listing it came from, but there is no creator to pay so
     # it is priced and recorded as a print-own. The caller decides who is owed
     # (royalty_creator_id) and passes None when that is nobody.
+    #
+    # Price is a third, separate fact (charge_markup, from charges_markup): the
+    # shop's own templates carry the markup while SHOP_LISTINGS_CHARGE_MARKUP is
+    # on, yet still owe nobody. None means the caller did not say, which keeps
+    # the old rule of marking up exactly when a royalty is owed.
     is_remixed = bool(gallery_item_id)
     pays_royalty = bool(gallery_item_id and creator_user_id)
-    total = print_gallery_total_cents(canvas) if pays_royalty else print_own_total_cents(canvas)
+    marked_up = pays_royalty if charge_markup is None else bool(gallery_item_id and charge_markup)
+    total = print_gallery_total_cents(canvas) if marked_up else print_own_total_cents(canvas)
     name = f"Custom needlepoint canvas print — {canvas['label']}\""
     if is_remixed:
         name += " (remixed template)"
@@ -174,13 +181,17 @@ def create_gallery_print_checkout(
     height_inches: float,
     buyer_user_id: str | None = None,
     tier_downgrade: bool = False,
+    charge_markup: bool | None = None,
 ) -> str:
     margin, downgraded = _resolve_margin_inches(width_inches, height_inches, tier_downgrade)
     canvas = get_canvas_for_design(width_inches, height_inches, margin_inches=margin)
-    # No creator means nobody to pay, which means no markup to collect: the
-    # shop's own templates sell at the same price as printing your own design.
-    # The caller resolves that (royalty_creator_id) and passes "" for it.
-    total = print_gallery_total_cents(canvas) if creator_user_id else print_own_total_cents(canvas)
+    # Whether the markup is charged and whether anyone is paid are separate:
+    # the caller resolves the payee (royalty_creator_id, "" for the shop) and
+    # the price (charges_markup). The shop's own templates carry the markup
+    # while SHOP_LISTINGS_CHARGE_MARKUP is on, and pay nobody either way. None
+    # keeps the old rule of marking up exactly when a creator is owed.
+    marked_up = bool(creator_user_id) if charge_markup is None else charge_markup
+    total = print_gallery_total_cents(canvas) if marked_up else print_own_total_cents(canvas)
 
     metadata = {
         "type": "print_gallery",
@@ -247,12 +258,14 @@ def create_cart_checkout(items: list[dict], user_id: str, use_credit: bool = Tru
             item["width_inches"], item["height_inches"], margin_inches=margin
         )
         has_creator = bool(item.get("creator_user_id"))
+        # Price and payee are separate facts (see create_print_own_checkout).
+        marked_up = has_creator if item.get("charge_markup") is None else bool(item["charge_markup"])
         qty = item.get("quantity", 1)
         # Gallery pricing is now a markup on the print-own total rather than a
         # separate base fee, so derive `unit` from the same helpers the
         # single-item paths use. `b` is kept in the metadata only so that the
         # webhook's `b + cv` still reconstructs the unit price exactly.
-        unit = print_gallery_total_cents(canvas) if has_creator else print_own_total_cents(canvas)
+        unit = print_gallery_total_cents(canvas) if marked_up else print_own_total_cents(canvas)
         base = unit - canvas["price_cents"]
         subtotal_for_credit += unit * qty
 

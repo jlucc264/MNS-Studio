@@ -7,7 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from app.services.canvas_pricing import is_shop_creator
+from app.services.canvas_pricing import charges_gallery_markup, is_shop_creator
 
 logger = logging.getLogger(__name__)
 
@@ -278,11 +278,19 @@ def _normalize_gallery_item(
     item["like_count"] = item.get("like_count") or 0
     item["share_count"] = item.get("share_count") or 0
     item["liked_by_me"] = item.get("id") in liked_ids
-    # Whether a print of this design owes anyone a royalty, and so whether it
-    # carries the gallery markup. Published for the frontend because the price
-    # it shows has to be the price checkout charges, and checkout decides this
-    # from the same rule (see royalty_creator_id).
-    item["pays_creator_royalty"] = _pays_creator_royalty(item, known_rows)
+    # Two published facts, deliberately separate since 2026-10-13.
+    #
+    # pays_creator_royalty is what the frontend PRICES from (gallery markup or
+    # not), so despite its name it now means "carries the markup": the shop's
+    # own listings carry it while SHOP_LISTINGS_CHARGE_MARKUP is on, though no
+    # royalty is paid on them. Kept under the old name so the frontend needed no
+    # change. Checkout decides from the same rule (see charges_markup).
+    #
+    # owes_creator_royalty is the payout fact: whether anyone but the shop is
+    # owed. The shop-template picker uses it to keep other people's work out.
+    root = _root_creator(item, known_rows)
+    item["pays_creator_royalty"] = charges_gallery_markup(root)
+    item["owes_creator_royalty"] = bool(root) and not is_shop_creator(root)
     return item
 
 
@@ -297,12 +305,12 @@ def _normalize_gallery_items(items: list[dict], liked_ids: set[str] | None = Non
     return [_normalize_gallery_item(item, liked_ids, known_rows) for item in items]
 
 
-def _pays_creator_royalty(item: dict, known_rows: dict[str, dict] | None = None) -> bool:
-    """Whether a sale of this listing pays a creator.
+def _root_creator(item: dict, known_rows: dict[str, dict] | None = None) -> str | None:
+    """Who made the design this listing descends from.
 
-    A remix inherits the answer from the root it descends from, the same way
-    the royalty itself does, so a user's remix of a shop template is priced
-    like the template rather than like the user's own work.
+    A remix inherits pricing and royalty from that root, so a user's remix of a
+    shop template is priced like the template rather than like the user's own
+    work.
     """
     creator = item.get("user_id")
     parent_id = item.get("parent_gallery_item_id")
@@ -310,7 +318,7 @@ def _pays_creator_royalty(item: dict, known_rows: dict[str, dict] | None = None)
         # Walk from the parent, not from this row: this row is the one being
         # normalized, and asking for it again would come straight back here.
         creator = resolve_root_creator_id(parent_id, known_rows) or creator
-    return not is_shop_creator(creator)
+    return creator
 
 
 def _gallery_lineage_row(gallery_item_id: str, known_rows: dict[str, dict] | None = None) -> dict | None:
@@ -465,6 +473,13 @@ def royalty_creator_id(gallery_item_id: str) -> str | None:
     """
     creator = resolve_root_creator_id(gallery_item_id)
     return None if is_shop_creator(creator) else creator
+
+
+def charges_markup(gallery_item_id: str) -> bool:
+    """Whether a print of this listing carries the gallery markup. The price
+    question, where royalty_creator_id is the payout question: they differ for
+    the shop's own listings while SHOP_LISTINGS_CHARGE_MARKUP is on."""
+    return charges_gallery_markup(resolve_root_creator_id(gallery_item_id))
 
 
 def get_gallery_item_by_project_id(project_id: str) -> dict | None:

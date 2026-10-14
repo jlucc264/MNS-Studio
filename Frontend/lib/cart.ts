@@ -24,6 +24,10 @@ export type CartItem = {
   // markup. Absent on lines added before the shop's own templates stopped
   // charging one; those are all royalty-bearing, so absent reads as true.
   pays_creator_royalty?: boolean
+  // Whether the "creator credit" note applies. False for the shop's own
+  // templates, which carry the markup but pay nobody. Absent reads as
+  // pays_creator_royalty, which is what it always equalled before.
+  owes_creator_royalty?: boolean
   project_id: string | null             // own design — links to /studio?project=<id>
 }
 

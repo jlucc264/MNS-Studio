@@ -845,6 +845,12 @@ export type GalleryItem = {
   // gallery markup. Optional because a cached response from before the field
   // existed has to keep pricing the way it did.
   pays_creator_royalty?: boolean
+  // Whether anyone but the shop is paid on a sale. Differs from
+  // pays_creator_royalty (which, despite its name, now decides the PRICE) for
+  // the shop's own listings: they carry the markup while the backend's
+  // SHOP_LISTINGS_CHARGE_MARKUP is on, but no creator credit is paid. Absent
+  // on older responses, where the two always agreed.
+  owes_creator_royalty?: boolean
 }
 
 export type GalleryCreatePayload = {

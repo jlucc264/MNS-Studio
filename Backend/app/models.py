@@ -351,10 +351,15 @@ class GalleryItemResponse(BaseModel):
     share_count: int = 0
     project_id: Optional[str] = None
     parent_gallery_item_id: Optional[str] = None
-    # False for the shop's own templates: nobody is owed a royalty on them, so
-    # they carry no gallery markup. The frontend prices from this so what it
-    # shows matches what checkout charges.
+    # Whether a print carries the gallery markup — the frontend prices from
+    # this so what it shows matches what checkout charges. Despite the name it
+    # is the price fact, not the payout fact: the shop's own templates carry
+    # the markup while SHOP_LISTINGS_CHARGE_MARKUP is on, but owe nobody.
     pays_creator_royalty: bool = True
+    # Whether anyone but the shop is paid on a sale. Differs from
+    # pays_creator_royalty (which now decides the price) for the shop's own
+    # listings while SHOP_LISTINGS_CHARGE_MARKUP is on. See supabase_db.
+    owes_creator_royalty: Optional[bool] = None
 
 
 class RollPrintRequest(BaseModel):

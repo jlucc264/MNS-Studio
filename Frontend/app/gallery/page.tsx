@@ -407,6 +407,7 @@ function GalleryPage() {
       canvas_price_cents: canvas.priceCents,
       base_price_cents: galleryPrintTotalCents(canvas, item.pays_creator_royalty) - canvas.priceCents,
       pays_creator_royalty: item.pays_creator_royalty,
+      owes_creator_royalty: item.owes_creator_royalty,
       tier_downgrade: margin !== undefined,
       gallery_item_id: item.id,
       parent_gallery_item_id: null,
@@ -1273,7 +1274,7 @@ function GalleryPage() {
                       // Zero on the shop's own templates: no royalty is owed, so no
                       // markup was charged and there is nothing to credit.
                       const creatorCreditCents = galleryTotalCents !== null
-                        ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                        ? ((selectedPreview.owes_creator_royalty ?? selectedPreview.pays_creator_royalty) === false ? 0 : creatorEarningsCents(galleryTotalCents))
                         : null
                       const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                         ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents
@@ -1467,7 +1468,7 @@ function GalleryPage() {
                   // remainder so canvas + fulfillment + creator credit always sums to
                   // the total shown, rather than each being independently rounded.
                   const creatorCreditCents = galleryTotalCents !== null
-                    ? (selectedPreview.pays_creator_royalty === false ? 0 : creatorEarningsCents(galleryTotalCents))
+                    ? ((selectedPreview.owes_creator_royalty ?? selectedPreview.pays_creator_royalty) === false ? 0 : creatorEarningsCents(galleryTotalCents))
                     : null
                   const canvasDisplayCents = galleryTotalCents !== null && creatorCreditCents !== null
                     ? galleryTotalCents - PRINT_OWN_BASE_CENTS - creatorCreditCents

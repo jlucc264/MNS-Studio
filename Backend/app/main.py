@@ -1123,7 +1123,7 @@ def get_shop_designs(user_id: str | None = Depends(get_optional_user_id)):
         items.extend(list_gallery_items_by_creator(shop_id, user_id))
     items = [
         item for item in items
-        if item.get("project_id") and item.get("pays_creator_royalty") is False
+        if item.get("project_id") and item.get("owes_creator_royalty") is False
     ]
     items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
     return items
@@ -1182,9 +1182,11 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
     _require_standard_order(request.width_inches, request.height_inches)
 
     creator_user_id = None
+    charge_markup = False
     if request.parent_gallery_item_id:
-        from app.services.supabase_db import royalty_creator_id
+        from app.services.supabase_db import charges_markup, royalty_creator_id
         creator_user_id = royalty_creator_id(request.parent_gallery_item_id)
+        charge_markup = charges_markup(request.parent_gallery_item_id)
 
     try:
         url = create_print_own_checkout(
@@ -1194,6 +1196,7 @@ def checkout_print_own(request: PrintOwnCheckoutRequest, user_id: str = Depends(
             user_id=user_id,
             gallery_item_id=request.parent_gallery_item_id,
             creator_user_id=creator_user_id,
+            charge_markup=charge_markup,
             internal_pdf_supabase_path=request.internal_pdf_supabase_path,
             project_id=request.project_id,
             tier_downgrade=request.tier_downgrade,
@@ -1209,7 +1212,7 @@ def checkout_print_gallery(
     tier_downgrade: bool = False,
     user_id: str | None = Depends(get_optional_user_id),
 ):
-    from app.services.supabase_db import get_gallery_item, royalty_creator_id
+    from app.services.supabase_db import charges_markup, get_gallery_item, royalty_creator_id
     item = get_gallery_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Gallery item not found.")
@@ -1225,6 +1228,7 @@ def checkout_print_gallery(
             gallery_item_id=item_id,
             gallery_item_title=item.get("title", "Untitled"),
             creator_user_id=royalty_creator_id(item_id) or "",
+            charge_markup=charges_markup(item_id),
             pdf_url=item.get("pdf_url", ""),
             width_inches=width,
             height_inches=height,
@@ -1238,7 +1242,7 @@ def checkout_print_gallery(
 
 @app.post("/checkout/cart", response_model=CheckoutResponse, dependencies=[Depends(require_enabled("checkout"))])
 def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_current_user_id)):
-    from app.services.supabase_db import royalty_creator_id
+    from app.services.supabase_db import charges_markup, royalty_creator_id
     if not request.items:
         raise HTTPException(status_code=422, detail="Cart is empty.")
 
@@ -1248,9 +1252,11 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
             raise HTTPException(status_code=422, detail=f"A design ({item.width_inches}\" × {item.height_inches}\") exceeds maximum printable size.")
         _require_standard_order(item.width_inches, item.height_inches)
         creator_user_id = None
+        charge_markup = False
         creator_gallery_item_id = item.gallery_item_id or item.parent_gallery_item_id
         if creator_gallery_item_id:
             creator_user_id = royalty_creator_id(creator_gallery_item_id)
+            charge_markup = charges_markup(creator_gallery_item_id)
         items_data.append({
             "pdf_url": item.pdf_url,
             "internal_pdf_supabase_path": item.internal_pdf_supabase_path,
@@ -1261,6 +1267,7 @@ def checkout_cart(request: CartCheckoutRequest, user_id: str = Depends(get_curre
             "project_id": item.project_id,
             "creator_gallery_item_id": creator_gallery_item_id,
             "creator_user_id": creator_user_id,
+            "charge_markup": charge_markup,
         })
 
     try:

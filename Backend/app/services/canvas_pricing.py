@@ -94,6 +94,28 @@ def is_shop_creator(user_id: str | None) -> bool:
     return bool(user_id) and user_id in SHOP_CREATOR_USER_IDS
 
 
+# Whether the shop's own listings carry the gallery markup. They did not from
+# 2026-09-07 to 2026-10-13, which amounted to a 20% discount on MNS designs
+# against every other gallery listing. Switched back on 2026-10-13 (owner's
+# call, "for now"): shop designs are priced like any other gallery design.
+#
+# Price and payout stay separate questions. The markup is charged, but the
+# shop is still never paid a royalty out of its own sale — royalty_creator_id
+# keeps answering None for the shop, so no creator earnings are recorded and
+# the 20% simply stays with the business. Setting this False restores the
+# discount everywhere at once, frontend included, because the frontend prices
+# from the pays_creator_royalty flag each listing publishes.
+SHOP_LISTINGS_CHARGE_MARKUP = True
+
+
+def charges_gallery_markup(root_creator_id: str | None) -> bool:
+    """Whether a print descended from this creator's listing carries the
+    gallery markup. No root creator means no listing to mark up."""
+    if not root_creator_id:
+        return False
+    return SHOP_LISTINGS_CHARGE_MARKUP or not is_shop_creator(root_creator_id)
+
+
 # Belts are priced off the legacy anchor curve rather than the per-sq-in rate.
 # The canvas math adds 2" of margin per side, so a 1.25"-tall strap becomes a
 # 5"-tall canvas and ~80% of a flat-rate belt charge would be margin the

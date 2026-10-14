@@ -831,6 +831,13 @@ function StudioPage() {
   // shop's own templates are remixable like any other listing but pay nobody,
   // so being a remix and being marked up are no longer the same question.
   const remixPaysRoyalty = Boolean(parentGalleryItemId) && parentPaysCreatorRoyalty !== false
+  // Despite the name above, remixPaysRoyalty now decides the PRICE (gallery
+  // markup or not). Whether a creator is actually credited is this separate
+  // fact: the shop's own templates carry the markup while the backend's
+  // SHOP_LISTINGS_CHARGE_MARKUP is on, but credit nobody, so the "creator
+  // credit" note must not show for them. Not persisted: looked up per session.
+  const [parentOwesCreatorRoyalty, setParentOwesCreatorRoyalty] = useState<boolean | null>(null)
+  const remixCreditsCreator = remixPaysRoyalty && parentOwesCreatorRoyalty !== false
   const [galleryStep, setGalleryStep] = useState<'form' | 'confirm'>('form')
   const [galleryTitle, setGalleryTitle] = useState('')
   const [galleryTags, setGalleryTags] = useState('')
@@ -1186,7 +1193,7 @@ function StudioPage() {
   // gallery for the one listing rather than guessing from the id. Runs once per
   // parent: the answer is cached in state and persisted into the snapshot.
   useEffect(() => {
-    if (!parentGalleryItemId || parentPaysCreatorRoyalty !== null) return
+    if (!parentGalleryItemId || (parentPaysCreatorRoyalty !== null && parentOwesCreatorRoyalty !== null)) return
     let cancelled = false
     void fetchGalleryItem(parentGalleryItemId)
       .then((item) => {
@@ -1194,11 +1201,15 @@ function StudioPage() {
         // flag unknown keeps the markup on, which is the safe direction: the
         // quote never lands under what checkout charges.
         if (cancelled || !item) return
+        // Always refreshed from the listing rather than trusted from a saved
+        // draft: the price rule for the shop's templates can change after the
+        // draft was written, and the quote has to match checkout.
         setParentPaysCreatorRoyalty(item.pays_creator_royalty !== false)
+        setParentOwesCreatorRoyalty((item.owes_creator_royalty ?? item.pays_creator_royalty) !== false)
       })
       .catch(() => { /* keep the markup on */ })
     return () => { cancelled = true }
-  }, [parentGalleryItemId, parentPaysCreatorRoyalty])
+  }, [parentGalleryItemId, parentPaysCreatorRoyalty, parentOwesCreatorRoyalty])
 
   const recoverySnapshot = useMemo<ActiveDesignSnapshot>(() => ({
     version: ACTIVE_DESIGN_VERSION,
@@ -4854,7 +4865,7 @@ function StudioPage() {
           </a>
           {parentGalleryItemId && (
             <div style={{ background: '#f0ece5', border: '1px solid #ddd5c8', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#5f574f' }}>
-              Working from a gallery template{remixPaysRoyalty ? ' · print includes 20% creator credit' : ''}
+              Working from a gallery template{remixCreditsCreator ? ' · print includes 20% creator credit' : ''}
             </div>
           )}
           {!orderableSize && (
@@ -6200,7 +6211,7 @@ function StudioPage() {
                         </div>
                       )}
                       <div style={{ fontSize: 11, color: '#8a8177', marginTop: 2 }}>+ $7.00 shipping</div>
-                      {remixPaysRoyalty && (
+                      {remixCreditsCreator && (
                         <div style={{ fontSize: 11, color: '#8a8177', marginTop: 3 }}>Includes 20% creator credit</div>
                       )}
                     </div>
@@ -6732,7 +6743,7 @@ function StudioPage() {
                       <span style={{ color: '#5f574f' }}>Shipping (Standard, 5–7 days)</span>
                       <span>{formatCents(bShipping)}</span>
                     </div>
-                    {remixPaysRoyalty && (
+                    {remixCreditsCreator && (
                       <div style={{ fontSize: 12, color: '#8a8177', borderTop: '1px solid #e7e1d8', paddingTop: 8 }}>
                         Includes 20% creator credit for the original designer
                       </div>
@@ -6781,6 +6792,7 @@ function StudioPage() {
                       gallery_item_id: null,
                       parent_gallery_item_id: parentGalleryItemId,
                       pays_creator_royalty: remixPaysRoyalty,
+                      owes_creator_royalty: remixCreditsCreator,
                       project_id: savedProjectId,
                     })
                     setShowPriceBreakdownModal(false)
