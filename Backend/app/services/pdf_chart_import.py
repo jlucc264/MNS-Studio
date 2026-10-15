@@ -27,9 +27,19 @@ the PDF supplies the color either way, so an unrecognised code costs us the
 thread's *name*, not the design. Those codes are reported in `unknown_codes`
 so the UI can tell the importer to check them before ordering thread.
 
+Multi-page PDFs are read when one page carries the whole chart. A common
+export (SimpleStartStitches' Christmas Church is the reference) puts the
+pattern size on a cover page, the full chart alone on the next, and the colour
+key on a third, then repeats the chart split into sections. The details and
+the key are gathered from whichever pages state them, and every page is tried
+as the chart; the first whose grid reads out at exactly the declared size and
+stitch count is the one used. Section pages are smaller than the declared
+grid, so they fail that check and are passed over without special casing.
+
 Known limits, all of which fail loudly rather than quietly:
-  * One page only. Larger charts tile across pages with overlapping edge rows
-    and need reassembly, which is not implemented.
+  * The whole chart must appear on one page. A chart that only exists split
+    into sections needs the sections joined back together across pages, which
+    is not implemented.
   * The grid must occupy every declared row and column. If a chart's outermost
     row or column is entirely blank the lattice comes up short and we refuse,
     because nothing in the glyph positions says which side the empty band was
@@ -57,10 +67,14 @@ _NAMES_BY_CODE.update({d["code"]: d["name"] for d in DMC_COLORS})
 
 # A key entry's thread code, as printed: "D433", "DB5200". The leading D is the
 # generator's marker for the DMC Stranded line, not part of the code.
-_CODE_RE = re.compile(r"^DB?\d+$")
+# DMC's few lettered threads ("DBLANC", "DECRU") are thread codes too; listed
+# by name rather than as any capitalised word, so that the "DMC" in a key's
+# "DMC Stranded (D)" heading is not mistaken for one.
+_CODE_RE = re.compile(r"^D(?:B?\d+|BLANC|ECRU)$")
 
 _PATTERN_SIZE_RE = re.compile(r"Pattern\s*size:\s*(\d+)\s*[x×]\s*(\d+)", re.I)
-_TOTAL_STITCHES_RE = re.compile(r"Total\s*stitches:\s*(\d+)", re.I)
+# Thousands separators appear once a chart passes 999 stitches ("4,533").
+_TOTAL_STITCHES_RE = re.compile(r"Total\s*stitches:\s*(\d[\d,]*)", re.I)
 _FABRIC_COUNT_RE = re.compile(r"Fabric\s*count:\s*(\d+)", re.I)
 
 # A glyph lands in the lattice band whose centre is nearest. Bands are split
@@ -139,7 +153,7 @@ def _declared(page_text: str) -> tuple[int, int, int, int | None]:
     return (
         int(size.group(1)),
         int(size.group(2)),
-        int(total.group(1)),
+        int(total.group(1).replace(",", "")),
         int(fabric.group(1)) if fabric else None,
     )
 
@@ -206,37 +220,58 @@ def _read_key(chars: list[dict], shapes: list[dict], metadata_top: float) -> dic
 
     Pairing is done per key row by x order rather than by "nearest code to the
     right", which quietly mis-pairs when a row's symbols come from fonts with
-    different baselines.
+    different baselines. A row is the code line plus every isolated glyph that
+    overlaps it vertically, because some generators draw the symbol large
+    enough to straddle the code and the thread name beneath it.
     """
     below = [c for c in chars if c["top"] > metadata_top]
     if not below:
         return {}
     glyph_h = statistics.median([c["bottom"] - c["top"] for c in below])
-    rows = _bands([(c["top"] + c["bottom"]) / 2 for c in below], glyph_h * 0.75)
+    # Tight lines, so that a thread code and the name printed under it are
+    # separate lines. A key symbol is often drawn larger than the text, in a
+    # swatch that straddles both, so it is NOT expected to share a line with
+    # its code; it is matched to the code line it overlaps vertically below.
+    rows = _bands([(c["top"] + c["bottom"]) / 2 for c in below], glyph_h * 0.3)
+    lines: dict[int, list[dict]] = {}
+    for c in below:
+        lines.setdefault(_nearest((c["top"] + c["bottom"]) / 2, rows), []).append(c)
 
-    mapping: dict[str, dict] = {}
-    for index in range(len(rows)):
-        line = [c for c in below if _nearest((c["top"] + c["bottom"]) / 2, rows) == index]
+    # Split each line into runs of adjacent characters. A run is a thread code
+    # if it reads like one; any other single glyph is a candidate symbol.
+    code_lines: list[list[list[dict]]] = []
+    isolated: list[dict] = []
+    for line in lines.values():
         line.sort(key=lambda c: c["x0"])
-
-        # Walk the row splitting it into runs of adjacent characters; a run is
-        # a thread code if it reads like one, and any other single glyph is a
-        # candidate symbol.
         runs: list[list[dict]] = []
         for ch in line:
             if runs and ch["x0"] - runs[-1][-1]["x1"] < glyph_h * 0.45:
                 runs[-1].append(ch)
             else:
                 runs.append([ch])
-
         codes = [r for r in runs if _CODE_RE.match("".join(c["text"] for c in r))]
-        code_runs = {id(r) for r in codes}
-        symbols = [r[0] for r in runs if len(r) == 1 and id(r) not in code_runs]
-        # Only a row that pairs up one-to-one is a key row; the title line and
-        # the footer fall out here because they carry no codes at all.
-        if not codes or len(codes) != len(symbols):
+        code_ids = {id(r) for r in codes}
+        isolated.extend(r[0] for r in runs if len(r) == 1 and id(r) not in code_ids)
+        if codes:
+            code_lines.append(codes)
+
+    mapping: dict[str, dict] = {}
+    for codes in code_lines:
+        top = min(c["top"] for r in codes for c in r)
+        bottom = max(c["bottom"] for r in codes for c in r)
+        # Symbols whose box overlaps this code line vertically, whichever line
+        # they were banded into. Only a line that pairs up one-to-one is a key
+        # row; anything else is left alone rather than guessed at.
+        symbols = sorted(
+            (c for c in isolated if c["top"] < bottom and c["bottom"] > top),
+            key=lambda c: c["x0"],
+        )
+        if len(codes) != len(symbols):
             continue
-        for sym, code_run in zip(symbols, codes):
+        for sym, code_run in zip(symbols, sorted(codes, key=lambda r: r[0]["x0"])):
+            # A symbol must sit before its own code, not after it.
+            if sym["x1"] > code_run[0]["x0"] + 1e-6:
+                break
             mapping[sym["text"]] = {
                 "code": "".join(c["text"] for c in code_run),
                 "rgb": _swatch_rgb(sym, shapes),
@@ -298,42 +333,24 @@ def _verify(grid, declared_stitches):
     return stitched
 
 
-def parse_pdf_chart(file_bytes: bytes) -> dict:
+MAX_PAGES = 30
+
+
+def _page_chars(page) -> list[dict]:
+    return [c for c in page.chars if c["text"].strip()]
+
+
+def _chart_on_page(chars, width, height, declared_stitches):
+    """The grid on this page if it is the whole chart, else None.
+
+    The chart sits above the pattern-details line where a page has one (the
+    single-page layout) and fills the page where it does not.
+    """
     try:
-        pdf = pdfplumber.open(io.BytesIO(file_bytes))
-    except Exception as exc:  # pdfminer raises a wide range on malformed input
-        raise PdfChartParseError("unreadable", "This file isn't a readable PDF.") from exc
-
-    with pdf:
-        if len(pdf.pages) != 1:
-            raise PdfChartParseError(
-                "multi_page",
-                f"This chart is {len(pdf.pages)} pages. We can only import "
-                "single-page charts for now — a tiled chart has to be joined "
-                "back together across pages, which we don't do yet.",
-            )
-        page = pdf.pages[0]
-        chars = [c for c in page.chars if c["text"].strip()]
-        if not chars:
-            raise PdfChartParseError(
-                "no_text_layer",
-                "This PDF has no text in it, so it's most likely a scan or a "
-                "flat image of a chart. We can only import charts saved "
-                "directly from charting software.",
-            )
-        shapes = list(page.rects) + list(page.curves)
-        width, height, declared_stitches, fabric_count = _declared(page.extract_text() or "")
-
-        if width > MAX_STITCHES_PER_SIDE or height > MAX_STITCHES_PER_SIDE:
-            raise PdfChartParseError(
-                "too_large",
-                f"Patterns are limited to {MAX_STITCHES_PER_SIDE} stitches per side.",
-            )
-
-        # The line stating the pattern's details is the divider: chart above,
-        # key below. It is a required anchor, so using it costs nothing.
         metadata_top = _metadata_top(chars)
-
+    except PdfChartParseError:
+        metadata_top = float("inf")
+    try:
         x0, x1, y0, y1 = _chart_window(chars, metadata_top)
         cells_chars = [
             c for c in chars
@@ -341,8 +358,92 @@ def parse_pdf_chart(file_bytes: bytes) -> dict:
         ]
         grid = _read_grid(cells_chars, width, height)
         _verify(grid, declared_stitches)
+    except PdfChartParseError:
+        return None
+    return grid
 
-        key = _read_key(chars, shapes, metadata_top)
+
+def parse_pdf_chart(file_bytes: bytes) -> dict:
+    try:
+        pdf = pdfplumber.open(io.BytesIO(file_bytes))
+    except Exception as exc:  # pdfminer raises a wide range on malformed input
+        raise PdfChartParseError("unreadable", "This file isn't a readable PDF.") from exc
+
+    with pdf:
+        if len(pdf.pages) > MAX_PAGES:
+            raise PdfChartParseError(
+                "too_many_pages",
+                f"This PDF is {len(pdf.pages)} pages. Chart PDFs over {MAX_PAGES} "
+                "pages aren't supported.",
+            )
+        pages = [(page, _page_chars(page)) for page in pdf.pages]
+        if not any(chars for _, chars in pages):
+            raise PdfChartParseError(
+                "no_text_layer",
+                "This PDF has no text in it, so it's most likely a scan or a "
+                "flat image of a chart. We can only import charts saved "
+                "directly from charting software.",
+            )
+
+        all_text = "\n".join(page.extract_text() or "" for page, _ in pages)
+        width, height, declared_stitches, fabric_count = _declared(all_text)
+
+        if width > MAX_STITCHES_PER_SIDE or height > MAX_STITCHES_PER_SIDE:
+            raise PdfChartParseError(
+                "too_large",
+                f"Patterns are limited to {MAX_STITCHES_PER_SIDE} stitches per side.",
+            )
+
+        grid = None
+        chart_index = None
+        for index, (_, chars) in enumerate(pages):
+            if not chars:
+                continue
+            grid = _chart_on_page(chars, width, height, declared_stitches)
+            if grid is not None:
+                chart_index = index
+                break
+
+        if grid is None:
+            if len(pages) == 1:
+                # Re-run the single page without swallowing errors, so the
+                # refusal names what actually went wrong (grid size, stitch
+                # count) rather than a generic message.
+                page_chars = pages[0][1]
+                metadata_top = _metadata_top(page_chars)
+                x0, x1, y0, y1 = _chart_window(page_chars, metadata_top)
+                cells_chars = [
+                    c for c in page_chars
+                    if x0 <= (c["x0"] + c["x1"]) / 2 <= x1 and y0 <= (c["top"] + c["bottom"]) / 2 <= y1
+                ]
+                _verify(_read_grid(cells_chars, width, height), declared_stitches)
+            raise PdfChartParseError(
+                "sectioned_chart",
+                f"We couldn't find the whole {width} x {height} chart on any one page "
+                "of this PDF. Charts that only appear split into sections across "
+                "pages can't be imported yet. If your charting app can export the "
+                "chart on a single page, use that version.",
+            )
+
+        # The key may share the chart's page (below the details line) or sit
+        # on a page of its own. Read every page; the chart page contributes
+        # only what lies below its details line, so stitch rows are never
+        # mistaken for key rows.
+        key: dict[str, dict] = {}
+        for index, (page, chars) in enumerate(pages):
+            if not chars:
+                continue
+            shapes = list(page.rects) + list(page.curves)
+            if index == chart_index:
+                try:
+                    top = _metadata_top(chars)
+                except PdfChartParseError:
+                    continue
+            else:
+                top = float("-inf")
+            for symbol, entry in _read_key(chars, shapes, top).items():
+                key.setdefault(symbol, entry)
+
         missing = sorted({v for row in grid for v in row if v and v not in key})
         if missing:
             raise PdfChartParseError(
@@ -394,9 +495,25 @@ def parse_pdf_chart(file_bytes: bytes) -> dict:
             "stitch_height": height,
             "stitch_count": declared_stitches,
             "fabric_count": fabric_count,
-            "pattern_name": (pdf.metadata or {}).get("Title") or None,
+            "pattern_name": (pdf.metadata or {}).get("Title") or _title_from_cover(pages, chart_index) or None,
             "unknown_codes": unknown_codes,
         }
+
+
+def _title_from_cover(pages, chart_index: int) -> str | None:
+    """The pattern's name as a cover page prints it: the first line of a page,
+    other than the chart's own, that states the pattern size. The chart page is
+    skipped because on a single-page chart its first line is the top row of
+    stitch symbols."""
+    for index, (page, _) in enumerate(pages):
+        if index == chart_index:
+            continue
+        text = page.extract_text() or ""
+        if _PATTERN_SIZE_RE.search(text):
+            first = text.strip().splitlines()[0].strip() if text.strip() else ""
+            if first and not _PATTERN_SIZE_RE.search(first):
+                return first[:120]
+    return None
 
 
 def _metadata_top(chars: list[dict]) -> float:
