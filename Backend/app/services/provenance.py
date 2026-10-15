@@ -37,6 +37,12 @@ rule grandfathers them is a policy decision, deliberately left to the caller.
 UPLOADED = "uploaded"
 GENERATED = "generated"
 DERIVED = "derived_from_upload"
+# A design imported from a designer's chart PDF. Barred from the gallery
+# outright (owner's call, 2026-10-14), independent of the general import rule
+# that now lets photo and Stitchly imports publish with an alert: a chart PDF
+# is a finished design someone sells, so publishing it is publishing their
+# product, not a stitcher's own photo.
+CHART_PDF = "chart_pdf"
 UNKNOWN = "unknown"
 
 # The storage prefix each origin is written under. "source-images" is the
@@ -45,6 +51,7 @@ PREFIXES = {
     UPLOADED: "origin-uploaded",
     GENERATED: "origin-generated",
     DERIVED: "origin-derived",
+    CHART_PDF: "origin-chartpdf",
 }
 LEGACY_PREFIX = "source-images"
 
@@ -82,7 +89,15 @@ def origin_after_edit(current_source_url: str | None) -> str:
     account for might be a photograph, and treating it as a clean generation is
     the mistake that lets one edit launder a copyrighted upload.
     """
-    return GENERATED if origin_of(current_source_url) == GENERATED else DERIVED
+    origin = origin_of(current_source_url)
+    if origin == GENERATED:
+        return GENERATED
+    # A chart PDF stays a chart PDF however it is edited. Resolving it to
+    # DERIVED would turn a hard bar into a publish-with-alert after one chat
+    # edit, which is exactly the laundering path this tracking exists to close.
+    if origin == CHART_PDF:
+        return CHART_PDF
+    return DERIVED
 
 
 def blocks_gallery(origin: str, *, block_unknown: bool = False) -> bool:
@@ -93,9 +108,16 @@ def blocks_gallery(origin: str, *, block_unknown: bool = False) -> bool:
     that may be perfectly fine. Left off by default; that is a policy call, not
     a technical one.
     """
-    if origin in (UPLOADED, DERIVED):
+    if origin in (UPLOADED, DERIVED, CHART_PDF):
         return True
     return origin == UNKNOWN and block_unknown
+
+
+def always_blocks_gallery(origin: str) -> bool:
+    """Whether this origin is barred from the gallery even with the general
+    import rule (ENFORCE_GALLERY_ORIGIN_RULE in main) switched off. Only chart
+    PDF imports are; see CHART_PDF."""
+    return origin == CHART_PDF
 
 
 def exception_granted(project: dict | None) -> bool:

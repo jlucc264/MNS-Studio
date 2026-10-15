@@ -564,10 +564,10 @@ def import_pdf_chart(file: UploadFile = File(...)):
     )
 
     # A chart PDF is somebody else's design by default — that is the whole
-    # point of importing one — so it is marked UPLOADED and the gallery rule
-    # treats it exactly as a photo import: publishing it emails the owner for a
-    # check (or is refused, if ENFORCE_GALLERY_ORIGIN_RULE is back on). There
-    # is no photograph here to carry that marker, so the rendered chart stands
+    # point of importing one — so it is marked CHART_PDF, which the gallery
+    # refuses outright (provenance.always_blocks_gallery), even while photo
+    # and Stitchly imports publish with an alert. The design can still be
+    # printed. There is no photograph here to carry that marker, so the rendered chart stands
     # in as the source: origin lives on the storage path (see provenance), and
     # a design with no source image at all would read as UNKNOWN and slip the
     # rule. A designer importing their own chart is the case the existing
@@ -582,7 +582,7 @@ def import_pdf_chart(file: UploadFile = File(...)):
         filename = f"{uuid4().hex}.png"
         copyfile(rendered, UPLOADS_DIR / filename)
         source_image_url = durable_image_url(
-            f"/assets/uploads/{filename}", prefix=provenance.prefix_for(provenance.UPLOADED)
+            f"/assets/uploads/{filename}", prefix=provenance.prefix_for(provenance.CHART_PDF)
         )
 
     preview_url = durable_preview_url(preview_url, prefix="draft-previews")
@@ -898,6 +898,17 @@ def publish_gallery_item(
         logger.info(
             "Gallery publish allowed by origin exception: project=%s origin=%s granted_by=%s",
             request.project_id, origin, (project or {}).get("origin_exception_by"),
+        )
+    # Chart PDF imports are refused regardless of the switch above (owner's
+    # call, 2026-10-14): they are a designer's finished product. An admin
+    # exception still clears one, on the record, like any other origin.
+    if blocked and provenance.always_blocks_gallery(origin):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Designs imported from a chart PDF can be printed but not published "
+                "to the gallery. Designs you draw, or generate in chat, can be published."
+            ),
         )
     imported_needs_alert = blocked and not ENFORCE_GALLERY_ORIGIN_RULE
     if blocked and ENFORCE_GALLERY_ORIGIN_RULE:
