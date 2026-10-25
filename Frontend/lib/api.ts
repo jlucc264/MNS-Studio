@@ -1250,13 +1250,21 @@ export const MIN_CANVAS_MARGIN_INCHES = 1
 // canvas_pricing.py.
 export const DOWNGRADE_MIN_MARGIN_INCHES = 1.75
 
-// Max printable — the hard ceiling on what can even be drafted in studio,
-// deliberately below what MAX_ROLL_WIDTH_INCHES - 2*MIN_CANVAS_MARGIN_INCHES
-// would allow (15"): real headroom under the printer's practical max, not
-// the theoretical one. Long side is the editor's 20" stage, since the long
-// axis runs down the roll's unbounded feed direction.
-export const MAX_PRINTABLE_SHORT_SIDE = 14
-export const MAX_PRINTABLE_LONG_SIDE = 20
+// Largest design the studio lets you draft, either way round. Bigger than
+// what we can print: anything wider than MAX_PRINTABLE_SHORT_SIDE can still be
+// designed and exported as a PDF chart, just not printed. 20x20 at 18 mesh is
+// 129,600 stitches, inside the backend's MAX_STITCH_CELLS (150k) cap.
+export const MAX_DESIGN_SIDE = 20
+
+// Max printable: the 17" roll less the full 2" margin on each side (13"). The
+// long side is the editor's 20" stage, since the long axis runs down the
+// roll's unbounded feed direction. Mirrors _MAX_PRINT_*_IN in canvas_pricing.py.
+export const MAX_PRINTABLE_SHORT_SIDE = MAX_ROLL_WIDTH_INCHES - 2 * CANVAS_MARGIN_INCHES
+export const MAX_PRINTABLE_LONG_SIDE = MAX_DESIGN_SIDE
+
+export const PRINT_WIDTH_LIMIT_MESSAGE =
+  `${MAX_PRINTABLE_SHORT_SIDE}" is the widest we can print with a ${CANVAS_MARGIN_INCHES}" margin on each side. ` +
+  `You can keep designing and download the PDF chart, but we can't print this size.`
 
 // Belt mode: a long, narrow strip outside the normal short/long envelope
 // above. Mirrors Backend/app/services/canvas_pricing.py — keep in sync.

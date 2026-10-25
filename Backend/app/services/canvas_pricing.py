@@ -153,19 +153,19 @@ MIN_CANVAS_MARGIN_IN = 1.0
 # but we will if the buyer picks it over paying a tier more.
 DOWNGRADE_MIN_MARGIN_IN = 1.75
 
-# Maximum printable design dimensions (short side × long side) — the hard
-# ceiling on what can even be drafted in studio, deliberately below what
-# MAX_ROLL_WIDTH_IN - 2*MIN_CANVAS_MARGIN_IN would allow (15"): the owner
-# wants real headroom under the printer's practical max, not the theoretical
-# one. Long side is bounded by the editor's 20" canvas stage, not the
-# printer, since the long axis runs down the roll's unbounded feed direction.
-_MAX_PRINT_SHORT_IN = 14.0
+# Maximum printable design dimensions (short side × long side): the 17" roll
+# less the full 2" margin on each side, so 13" (owner's rule, 2026-10-25; was
+# 14" with a trimmed 1.5" border). The studio lets people design up to 20x20
+# and export the PDF chart, but anything wider than this can't be printed.
+# Long side is bounded by the editor's 20" canvas stage, not the printer,
+# since the long axis runs down the roll's unbounded feed direction.
+_MAX_PRINT_SHORT_IN = MAX_ROLL_WIDTH_IN - 2 * CANVAS_MARGIN_IN
 _MAX_PRINT_LONG_IN = 20.0
 
 # Self-serve/gallery envelope — see is_standard_order. Short side up to 12"
 # (needing at most the 16" roll tier, see STANDARD_WIDTH_TIERS_IN below);
 # long side has no separate cap beyond the overall printable ceiling above.
-# Anything with a short side over 12" (up to the 14" printable ceiling) still
+# Anything with a short side over 12" (up to the 13" printable ceiling) still
 # prints, but is quoted by hand and cannot be posted to the gallery.
 STANDARD_MAX_SHORT_IN = 12.0
 STANDARD_MAX_LONG_IN = _MAX_PRINT_LONG_IN

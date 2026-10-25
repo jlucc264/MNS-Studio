@@ -128,7 +128,7 @@ logger = logging.getLogger(__name__)
 ADMIN_USER_IDS = {uid.strip() for uid in os.getenv("ADMIN_USER_ID", "").split(",") if uid.strip()}
 
 # Upper bounds on the requested stitch grid. The largest legitimate design is a
-# 60"×~1.3" belt at 18ct (~1080×24 cells) or a ~360×234 regular canvas, so these
+# 60"×~1.3" belt at 18ct (~1080×24 cells) or a 360×360 regular canvas (20"×20"), so these
 # caps sit well above real use while preventing a stray/oversized request from
 # allocating multi-GB intermediate arrays in the quantization pass and OOM-ing
 # the (2GB, single-worker) backend. Kept in sync with the frontend's own limits.

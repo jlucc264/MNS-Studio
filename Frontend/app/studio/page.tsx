@@ -71,8 +71,7 @@ import {
   isDesignPrintable,
   isStandardOrder,
   LARGE_PRINT_MESSAGE,
-  STANDARD_MAX_SHORT_SIDE,
-  STANDARD_MAX_LONG_SIDE,
+  PRINT_WIDTH_LIMIT_MESSAGE,
   samplePixel,
   PaletteColor,
   publishGalleryItem,
@@ -85,6 +84,7 @@ import {
   importPdfChartFile,
   ImportPatternError,
   type ImportPatternResponse,
+  MAX_DESIGN_SIDE,
   MAX_PRINTABLE_LONG_SIDE,
   MAX_PRINTABLE_SHORT_SIDE,
   BELT_HEIGHT_INCHES,
@@ -389,19 +389,12 @@ function getSettingsKey(settings: PreviewSettings | null) {
   })
 }
 
-// Imported rather than a separate literal — these previously drifted from
-// canvas_pricing.py's STANDARD_MAX_SHORT_IN/LONG_IN by name only (both
-// happened to be 6/10), which was a real risk when either side changed.
-const MAX_PRINT_SHORT = STANDARD_MAX_SHORT_SIDE
-const MAX_PRINT_LONG = STANDARD_MAX_LONG_SIDE
-
+// Clamps to the design area (MAX_DESIGN_SIDE square), not the printable one:
+// designs wider than the printer can take are allowed and just can't be
+// ordered. Same cap the size inputs in PreviewControls use.
 function clampPrintDimensions(w: number, h: number): { width_inches: number; height_inches: number } {
-  let width = Math.max(0.5, Math.min(w, MAX_PRINT_LONG))
-  let height = Math.max(0.5, Math.min(h, MAX_PRINT_LONG))
-  if (width > MAX_PRINT_SHORT && height > MAX_PRINT_SHORT) {
-    if (height <= width) height = MAX_PRINT_SHORT
-    else width = MAX_PRINT_SHORT
-  }
+  const width = Math.max(0.5, Math.min(w, MAX_DESIGN_SIDE))
+  const height = Math.max(0.5, Math.min(h, MAX_DESIGN_SIDE))
   return { width_inches: Number(width.toFixed(2)), height_inches: Number(height.toFixed(2)) }
 }
 
@@ -850,6 +843,16 @@ function StudioPage() {
   const [checkoutClientSecret, setCheckoutClientSecret] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'limit'>('idle')
   const [dimensionLimitHit, setDimensionLimitHit] = useState(false)
+  const [showPrintWidthNotice, setShowPrintWidthNotice] = useState(false)
+  // Size edits go through here so going past the print width pops the notice
+  // once, on the edit that crosses the line, not on every edit past it.
+  const handleSizeSettingsChange = useCallback((next: PreviewSettings) => {
+    const prev = draftSettingsRef.current
+    const wasPrintableWidth = Math.min(prev.width_inches, prev.height_inches) <= MAX_PRINTABLE_SHORT_SIDE
+    const isPrintableWidth = Math.min(next.width_inches, next.height_inches) <= MAX_PRINTABLE_SHORT_SIDE
+    if (wasPrintableWidth && !isPrintableWidth) setShowPrintWidthNotice(true)
+    setDraftSettings(next)
+  }, [])
   const [draftSaveError, setDraftSaveError] = useState('')
   const [showColorBrowser, setShowColorBrowser] = useState(false)
   const [colorBrowserTarget, setColorBrowserTarget] = useState<'add' | 'swap' | 'fill' | 'border'>('add')
@@ -3714,13 +3717,18 @@ function StudioPage() {
     // Pick a mesh that keeps the pattern inside the printable bounds when
     // possible — otherwise PreviewControls' aspect-lock clamp rewrites the
     // height, and the settings change wipes the imported grid.
+    // Prefer a mesh that's printable; failing that, one that at least fits
+    // the design area.
     const fitsPrintable = (mesh: PreviewSettings['mesh_count']) => {
       const w = result.stitch_width / mesh
       const h = result.stitch_height / mesh
       return Math.max(w, h) <= MAX_PRINTABLE_LONG_SIDE && Math.min(w, h) <= MAX_PRINTABLE_SHORT_SIDE
     }
+    const fitsDesignArea = (mesh: PreviewSettings['mesh_count']) =>
+      Math.max(result.stitch_width, result.stitch_height) / mesh <= MAX_DESIGN_SIDE
     const preferred = extras?.meshCount ?? DEFAULT_SETTINGS.mesh_count
-    const mesh = fitsPrintable(preferred) ? preferred : fitsPrintable(18) ? 18 : preferred
+    const candidates: PreviewSettings['mesh_count'][] = [preferred, 18]
+    const mesh = candidates.find(fitsPrintable) ?? candidates.find(fitsDesignArea) ?? preferred
     const settings: PreviewSettings = {
       ...DEFAULT_SETTINGS,
       mesh_count: mesh,
@@ -4067,7 +4075,9 @@ function StudioPage() {
       {loading && !hasGeneratedPreview && <p style={{ margin: 0 }}>Working...</p>}
       {uploadError && <p style={{ color: '#b00020', margin: 0 }}>{uploadError}</p>}
       {dimensionLimitHit && (
-        <p style={{ margin: 0, color: '#b00020' }}>Max Print Area is 10&quot; x 6&quot;.</p>
+        <p style={{ margin: 0, color: '#b00020' }}>
+          Max design area is {MAX_DESIGN_SIDE}&quot; x {MAX_DESIGN_SIDE}&quot;.
+        </p>
       )}
       {hasPendingPreviewSettings && !loading && (
         <p style={{ margin: 0, color: '#8a5a00' }}>
@@ -4156,7 +4166,7 @@ function StudioPage() {
           lockAspectRatio={lockAspectRatio}
           isBlankCanvas={isBlankCanvas}
           compact={isMobile}
-          onSettingsChange={setDraftSettings}
+          onSettingsChange={handleSizeSettingsChange}
           onLockAspectRatioChange={setLockAspectRatio}
           onDimensionClamped={() => {
             setDimensionLimitHit(true)
@@ -4870,7 +4880,7 @@ function StudioPage() {
           )}
           {!orderableSize && (
             <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>
-              {printableSize ? LARGE_PRINT_MESSAGE : 'Print unavailable — design exceeds the maximum printable size.'}
+              {printableSize ? LARGE_PRINT_MESSAGE : PRINT_WIDTH_LIMIT_MESSAGE}
             </p>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
@@ -4880,7 +4890,7 @@ function StudioPage() {
               disabled={!lastSettings || printCheckoutLoading || !orderableSize}
               style={{ ...btnSecondary, opacity: (!lastSettings || !orderableSize) ? 0.55 : 1, cursor: (!lastSettings || !orderableSize) ? 'not-allowed' : 'pointer' }}
             >
-              {orderableSize ? 'Review order' : 'Contact us for large prints'}
+              {orderableSize ? 'Review order' : printableSize ? 'Contact us for large prints' : 'Too wide to print'}
             </button>
             <button
               type="button"
@@ -6196,7 +6206,7 @@ function StudioPage() {
                     </p>
                   </div>
                   {!printable ? (
-                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>Print unavailable — design exceeds the maximum printable size.</p>
+                    <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>{PRINT_WIDTH_LIMIT_MESSAGE}</p>
                   ) : !standard ? (
                     <p style={{ margin: 0, fontSize: 12, color: '#8a8177' }}>{LARGE_PRINT_MESSAGE}</p>
                   ) : canvas && printTotal !== null ? (
@@ -6655,6 +6665,26 @@ function StudioPage() {
                 style={btnPrimary}
               >
                 Regenerate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPrintWidthNotice && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'grid', placeItems: 'center', zIndex: 10110, padding: 18 }}
+        >
+          <div style={{ background: '#fffdf8', borderRadius: 12, width: 420, maxWidth: '100%', display: 'grid', gap: 16, padding: '24px', boxSizing: 'border-box', border: '1px solid #e7e1d8' }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Too wide to print</h2>
+              <p style={{ margin: 0, color: '#6f675f', fontSize: 14, lineHeight: 1.5 }}>{PRINT_WIDTH_LIMIT_MESSAGE}</p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setShowPrintWidthNotice(false)} style={btnPrimary}>
+                Got it
               </button>
             </div>
           </div>

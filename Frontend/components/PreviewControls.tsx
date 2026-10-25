@@ -16,7 +16,7 @@ export type PreviewSettings = {
   source_type: 'photo' | 'stitched_photo' | 'graphic_art'
 }
 
-import { MAX_PRINTABLE_LONG_SIDE, MAX_PRINTABLE_SHORT_SIDE } from '../lib/api'
+import { MAX_DESIGN_SIDE, MAX_PRINTABLE_SHORT_SIDE } from '../lib/api'
 
 
 
@@ -62,8 +62,7 @@ export default function PreviewControls({
   useEffect(() => {
     if (!lockAspectRatio || !importedAspectRatio) return
 
-    const maxHeight = widthInches > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
-    const nextHeight = Number(Math.min(widthInches / importedAspectRatio, maxHeight).toFixed(2))
+    const nextHeight = Number(Math.min(widthInches / importedAspectRatio, MAX_DESIGN_SIDE).toFixed(2))
     if (nextHeight === heightInches) return
 
     onSettingsChange({
@@ -209,7 +208,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max={MAX_PRINTABLE_LONG_SIDE}
+            max={MAX_DESIGN_SIDE}
             step="0.5"
             value={widthDraft ?? String(widthInches)}
             onChange={(e) => {
@@ -217,12 +216,11 @@ export default function PreviewControls({
               setWidthDraft(raw)
               const parsed = Number(raw)
               if (raw === '' || !Number.isFinite(parsed) || parsed < 1) return
-              const newWidth = Math.min(parsed, MAX_PRINTABLE_LONG_SIDE)
-              const maxHeight = newWidth > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
+              const newWidth = Math.min(parsed, MAX_DESIGN_SIDE)
               const newHeight = lockAspectRatio && importedAspectRatio
-                ? Math.min(Number((newWidth / importedAspectRatio).toFixed(2)), maxHeight)
-                : Math.min(heightInches, maxHeight)
-              if (parsed > MAX_PRINTABLE_LONG_SIDE || heightInches > maxHeight) onDimensionClamped?.()
+                ? Math.min(Number((newWidth / importedAspectRatio).toFixed(2)), MAX_DESIGN_SIDE)
+                : heightInches
+              if (parsed > MAX_DESIGN_SIDE) onDimensionClamped?.()
               onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
             onBlur={() => setWidthDraft(null)}
@@ -235,7 +233,7 @@ export default function PreviewControls({
           <input
             type="number"
             min="1"
-            max={MAX_PRINTABLE_LONG_SIDE}
+            max={MAX_DESIGN_SIDE}
             step="0.5"
             value={heightDraft ?? String(heightInches)}
             onChange={(e) => {
@@ -243,12 +241,11 @@ export default function PreviewControls({
               setHeightDraft(raw)
               const parsed = Number(raw)
               if (raw === '' || !Number.isFinite(parsed) || parsed < 1) return
-              const newHeight = Math.min(parsed, MAX_PRINTABLE_LONG_SIDE)
-              const maxWidth = newHeight > MAX_PRINTABLE_SHORT_SIDE ? MAX_PRINTABLE_SHORT_SIDE : MAX_PRINTABLE_LONG_SIDE
+              const newHeight = Math.min(parsed, MAX_DESIGN_SIDE)
               const newWidth = lockAspectRatio && importedAspectRatio
-                ? Math.min(Number((newHeight * importedAspectRatio).toFixed(2)), maxWidth)
-                : Math.min(widthInches, maxWidth)
-              if (parsed > MAX_PRINTABLE_LONG_SIDE || widthInches > maxWidth) onDimensionClamped?.()
+                ? Math.min(Number((newHeight * importedAspectRatio).toFixed(2)), MAX_DESIGN_SIDE)
+                : widthInches
+              if (parsed > MAX_DESIGN_SIDE) onDimensionClamped?.()
               onSettingsChange({ ...settings, width_inches: Number(newWidth.toFixed(2)), height_inches: Number(newHeight.toFixed(2)) })
             }}
             onBlur={() => setHeightDraft(null)}
@@ -299,6 +296,11 @@ export default function PreviewControls({
         </label>
       </div>
 
+      {Math.min(widthInches, heightInches) > MAX_PRINTABLE_SHORT_SIDE && (
+        <p style={{ margin: 0, fontSize: compact ? 12.5 : 11.5, lineHeight: 1.3, color: '#b00020' }}>
+          Too wide to print — {MAX_PRINTABLE_SHORT_SIDE}&quot; is our widest. You can still download the PDF chart.
+        </p>
+      )}
 
       <div
         style={{
@@ -319,7 +321,7 @@ export default function PreviewControls({
                 if (nextChecked && importedAspectRatio) {
                   onSettingsChange({
                     ...settings,
-                    height_inches: Number((widthInches / importedAspectRatio).toFixed(2)),
+                    height_inches: Number(Math.min(widthInches / importedAspectRatio, MAX_DESIGN_SIDE).toFixed(2)),
                   })
                 }
               }}

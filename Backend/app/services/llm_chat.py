@@ -61,8 +61,8 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "width_inches": {"type": "number", "description": "Width in inches (0.5–18)"},
-                "height_inches": {"type": "number", "description": "Height in inches (0.5–18)"},
+                "width_inches": {"type": "number", "description": "Width in inches (0.5–20). Designs wider than 13\" on their short side can be exported as a PDF chart but not printed."},
+                "height_inches": {"type": "number", "description": "Height in inches (0.5–20)"},
                 "mesh_count": {
                     "type": "integer",
                     "enum": [13, 18],
